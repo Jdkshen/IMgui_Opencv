@@ -81,6 +81,9 @@
     <ClInclude Include="Core\OpenCVTest.h">
       <Filter>Core</Filter>
     </ClInclude>
+    <ClInclude Include="Core\ThemeManager.h">
+      <Filter>Core</Filter>
+    </ClInclude>
     <ClInclude Include="Core\DX12Context.h">
       <Filter>Core</Filter>
     </ClInclude>
@@ -138,6 +141,9 @@
       <Filter>Core</Filter>
     </ClCompile>
     <ClCompile Include="Core\OpenCVTest.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="Core\ThemeManager.cpp">
       <Filter>Core</Filter>
     </ClCompile>
     <ClCompile Include="Core\DX12Context.cpp">

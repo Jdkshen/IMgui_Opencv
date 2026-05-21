@@ -26,14 +26,10 @@
 #include "Algorithm/ThresholdTool.h"
 #include "Algorithm/TemplateMatch.h"
 
+#include "Core/ThemeManager.h"
+
 // =========================
-// 主题切换（extern 声明，定义在 Windows_imgui.cpp）
-// =========================
-extern int   g_CurrentTheme;
-extern const char* g_ThemeNames[];
-extern HWND  g_hWnd;
-void ApplyTheme(int theme);
-void LoadTheme();
+// 主窗口句柄（extern 声明，定义在 Windows_imgui.cpp）
 
 
 
