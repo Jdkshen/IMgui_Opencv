@@ -4,6 +4,16 @@
 #include <fstream>
 #include <dwmapi.h>
 #pragma comment(lib, "dwmapi.lib")
+#pragma comment(lib, "d3d12.lib")
+#pragma comment(lib, "dxgi.lib")
+#pragma comment(lib, "dxguid.lib")
+#pragma comment(lib, "d3dcompiler.lib")
+#pragma comment(lib, "Comdlg32.lib")
+#ifdef _DEBUG
+#pragma comment(lib, "opencv_world4120d.lib")
+#else
+#pragma comment(lib, "opencv_world4120.lib")
+#endif
 
 // =========================
 // 全局变量定义（只能这里写一次）

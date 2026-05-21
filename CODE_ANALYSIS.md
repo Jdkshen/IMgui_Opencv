@@ -552,17 +552,14 @@ struct LogItem {
 
 ```
 InitFonts(dpi_scale):
-  ① io.Fonts->Clear() 清空旧字体
-  ② 尝试加载 simhei.ttf:
-     io.Fonts->AddFontFromFileTTF("simhei.ttf", 18.0f,
+  ① 通过 GetModuleFileName 获取 exe 所在目录
+  ② 尝试加载 exe目录/simhei.ttf:
+     io.Fonts->AddFontFromFileTTF(exeDir+"simhei.ttf", 18.0f,
        nullptr, io.Fonts->GetGlyphRangesChineseFull())
-  ③ 失败 → MessageBox 提示，加载 msyh.ttc
-  ④ 全部失败 → MessageBox 报错
+  ③ 失败 → 尝试 C:/Windows/Fonts/msyh.ttc（系统微软雅黑）
+  ④ 全部失败 → 使用默认字体
   ⑤ 设置 io.FontDefault = font
   ⑥ io.Fonts->Build()
-  ⑦ 刷新 DX12 纹理:
-     ImGui_ImplDX12_InvalidateDeviceObjects()
-     ImGui_ImplDX12_CreateDeviceObjects()
 ```
 
 > `GetGlyphRangesChineseFull()` 加载完整的 CJK 统一表意文字（超过 2 万个汉字）。
@@ -733,8 +730,7 @@ t6 ── 完成          → gTimeTotal = t6 - t0
 | 开发工具 | Visual Studio 2022 |
 | C++ 标准 | C++20 |
 | 图形 API | DirectX 12 |
-| OpenCV | 4.12.0（需要 opencv_world4120.dll） |
-| Dear ImGui | 内置（1.91.6+） |
+| 第三方依赖 | 全部包含在项目中（OpenCV 头文件/库/DLL、ImGui、DX12 辅助头文件） |
 
 ### 5.2 构建步骤
 
@@ -745,13 +741,15 @@ t6 ── 完成          → gTimeTotal = t6 - t0
 4. 按 F5 运行
 ```
 
+编译时 PostBuild 事件自动将 `assets/`、`imgui.ini`、`theme.cfg` 复制到输出目录。
+
 ### 5.3 运行时文件
 
-以下文件需要放在可执行文件同目录下：
+以下文件自动与 exe 同目录（无需手动拷贝）：
 
-- `simhei.ttf` — 中文字体（必须）
-- `opencv_world4120.dll` — OpenCV 运行时（必须）
-- `test.jpg` — 测试图片（可选）
+- `simhei.ttf` — 中文字体（PostBuild 自动复制）
+- `opencv_world4120.dll` — 运行时需放在 exe 同目录（从 `redist/` 拷贝）
+- `test.jpg` — 测试图片（PostBuild 自动复制）
 
 ---
 

@@ -9,7 +9,8 @@
                 "${workspaceFolder}\\Windows_imgui.slnx",
                 "/p:Configuration=Debug",
                 "/p:Platform=x64",
-                "/m"
+                "/m",
+                "/bl:${workspaceFolder}\\x64\\Debug\\msbuild.binlog"
             ],
             "group": {
                 "kind": "build",
@@ -26,7 +27,8 @@
                 "${workspaceFolder}\\Windows_imgui.slnx",
                 "/p:Configuration=Release",
                 "/p:Platform=x64",
-                "/m"
+                "/m",
+                "/bl:${workspaceFolder}\\x64\\Release\\msbuild.binlog"
             ],
             "problemMatcher": "$msCompile",
             "detail": "MSBuild Release x64"

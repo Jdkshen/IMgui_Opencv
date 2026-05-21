@@ -1,4 +1,4 @@
-# Migui_Opencv 构建指南
+# IMgui_Opencv 构建指南
 
 基于 **Dear ImGui + DirectX 12 + OpenCV** 的 Windows 桌面视觉工具。
 
@@ -9,79 +9,48 @@
 | 工具 | 版本 |
 |------|------|
 | Windows | 10/11 |
-| Visual Studio | 2022 (Community) |
-| OpenCV | 4.12.0 |
-| DirectX 12 | Windows SDK 自带 |
+| Visual Studio | 2022（勾选"使用 C++ 的桌面开发"） |
+| GPU | 支持 DirectX 12 |
+
+**不需要额外安装 OpenCV**，所有头文件、库和 DLL 已包含在项目中。
 
 ---
 
-## 安装步骤
+## 项目自带依赖
 
-### 1. 安装 Visual Studio 2022
-下载：https://visualstudio.microsoft.com/zh-hans/downloads/
+| 目录 | 内容 | 用途 |
+|------|------|------|
+| `include/opencv/` | OpenCV 头文件 | 编译时 |
+| `redist/` | OpenCV .lib + .dll + VC++ 运行时 | 链接 + 运行时 |
+| `imgui/` | Dear ImGui 源码 | 编译时 |
+| `DirectX-Headers-main/` | DX12 辅助头文件（d3dx12.h） | 编译时 |
+| `assets/fonts/` | 中文字体 | 运行时（自动复制） |
+| `assets/images/` | 测试图片 | 运行时（自动复制） |
 
-安装时勾选 **"使用 C++ 的桌面开发"** 工作负载。
-
-### 2. 安装 OpenCV 4.12.0
-下载 Windows 包：https://opencv.org/releases/
-
-解压到 `D:\opencv`，目录结构应为：
-```
-D:\opencv\
-├── build\
-│   ├── include\
-│   └── x64\vc16\lib\
-└── sources\
-```
-
-### 3. 修改路径（如果不同）
-打开 `Windows_imgui.vcxproj`，搜索并替换：
-- `D:\opencv` → 你的 OpenCV 路径
-- DirectX 头文件已在项目中 (`DirectX-Headers-main/`)，无需额外修改
-
-### 4. 拷贝 DLL
-将 `D:\opencv\build\x64\vc16\bin\opencv_world4120.dll` 拷贝到 `x64\Debug\` 目录下（与 exe 同目录）。
+编译时 PostBuild 事件会自动把 `assets/` 和配置文件复制到输出目录。
 
 ---
 
 ## 编译运行
 
 ### VS2022
+
 1. 打开 `Windows_imgui.slnx`
-2. 选择 **x64 Debug** 配置
+2. 选择 **x64 Debug**（或 Release）
 3. `Ctrl+Shift+B` 生成
-4. `F5` 运行
+4. `F5` 调试运行
 
 ### VS Code
-1. 安装 C/C++ 扩展
-2. `Ctrl+Shift+B` → 生成 (Debug)
-3. `F5` → 运行调试
 
-首次运行前确保 `x64\Debug\` 目录下有 `opencv_world4120.dll`。
+1. `Ctrl+Shift+B` → 选择 **生成 (Debug)**
+2. `F5` → 调试运行
 
 ---
 
-## 运行时文件
+## 搬到其他电脑
 
-exe 同目录需要：
-- `opencv_world4120.dll`
-- `simhei.ttf`（中文字体，项目中已包含）
-- `theme.cfg`（自动生成）
+1. 复制整个 `IMgui_Opencv` 文件夹
+2. 安装 VS2022（一次性）
+3. 打开 `Windows_imgui.slnx`，直接编译运行
 
----
-
-## 项目结构
-
-```
-Windows_imgui/
-├── Windows_imgui.cpp          # 程序入口
-├── Windows_imgui.h            # 公共头文件
-├── Core/                      # DX12 上下文、文件选择、图像加载
-├── UI/                        # DockSpace、侧边栏、日志、图像预览
-├── OpenCV/                    # 阈值处理、模板匹配
-├── Renderer/                  # 字体管理
-├── log/                       # 日志系统
-├── imgui/                     # Dear ImGui 库
-├── DirectX-Headers-main/      # DirectX 12 头文件
-└── .vscode/                   # VS Code 配置
-```
+所有路径使用 `$(ProjectDir)` 相对路径，无需任何手动配置。

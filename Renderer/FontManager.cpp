@@ -1,6 +1,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 
 #include <stdio.h>
+#include <string>
 #include <windows.h>
 
 #include "../Windows_imgui.h"
@@ -23,6 +24,16 @@ namespace FontManager
         return false;
     }
 
+    // 获取 exe 所在目录的绝对路径（如 "E:\\...\\x64\\Debug\\"）
+    static std::string GetExeDir()
+    {
+        char path[MAX_PATH];
+        GetModuleFileNameA(nullptr, path, MAX_PATH);
+        std::string dir(path);
+        size_t pos = dir.find_last_of("\\/");
+        return dir.substr(0, pos + 1);
+    }
+
 
     //=========================
     // 初始化字体
@@ -38,14 +49,15 @@ namespace FontManager
         ImFont* font = nullptr;
 
         //----------------------------------
-        // 优先本地黑体
+        // 优先本地黑体（和 exe 同目录）
         //----------------------------------
+        std::string localFont = GetExeDir() + "simhei.ttf";
 
-        if (FileExists("simhei.ttf"))
+        if (FileExists(localFont.c_str()))
         {
             font =
                 io.Fonts->AddFontFromFileTTF(
-                    "simhei.ttf",
+                    localFont.c_str(),
                     12.0f * dpi_scale,
                     nullptr,
                     io.Fonts->GetGlyphRangesChineseFull()
