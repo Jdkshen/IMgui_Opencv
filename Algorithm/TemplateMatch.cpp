@@ -1,16 +1,25 @@
-#include "../imgui/imgui.h"       // 必须在 TemplateMatch.h 之前，确保 ImVec2 已定义
+﻿#include "../imgui/imgui.h"       // 必须在 TemplateMatch.h 之前，确保 ImVec2 已定义
 #include "TemplateMatch.h"
 #include "../Core/DX12Context.h"
 #include "../Log/LogSystem.h"
 
 #include <opencv2/imgproc.hpp>
+#include <opencv2/imgcodecs.hpp>
 #include <algorithm>
 #include <cmath>
 #include <chrono>
 #include <thread>
 #include <mutex>
 
-using namespace UI;
+// 模板匹配参数引用（来自 UI 命名空间）
+using UI::gROIs;
+using UI::gSelectedROI;
+using UI::gActiveHandle;
+using UI::PrintROIToLog;
+using UI::ClearROIState;
+using UI::ImageToScreenPos;
+using UI::ScreenToImagePos;
+using UI::NormalizeROI;
 
 // =========================
 // 全局变量定义
@@ -22,50 +31,40 @@ bool g_ShowTemplateMatch = false;        // 调试窗口显示标志
 bool g_PendingMatch = false;             // 待执行匹配标志（下一帧执行）
 
 // =========================
-// 模板匹配参数（调试窗口可调）
+// 模板匹配参数（extern，可被配方系统读写）
 // =========================
-static float  g_MatchThreshold  = 0.75f;   // 匹配分数阈值
-static float  g_NmsThreshold    = 0.30f;   // NMS 重叠阈值
-static int    g_MatchMethod     = 5;       // 匹配方法 (默认 TM_CCOEFF_NORMED, 抗光照变化)
-static float  g_LastMatchTime   = 0.0f;    // 上次匹配耗时 (ms)
-static double g_LastBestScore   = 0.0;     // 上次最佳分数
-static int    g_MaxImageDim     = 1000;    // 匹配前自动缩放到此尺寸以内（越小越快）
-static int    g_SearchMode      = 0;       // 0=全图 1=区域（只在ROI内搜索）
-static int    g_MaxResults      = 10;      // 最多显示匹配结果数
-static bool   g_EnableRotation  = false;   // 启用旋转模板匹配
-static int    g_RotationStart   = -5;      // 起始角度（度）
-static int    g_RotationEnd     = 5;       // 结束角度（度）
-static int    g_RotationStep    = 5;       // 步长（度，越大越快）
+float  g_TMMatchThreshold  = 0.75f;   // 匹配分数阈值
+float  g_NmsThreshold    = 0.30f;   // NMS 重叠阈值
+int    g_TMMaxImageDim     = 1000;    // 匹配前自动缩放到此尺寸以内（越小越快）
+float  g_TMLastMatchTime   = 0.0f;    // 上次匹配耗时 (ms)
+double g_TMLastBestScore   = 0.0;     // 上次最佳分数
+int    g_TMSearchMode      = 0;       // 0=全图 1=区域（只在ROI内搜索）
+int    g_TMMaxResults      = 10;      // 最多显示匹配结果数
+bool   g_TMEnableRotation  = false;   // 启用旋转模板匹配
+int    g_TMRotationStart   = -5;      // 起始角度（度）
+int    g_TMRotationEnd     = 5;       // 结束角度（度）
+int    g_TMRotationStep    = 5;       // 步长（度，越大越快）
 
 // 预览冻结（独立存储，不依赖 ROI）
 static int    g_FrozenTplIdx    = -1;
 static ImVec2 g_FrozenTplStart, g_FrozenTplEnd;
-static cv::Mat g_FrozenTemplate;           // 模板图像数据（独立拷贝）
+cv::Mat g_FrozenTemplate;           // 模板图像数据（独立拷贝）
 static int    g_FrozenImgW      = 0;       // 抓取时的图片宽度
 static int    g_FrozenImgH      = 0;       // 抓取时的图片高度
-static bool   g_ShowPreview     = false;
+bool   g_ShowPreview     = false;
 static bool   g_ShowTplEditor   = false;   // 模板编辑弹窗
 
 // 模板独立处理参数（不影响源图）
-static bool   g_TplGray         = false;   // 模板灰度
-static bool   g_TplBinary       = false;   // 模板二值化
-static int    g_TplBinThresh    = 128;     // 模板二值化阈值
-static bool   g_TplEdge         = false;   // 模板边缘检测
-static int    g_TplEdgeLow      = 50;      // Canny 低阈值
-static int    g_TplEdgeHigh     = 150;     // Canny 高阈值
+bool   g_TplGray         = false;   // 模板灰度
+bool   g_TplBinary       = false;   // 模板二值化
+int    g_TplBinThresh    = 128;     // 模板二值化阈值
+bool   g_TplEdge         = false;   // 模板边缘检测
+int    g_TplEdgeLow      = 50;      // Canny 低阈值
+int    g_TplEdgeHigh     = 150;     // Canny 高阈值
 
 // 预处理参数复用 ThresholdTool 的 gUseGray 和 gPipe
 extern bool gUseGray;                     // ThresholdTool.cpp
 extern PipelineState gPipe;                // ThresholdTool.cpp
-
-static const char* const kMethodNamesCN[] = {
-    "平方差匹配 (SQDIFF)",
-    "归一化平方差 (SQDIFF_NORMED)",
-    "相关匹配 (CCORR)",
-    "归一化相关 (CCORR_NORMED)",
-    "相关系数 (CCOEFF)",
-    "归一化相关系数 (CCOEFF_NORMED)"
-};
 
 extern cv::Mat gImage;                    // 当前处理图像（ThresholdTool.cpp）
 extern ImVec4 color;                      // 日志颜色（DockSpaceHost.cpp）
@@ -97,9 +96,8 @@ namespace TemplateMatch
                 gImage.empty(), (void*)gImage.data, gImage.dims);
             return;
         }
-        if (gROIs.empty())
+        if (gROIs.empty() && g_FrozenTemplate.empty())
         {
-            
             LogSystem::Add(LOG_WARN, color, "模板匹配: 请先用右键框选一个ROI作为模板");
             return;
         }
@@ -150,8 +148,8 @@ namespace TemplateMatch
         }
 
         char dbg[256];
-        snprintf(dbg, sizeof(dbg), "[TM] ROI=(%d,%d %dx%d) img=%dx%d method=%d thresh=%.3f\n",
-            tx, ty, tw, th, gImage.cols, gImage.rows, g_MatchMethod, g_MatchThreshold);
+        snprintf(dbg, sizeof(dbg), "[TM] ROI=(%d,%d %dx%d) img=%dx%d thresh=%.3f\n",
+            tx, ty, tw, th, gImage.cols, gImage.rows, g_TMMatchThreshold);
         OutputDebugStringA(dbg);
 
         // =========================
@@ -171,9 +169,9 @@ namespace TemplateMatch
                 g_FrozenTemplate.release();
                 return;
             }
-            if (maxDim > g_MaxImageDim)
+            if (maxDim > g_TMMaxImageDim)
             {
-                scale = (float)g_MaxImageDim / maxDim;
+                scale = (float)g_TMMaxImageDim / maxDim;
                 cv::resize(gImage, srcImage, cv::Size(), scale, scale, cv::INTER_AREA);
                 cv::resize(g_FrozenTemplate, templ, cv::Size(), scale, scale, cv::INTER_AREA);
             }
@@ -183,10 +181,10 @@ namespace TemplateMatch
                 templ = g_FrozenTemplate;
             }
         }
-        else if (maxDim > g_MaxImageDim)
+        else if (maxDim > g_TMMaxImageDim)
         {
             OutputDebugStringA("[TM] downscaling...\n");
-            scale = (float)g_MaxImageDim / maxDim;
+            scale = (float)g_TMMaxImageDim / maxDim;
             cv::resize(gImage, srcImage, cv::Size(), scale, scale, cv::INTER_AREA);
 
             int stx = (int)(tx * scale);
@@ -242,6 +240,12 @@ namespace TemplateMatch
         // =========================
         // 预处理：源图（大图）用全局参数（不修改原图）
         // =========================
+        {
+            char pdbg[256];
+            snprintf(pdbg, sizeof(pdbg), "[TM] preprocess flags: useGray=%d enableThresh=%d thresh=%d\n",
+                gUseGray, gPipe.enableThreshold, gPipe.threshold);
+            OutputDebugStringA(pdbg);
+        }
         cv::Mat procSrc;
         if (gUseGray && srcImage.channels() > 1)
             cv::cvtColor(srcImage, procSrc, cv::COLOR_BGR2GRAY);
@@ -304,16 +308,15 @@ namespace TemplateMatch
         // =========================
         // 执行匹配（全图 / 区域）
         // =========================
-        const double matchThreshold = g_MatchThreshold;
-        bool isSqDiff = (g_MatchMethod == 0 || g_MatchMethod == 1);
-        const int maxCandidates = g_MaxResults * 10;
+        const double matchThreshold = g_TMMatchThreshold;
+        const int maxCandidates = g_TMMaxResults * 10;
         std::vector<Match> candidates;
         auto tMatch0 = clock::now();
 
         // 预计算旋转模板（避免每个区域重复 warpAffine）
-        int a0 = g_EnableRotation ? g_RotationStart : 0;
-        int a1 = g_EnableRotation ? g_RotationEnd   : 0;
-        int aStep = g_EnableRotation ? g_RotationStep : 1;
+        int a0 = g_TMEnableRotation ? g_TMRotationStart : 0;
+        int a1 = g_TMEnableRotation ? g_TMRotationEnd   : 0;
+        int aStep = g_TMEnableRotation ? g_TMRotationStep : 1;
         std::vector<std::pair<int, cv::Mat>> rotTemplates;
         for (int ang = a0; ang <= a1; ang += aStep)
         {
@@ -329,7 +332,7 @@ namespace TemplateMatch
                 rotTemplates.push_back({0, templ});
         }
 
-        if (g_SearchMode == 1 && (int)gROIs.size() > 0
+        if (g_TMSearchMode == 1 && (int)gROIs.size() > 0
             && (!g_FrozenTemplate.empty() || (int)gROIs.size() > 1))
         {
             // 区域搜索
@@ -371,14 +374,14 @@ namespace TemplateMatch
                 for (auto& [ang, rotTpl] : rotTemplates)
                 {
                     cv::Mat partResult;
-                    cv::matchTemplate(region, rotTpl, partResult, g_MatchMethod);
+                    cv::matchTemplate(region, rotTpl, partResult, 5);
                     for (int r = 0; r < partResult.rows; r++)
                     {
                         const float* row = partResult.ptr<float>(r);
                         for (int c = 0; c < partResult.cols; c++)
                         {
                             float score = row[c];
-                            if (isSqDiff ? (score <= matchThreshold) : (score >= matchThreshold))
+                            if (score >= matchThreshold)
                                 candidates.push_back({ cv::Point(rix + c, riy + r), (double)score, (float)ang });
                         }
                     }
@@ -394,16 +397,16 @@ namespace TemplateMatch
             for (auto& [ang, rotTpl] : rotTemplates)
             {
                 cv::Mat result;
-                cv::matchTemplate(srcImage, rotTpl, result, g_MatchMethod);
+                cv::matchTemplate(srcImage, rotTpl, result, 5);
 
                 if (result.empty()) continue;
 
-                if (!g_EnableRotation || ang == 0)
+                if (!g_TMEnableRotation || ang == 0)
                 {
                     double minVal, maxVal;
                     cv::Point minLoc, maxLoc;
                     cv::minMaxLoc(result, &minVal, &maxVal, &minLoc, &maxLoc);
-                    g_LastBestScore = isSqDiff ? minVal : maxVal;
+                    g_TMLastBestScore = maxVal;
                 }
 
                 int resRows = result.rows, resCols = result.cols;
@@ -422,7 +425,7 @@ namespace TemplateMatch
                             for (int c = 0; c < resCols; c++)
                             {
                                 float score = row[c];
-                                if (isSqDiff ? (score <= mThresh) : (score >= mThresh))
+                                if (score >= mThresh)
                                 {
                                     std::lock_guard<std::mutex> lk(candMutex);
                                     if ((int)candidates.size() >= maxCandidates) return;
@@ -440,12 +443,8 @@ namespace TemplateMatch
         snprintf(dbg, sizeof(dbg), "[TM] candidates=%d\n", (int)candidates.size());
         OutputDebugStringA(dbg);
 
-        if (isSqDiff)
-            std::sort(candidates.begin(), candidates.end(),
-                [](const Match& a, const Match& b) { return a.score < b.score; });
-        else
-            std::sort(candidates.begin(), candidates.end(),
-                [](const Match& a, const Match& b) { return a.score > b.score; });
+        std::sort(candidates.begin(), candidates.end(),
+            [](const Match& a, const Match& b) { return a.score > b.score; });
 
         LogSystem::Add(LOG_INFO, color,
             "模板匹配: 候选匹配 %d 个 (上限%d)", (int)candidates.size(), maxCandidates);
@@ -477,10 +476,10 @@ namespace TemplateMatch
         }
         auto tNms1 = clock::now();
 
-        // 添加匹配结果（最多 g_MaxResults 个）
+        // 添加匹配结果（最多 g_TMMaxResults 个）
         float invScale = 1.0f / scale;
         int added = 0;
-        for (size_t i = 0; i < candidates.size() && added < g_MaxResults; i++)
+        for (size_t i = 0; i < candidates.size() && added < g_TMMaxResults; i++)
         {
             if (suppressed[i]) continue;
             const auto& m = candidates[i];
@@ -500,15 +499,15 @@ namespace TemplateMatch
         };
         float timeMatch = ms(tMatch0, tMatch1);
         float timeNms   = ms(tNms0, tNms1);
-        g_LastMatchTime = ms(tStart, tEnd);
+        g_TMLastMatchTime = ms(tStart, tEnd);
 
         snprintf(dbg, sizeof(dbg), "[TM] DONE: %d results | match=%.1fms NMS=%.1fms total=%.1fms\n",
-            (int)gMatchROIs.size(), timeMatch, timeNms, g_LastMatchTime);
+            (int)gMatchROIs.size(), timeMatch, timeNms, g_TMLastMatchTime);
         OutputDebugStringA(dbg);
 
         LogSystem::Add(LOG_INFO, color,
             "模板匹配: %d个区域 | 匹配=%.1fms NMS=%.1fms 总=%.1fms",
-            (int)gMatchROIs.size(), timeMatch, timeNms, g_LastMatchTime);
+            (int)gMatchROIs.size(), timeMatch, timeNms, g_TMLastMatchTime);
     }
 
     // =========================
@@ -661,7 +660,7 @@ namespace TemplateMatch
     {
         if (!drawList) return;
 
-        for (int i = 0; i < (int)gMatchROIs.size() && i < g_MaxResults; i++)
+        for (int i = 0; i < (int)gMatchROIs.size() && i < g_TMMaxResults; i++)
         {
             auto& roi = gMatchROIs[i];
             float cx = (roi.start.x + roi.end.x) * 0.5f;
@@ -708,6 +707,31 @@ namespace TemplateMatch
     }
 
     // =========================
+    // 保存模板图像到 PNG
+    // =========================
+    bool SaveTemplate(const char* filepath)
+    {
+        if (g_FrozenTemplate.empty()) return false;
+        return cv::imwrite(filepath, g_FrozenTemplate);
+    }
+
+    // =========================
+    // 从 PNG 加载模板图像
+    // =========================
+    bool LoadTemplate(const char* filepath)
+    {
+        cv::Mat tpl = cv::imread(filepath, cv::IMREAD_COLOR);
+        if (tpl.empty()) return false;
+        g_FrozenTemplate = tpl;
+        g_FrozenImgW = tpl.cols;
+        g_FrozenImgH = tpl.rows;
+        g_FrozenTplStart = ImVec2(0, 0);
+        g_FrozenTplEnd   = ImVec2((float)tpl.cols, (float)tpl.rows);
+        g_ShowPreview = true;
+        return true;
+    }
+
+    // =========================
     // 调试窗口：模板预览 + 参数调节 + 执行
     // =========================
     void ShowWindow()
@@ -732,13 +756,13 @@ namespace TemplateMatch
 
             if (gImage.empty())
             {
-                ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "请先加载图片并框选ROI");
+                ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "请先加载图片");
             }
-            else if (gROIs.empty())
+            else if (gROIs.empty() && g_FrozenTemplate.empty())
             {
                 ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "请先在图片上用右键框选模板ROI");
             }
-            else
+            else if (!gROIs.empty())
             {
                 if (ImGui::Button("抓取模板", ImVec2(-1, 24)))
                 {
@@ -764,8 +788,16 @@ namespace TemplateMatch
                         g_FrozenImgW = gImage.cols;
                         g_FrozenImgH = gImage.rows;
                         g_ShowPreview = true;
+                        gROIs.clear();         // 抓取完成后自动清理ROI
+                        gSelectedROI = -1;
+                        gActiveHandle = HANDLE_NONE;
                     }
                 }
+            }
+            else
+            {
+                // gROIs为空但冻结模板存在：模板已就绪
+                ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1), "模板已就绪，可直接执行匹配");
             }
 
             // 模板预览（不受图片/ROI限制，模板独立保存）
@@ -854,32 +886,20 @@ namespace TemplateMatch
             // =========================
             ImGui::Text("搜索范围");
             const char* kSearchModes[] = { "全图", "区域(ROI内)" };
-            ImGui::Combo("##search", &g_SearchMode, kSearchModes, 2);
+            ImGui::Combo("##search", &g_TMSearchMode, kSearchModes, 2);
 
-            ImGui::Checkbox("启用旋转", &g_EnableRotation);
+            ImGui::Checkbox("启用旋转", &g_TMEnableRotation);
             ImGui::SetItemTooltip("模板旋转多角度搜索，识别倾斜目标");
-            if (g_EnableRotation)
+            if (g_TMEnableRotation)
             {
                 ImGui::Indent();
                 ImGui::PushItemWidth(60);
-                ImGui::SliderInt("起始角°", &g_RotationStart, -45, 0); ImGui::SameLine();
-                ImGui::SliderInt("结束角°", &g_RotationEnd, 0, 45); ImGui::SameLine();
-                ImGui::SliderInt("步长°", &g_RotationStep, 1, 10);
+                ImGui::SliderInt("起始角°", &g_TMRotationStart, -45, 0); ImGui::SameLine();
+                ImGui::SliderInt("结束角°", &g_TMRotationEnd, 0, 45); ImGui::SameLine();
+                ImGui::SliderInt("步长°", &g_TMRotationStep, 1, 10);
                 ImGui::PopItemWidth();
                 ImGui::Unindent();
             }
-
-            ImGui::Separator();
-
-            // =========================
-            // 匹配方法选择
-            // =========================
-            ImGui::Text("匹配方法");
-            ImGui::Combo("##method", &g_MatchMethod, kMethodNamesCN, 6);
-            ImGui::SetItemTooltip(
-                "SQDIFF: 平方差 最快\n"
-                "CCORR: 相关性 较快\n"
-                "CCOEFF: 相关系数 较慢但抗光照");
 
             ImGui::Separator();
 
@@ -888,38 +908,30 @@ namespace TemplateMatch
             // =========================
             ImGui::Text("匹配参数");
 
-            ImGui::SliderInt("最大结果数", &g_MaxResults, 1, 100);
+            ImGui::SliderInt("最大结果数", &g_TMMaxResults, 1, 100);
             ImGui::SetItemTooltip("最多显示多少个匹配框");
 
-            if (ImGui::SliderFloat("匹配阈值", &g_MatchThreshold, 0.0f, 1.0f, "%.3f"))
+            if (ImGui::SliderFloat("匹配阈值", &g_TMMatchThreshold, 0.0f, 1.0f, "%.3f"))
                 g_PendingMatch = true;  // 拖滑块实时刷新匹配
 
             // 上次最佳分数参考
-            if (g_LastBestScore != 0.0)
+            if (g_TMLastBestScore != 0.0)
             {
                 ImGui::SameLine();
                 ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1),
-                    "  (最佳:%.3f)", g_LastBestScore);
+                    "  (最佳:%.3f)", g_TMLastBestScore);
             }
-
-            // SQDIFF 提示
-            if (g_MatchMethod == 0 || g_MatchMethod == 1)
-            {
-                ImGui::SameLine();
-                ImGui::TextColored(ImVec4(0.9f, 0.5f, 0.2f, 1), "(越低越好)");
-            }
-            ImGui::SetItemTooltip("SQDIFF匹配分数越低越好，其他方法越高越好");
 
             ImGui::SliderFloat("NMS阈值", &g_NmsThreshold, 0.0f, 1.0f, "%.3f");
             ImGui::SetItemTooltip("非极大值抑制重叠阈值，越小去重越强");
 
             // 速度/精度滑块
-            ImGui::SliderInt("匹配精度", &g_MaxImageDim, 400, 2000);
+            ImGui::SliderInt("匹配精度", &g_TMMaxImageDim, 400, 2000);
             ImGui::SetItemTooltip("值越小越快，越大越精确。原图>此值会缩放后再匹配");
 
-            float estTime = (float)g_MaxImageDim * g_MaxImageDim / 1000000.0f * 40.0f;
+            float estTime = (float)g_TMMaxImageDim * g_TMMaxImageDim / 1000000.0f * 40.0f;
             ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1),
-                "预估耗时 ~%.0fms | 缩放到 %dpx 以内", estTime, g_MaxImageDim);
+                "预估耗时 ~%.0fms | 缩放到 %dpx 以内", estTime, g_TMMaxImageDim);
 
             ImGui::Separator();
 
@@ -948,48 +960,28 @@ namespace TemplateMatch
             // 结果统计
             // =========================
             int total = (int)gMatchROIs.size();
-            int shown = std::min(total, g_MaxResults);
+            int shown = std::min(total, g_TMMaxResults);
             ImGui::Text("匹配结果: %d 个 | 显示: %d 个", total, shown);
 
-            if (g_LastMatchTime > 0.0f)
+            if (g_TMLastMatchTime > 0.0f)
             {
                 ImGui::SameLine();
                 ImGui::TextColored(
-                    g_LastMatchTime < 500 ? ImVec4(0.3f, 0.8f, 0.3f, 1) : ImVec4(1, 0.7f, 0.3f, 1),
-                    "(%.0f ms)", g_LastMatchTime);
+                    g_TMLastMatchTime < 500 ? ImVec4(0.3f, 0.8f, 0.3f, 1) : ImVec4(1, 0.7f, 0.3f, 1),
+                    "(%.0f ms)", g_TMLastMatchTime);
             }
 
-            if (total > g_MaxResults)
+            if (total > g_TMMaxResults)
                 ImGui::TextColored(ImVec4(1, 0.7f, 0, 1),
-                    "  (超过上限%d, 仅显示前%d个)", g_MaxResults, shown);
-
-            if (!gMatchROIs.empty())
-            {
-                ImGui::TextColored(ImVec4(0, 0.7f, 1, 1),
-                    "蓝色矩形已叠加到图片上");
-
-                if (ImGui::Button("加入ROI", ImVec2(-1, 24)))
-                {
-                    for (int i = 0; i < (int)gMatchROIs.size() && i < g_MaxResults; i++)
-                    {
-                        ROI r;
-                        r.start = gMatchROIs[i].start;
-                        r.end   = gMatchROIs[i].end;
-                        gROIs.push_back(r);
-                    }
-                    LogSystem::Add(LOG_INFO, color, "已添加 %d 个匹配结果到ROI列表",
-                        std::min((int)gMatchROIs.size(), g_MaxResults));
-                }
-                ImGui::SetItemTooltip("将匹配结果转为可编辑的ROI（绿色框）");
-            }
+                    "  (超过上限%d, 仅显示前%d个)", g_TMMaxResults, shown);
 
             // 结果列表（可滚动）
             if (!gMatchROIs.empty())
             {
                 ImGui::Separator();
                 ImGui::Text("结果列表:");
-                ImGui::BeginChild("##matchList", ImVec2(0, 120), true);
-                for (int i = 0; i < (int)gMatchROIs.size() && i < g_MaxResults; i++)
+                ImGui::BeginChild("##matchList", ImVec2(0, 120), true, ImGuiWindowFlags_HorizontalScrollbar);
+                for (int i = 0; i < (int)gMatchROIs.size() && i < g_TMMaxResults; i++)
                 {
                     auto& roi = gMatchROIs[i];
                     float rx = std::min(roi.start.x, roi.end.x);
@@ -997,7 +989,7 @@ namespace TemplateMatch
                     float rw = std::abs(roi.end.x - roi.start.x);
                     float rh = std::abs(roi.end.y - roi.start.y);
                     float ang = (i < (int)gMatchAngles.size()) ? gMatchAngles[i] : 0.0f;
-                    ImGui::Text("#%d: (%.0f,%.0f) %.0fx%.0f  %.2f  %.0f°",
+                    ImGui::Text("#%d: (%.6f,%.6f) %.6fx%.6f  %.6f  %.6f°",
                         i + 1, rx, ry, rw, rh,
                         (i < (int)gMatchScores.size()) ? gMatchScores[i] : 0.0, ang);
                 }

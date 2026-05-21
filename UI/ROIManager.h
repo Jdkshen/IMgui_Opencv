@@ -24,6 +24,20 @@ extern bool   gDraggingROI;
 extern ImVec2 gLastMousePos;
 extern HandleType gActiveHandle;
 extern int    gHoveredROI;
+extern int    gCurrentROIType;  // 当前操作的ROI类型 (0-4)
+
+// 根据 ROI 类型返回对应颜色
+inline ImU32 GetROIColor(int type, bool selected)
+{
+    switch (type)
+    {
+    case ROI_TYPE_TEMPLATE:    return selected ? IM_COL32(255,200,0,255)   : IM_COL32(200,160,0,255);   // 金黄
+    case ROI_TYPE_RECOGNITION: return selected ? IM_COL32(0,220,220,255)  : IM_COL32(0,180,180,255);   // 青色
+    case ROI_TYPE_RESERVED3:   return selected ? IM_COL32(255,140,0,255)  : IM_COL32(200,100,0,255);   // 橙色
+    case ROI_TYPE_RESERVED4:   return selected ? IM_COL32(180,0,255,255)  : IM_COL32(140,0,200,255);   // 紫色
+    default:                   return selected ? IM_COL32(255,0,0,255)    : IM_COL32(0,255,0,255);     // 绿/红（通用）
+    }
+}
 
 // =====================================================
 // 坐标转换辅助函数

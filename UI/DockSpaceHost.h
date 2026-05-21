@@ -3,7 +3,21 @@
 #include <windows.h>
 #include <algorithm>
 #include <vector>
+#include <opencv2/core/mat.hpp>
 #include "../Core/DX12Context.h"
+
+// =====================================================
+// ROI 类型枚举
+// =====================================================
+enum ROIType : int
+{
+    ROI_TYPE_GENERAL       = 0,  // 通用ROI（默认）
+    ROI_TYPE_TEMPLATE      = 1,  // 模板匹配ROI
+    ROI_TYPE_RECOGNITION   = 2,  // 图识别ROI
+    ROI_TYPE_RESERVED3     = 3,  // 预留
+    ROI_TYPE_RESERVED4     = 4,  // 预留
+    ROI_TYPE_COUNT         = 5
+};
 
 // =====================================================
 // ROI 数据结构（存储归一化图像坐标）
@@ -12,6 +26,7 @@ struct ROI
 {
     ImVec2 start; // ROI起始点（图像坐标）
     ImVec2 end;   // ROI结束点（图像坐标）
+    int    type = ROI_TYPE_GENERAL; // ROI类型
 };
 
 // =====================================================
@@ -58,6 +73,57 @@ struct ROIBox
 // =====================================================
 // UI 命名空间 - 窗口函数声明
 // =====================================================
+// =====================================================
+// 工具实例（可包含模板匹配的独立模板）
+// =====================================================
+struct ToolInstance
+{
+    int type = 0;
+    cv::Mat templateImg;
+    std::vector<ROI> searchROIs;  // 该实例专属搜索区域
+
+    // ---- 旋转/角度参数 ----
+    bool enableRotation = false;
+    int  rotationStart  = -45;
+    int  rotationEnd    = 45;
+    int  rotationStep   = 1;
+
+    // ---- 匹配参数 ----
+    int   maxResults     = 5;
+    float matchThreshold = 0.7f;
+    int   maxImageDim    = 1000;
+    float nmsThreshold   = 0.3f;
+    int   searchMode     = 0;   // 0=全图, 1=ROI内
+
+    // ---- 模板预处理 ----
+    bool tplGray      = false;
+    bool tplBinary    = false;
+    int  tplBinThresh = 128;
+    bool tplEdge      = false;
+    int  tplEdgeLow   = 50;
+    int  tplEdgeHigh  = 150;
+
+    // ---- 图像预处理（模板匹配用） ----
+    bool imgUseGray        = false;
+    bool imgEnableThreshold = false;
+    int  imgThreshold      = 128;
+
+    // ---- 边缘检测参数（type==0） ----
+    int  cannyLow  = 50;
+    int  cannyHigh = 150;
+    bool edgeUseGray = false;
+
+    // ---- 阈值调试参数（type==3） ----
+    bool dbgUseGray     = false;
+    bool dbgEnableBlur  = false;
+    int  dbgBlurSize    = 5;
+    bool dbgEnableThresh = false;
+    int  dbgThreshold   = 128;
+    bool dbgEnableCanny = false;
+    int  dbgCannyLow    = 50;
+    int  dbgCannyHigh   = 150;
+};
+
 namespace UI
 {
     void DrawDockSpaceHost();
@@ -65,4 +131,10 @@ namespace UI
     void ShowSidebar();
     void ShowStatsWindow();
     void ShowToolsWindow();
+
+    // 功能窗口当前展开的工具索引（-1 = 全部折叠）
+    extern int g_ActiveToolIndex;
+
+    // 功能窗口中已添加的工具实例列表
+    extern std::vector<ToolInstance> g_ToolInstances;
 }

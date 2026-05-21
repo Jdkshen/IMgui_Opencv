@@ -14,36 +14,36 @@ IMgui_Opencv/
 │   └── images/test.jpg         ←   测试图片
 │
 ├── Core/                       ← 核心模块
-│   ├── DX12Context.cpp/h       ←   DX12 辅助上下文、全局变量
+│   ├── DX12Context.cpp/h       ←   DX12 设备管理 + 全局状态
 │   ├── OpenCVTest.cpp/h        ←   图片读取 + GPU 纹理上传
-│   └── OpenFileDialog.cpp/h    ←   文件选择对话框
+│   ├── OpenFileDialog.cpp/h    ←   文件选择对话框
+│   ├── ThemeManager.cpp/h      ←   主题切换（夜间/白天）
+│   └── RecipeManager.cpp/h     ←   配方保存/加载（JSON）
 │
 ├── UI/                         ← 界面模块
-│   ├── DockSpaceHost.cpp/h     ←   主停靠空间 + 菜单栏 + 侧边栏
-│   ├── ImageViewer.cpp/h       ←   图片预览、缩放平移、ROI 交互
-│   └── ROIManager.cpp/h        ←   ROI 数据结构、坐标转换
+│   ├── DockSpaceHost.cpp/h     ←   主停靠空间 + 菜单栏 + 各子窗口
+│   ├── ImageViewer.cpp/h       ←   图片预览 + 缩放平移 + 图像状态
+│   └── ROIManager.cpp/h        ←   ROI 数据结构 + 交互 + 坐标转换
 │
 ├── Algorithm/                  ← 图像算法
-│   ├── TemplateMatch.cpp/h     ←   模板匹配
-│   └── ThresholdTool.cpp/h     ←   阈值/模糊/Canny 处理
+│   ├── TemplateMatch.cpp/h     ←   模板匹配（多方法/旋转/NMS）
+│   └── ThresholdTool.cpp/h     ←   图像处理管线（灰度/模糊/Canny/二值化）
 │
 ├── Renderer/                   ← 渲染模块
 │   └── FontManager.cpp/h       ←   中文字体加载（自动定位 exe 目录）
 │
 ├── Log/                        ← 日志系统
-│   └── LogSystem.cpp/h         ←   线程安全日志（颜色/时间戳）
+│   └── LogSystem.cpp/h         ←   线程安全日志（颜色/时间戳/2000条上限）
 │
-├── imgui/                      ← 第三方：Dear ImGui 库
+├── imgui/                      ← 第三方：Dear ImGui 1.92.8
 ├── DirectX-Headers-main/       ← 第三方：DX12 辅助头文件（d3dx12.h）
 ├── include/opencv/             ← 第三方：OpenCV 头文件
-├── redist/                     ← 第三方：OpenCV + VC++ 库与运行时 DLL
+├── redist/                     ← 第三方：OpenCV + VC++ 库与 DLL
 │
-├── Windows_imgui.cpp           ← 程序入口 + DX12 设备管理 + 主循环
-├── Windows_imgui.h             ← 公共头文件
-├── framework.h                 ← 系统头文件
-├── theme.cfg                   ← 主题配置（自动复制到输出）
-├── Windows_imgui.slnx          ← VS2022 解决方案（全部相对路径）
-└── Windows_imgui.vcxproj       ← 项目文件
+├── Windows_imgui.cpp           ← 程序入口 + 主循环 + 窗口消息处理
+├── Windows_imgui.h             ← 公共头文件汇总
+├── framework.h                 ← 系统头文件（Win32/DX12/OpenCV）
+└── Windows_imgui.slnx          ← VS2022 解决方案（全部相对路径）
 ```
 
 ## 🏗️ 主流程

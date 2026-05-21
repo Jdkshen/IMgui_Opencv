@@ -14,6 +14,10 @@ ImVec2 gCanvasSize;
 ImVec2 gImageScreenPos;
 ImVec2 imageScreenPos;
 
+// 图片列表浏览状态
+std::vector<std::string> gImageList;
+int                      gCurrentImageIndex = -1;
+
 namespace UI
 {
 
@@ -46,26 +50,11 @@ namespace UI
 		ImGui::SameLine();
 		if (ImGui::Button("清理图片"))
 			ClearImage();
-		ImGui::SameLine();
-
-		if (ImGui::Button("选择图片", ImVec2(buttonWidth, 0)))
-		{
-			pendingPath = OpenFileDialog();
-			if (!pendingPath.empty())
-			{
-				LogSystem::Add(LOG_INFO, color, "选择图片路径: %s", pendingPath.c_str());
-				OutputDebugStringA(("UI gDevice=" + std::to_string((uintptr_t)gDevice) + "\n").c_str());
-				OutputDebugStringA(("UI gCmdList=" + std::to_string((uintptr_t)gCmdList) + "\n").c_str());
-			}
-			else
-			{
-				LogSystem::Add(LOG_WARN, color, "选择图片 - 用户取消了选择或路径为空");
-			}
-		}
 
 		ImGui::Separator();
 
-		ImGui::BeginChild("ImageRegion", ImVec2(0, 0), true,
+		// 为底部浏览工具栏预留空间（分隔线 + 按钮行约 35px）
+		ImGui::BeginChild("ImageRegion", ImVec2(0, -35.0f), true,
 			ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 		gCanvasSize = ImGui::GetContentRegionAvail();
 
@@ -108,6 +97,68 @@ namespace UI
 
 		HandleROIInteraction();
 		ImGui::EndChild();
+
+		ImGui::Separator();
+
+		// ===== 图片浏览工具栏：文件夹 / 上一张 / 下一张 / 选择图片 =====
+		if (ImGui::Button("选择文件夹", ImVec2(buttonWidth, 0)))
+		{
+			std::string folderPath = OpenFolderDialog();
+			if (!folderPath.empty())
+			{
+				LoadFolderImages(folderPath);
+				LogSystem::Add(LOG_INFO, color, "加载文件夹: %s, 共 %zu 张图片",
+					folderPath.c_str(), gImageList.size());
+			}
+		}
+		ImGui::SameLine();
+
+		// 上一张按钮（只有列表非空且有上一张时可用）
+		bool hasPrev = (!gImageList.empty() && gCurrentImageIndex > 0);
+		if (!hasPrev) ImGui::BeginDisabled();
+		if (ImGui::Button("上一张", ImVec2(buttonWidth, 0)))
+			NavigatePrevImage();
+		if (!hasPrev) ImGui::EndDisabled();
+		ImGui::SameLine();
+
+		// 下一张按钮
+		bool hasNext = (!gImageList.empty() && gCurrentImageIndex >= 0 &&
+		                gCurrentImageIndex < (int)gImageList.size() - 1);
+		if (!hasNext) ImGui::BeginDisabled();
+		if (ImGui::Button("下一张", ImVec2(buttonWidth, 0)))
+			NavigateNextImage();
+		if (!hasNext) ImGui::EndDisabled();
+		ImGui::SameLine();
+
+		// 图片计数显示
+		if (!gImageList.empty() && gCurrentImageIndex >= 0)
+		{
+			ImGui::Text(" %d / %zu ", gCurrentImageIndex + 1, gImageList.size());
+		}
+		else
+		{
+			ImGui::Text(" 无列表 ");
+		}
+		ImGui::SameLine();
+
+		if (ImGui::Button("选择图片", ImVec2(buttonWidth, 0)))
+		{
+			pendingPath = OpenFileDialog();
+			if (!pendingPath.empty())
+			{
+				LogSystem::Add(LOG_INFO, color, "选择图片路径: %s", pendingPath.c_str());
+				OutputDebugStringA(("UI gDevice=" + std::to_string((uintptr_t)gDevice) + "\n").c_str());
+				OutputDebugStringA(("UI gCmdList=" + std::to_string((uintptr_t)gCmdList) + "\n").c_str());
+				// 单独选择图片时清空列表模式
+				gImageList.clear();
+				gCurrentImageIndex = -1;
+			}
+			else
+			{
+				LogSystem::Add(LOG_WARN, color, "选择图片 - 用户取消了选择或路径为空");
+			}
+		}
+
 		ImGui::End();
 	}
 
@@ -136,6 +187,63 @@ namespace UI
 		gZoom = 1.0f;
 		gPan = ImVec2(0, 0);
 		imageScreenPos = ImVec2(0, 0);
+	}
+
+	// =====================================================
+	// 从文件夹加载所有图片
+	// =====================================================
+	void LoadFolderImages(const std::string& folderPath)
+	{
+		gImageList = ScanImageFiles(folderPath);
+		gCurrentImageIndex = -1;
+
+		if (gImageList.empty())
+		{
+			LogSystem::Add(LOG_WARN, color, "文件夹中没有找到图片文件");
+			return;
+		}
+
+		// 加载第一张
+		NavigateToImage(0);
+	}
+
+	// =====================================================
+	// 切换到指定索引的图片
+	// =====================================================
+	void NavigateToImage(int index)
+	{
+		if (gImageList.empty() || index < 0 || index >= (int)gImageList.size())
+			return;
+
+		gCurrentImageIndex = index;
+
+		// 清除上一次的 ROI 和模板匹配结果
+		ClearROIState();
+		TemplateMatch::Clear();
+
+		// 通过 pendingPath 机制触发图片加载
+		pendingPath = gImageList[index];
+
+		LogSystem::Add(LOG_INFO, color, "切换到图片 [%d/%zu]: %s",
+			index + 1, gImageList.size(), gImageList[index].c_str());
+	}
+
+	// =====================================================
+	// 上一张
+	// =====================================================
+	void NavigatePrevImage()
+	{
+		if (gCurrentImageIndex > 0)
+			NavigateToImage(gCurrentImageIndex - 1);
+	}
+
+	// =====================================================
+	// 下一张
+	// =====================================================
+	void NavigateNextImage()
+	{
+		if (gCurrentImageIndex >= 0 && gCurrentImageIndex < (int)gImageList.size() - 1)
+			NavigateToImage(gCurrentImageIndex + 1);
 	}
 
 }

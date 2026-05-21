@@ -52,11 +52,11 @@
 ```
 IMgui_Opencv/
 ├── assets/                     # 资源文件（自动复制到输出）
-├── Core/                       # DX12 上下文、文件选择、图像加载
+├── Core/                       # DX12 上下文、图片加载、文件对话框、主题、配方
 ├── UI/                         # DockSpace、图像预览、ROI 管理
-├── Algorithm/                  # 阈值处理、模板匹配
+├── Algorithm/                  # 阈值处理管线、模板匹配
 ├── Renderer/                   # 字体管理
-├── Log/                        # 日志系统
+├── Log/                        # 线程安全日志系统
 ├── imgui/                      # Dear ImGui 库（第三方）
 ├── DirectX-Headers-main/       # DX12 辅助头文件（第三方）
 ├── include/opencv/              # OpenCV 头文件（第三方）

@@ -207,7 +207,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			);
 
 			LogSystem::Add(LOG_INFO, "图片加载完成");
-			UI::FitImageToWindow();  // 自动调整缩放使图片适配窗口
+			UI::FitImageToWindow();       // 自动调整缩放使图片适配窗口
+			UI::ClearROIState();           // 切换图片时清理所有ROI
+			TemplateMatch::Clear();        // 切换图片时清理模板匹配结果
 
 			//uploadRequest.clear();
 			requestLoadImage = false;

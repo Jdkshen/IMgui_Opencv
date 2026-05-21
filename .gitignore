@@ -24,6 +24,9 @@ theme.cfg
 include/opencv/
 redist/
 
+# 配方文件（用户数据，不入库）
+recipes/
+
 # 编译日志
 *.binlog
 

@@ -154,6 +154,7 @@
     </PreLinkEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="Core\RecipeManager.h" />
     <ClInclude Include="Core\ThemeManager.h" />
     <ClInclude Include="Core\DX12Context.h" />
     <ClInclude Include="Core\OpenCVTest.h" />
@@ -178,6 +179,7 @@
     <ClInclude Include="Windows_imgui.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="Core\RecipeManager.cpp" />
     <ClCompile Include="Core\ThemeManager.cpp" />
     <ClCompile Include="Core\DX12Context.cpp" />
     <ClCompile Include="Core\OpenCVTest.cpp" />

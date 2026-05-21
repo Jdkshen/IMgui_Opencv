@@ -18,6 +18,7 @@ bool   gDraggingROI    = false;
 ImVec2 gLastMousePos;
 HandleType gActiveHandle = HANDLE_NONE;
 int    gHoveredROI     = -1;
+int    gCurrentROIType = ROI_TYPE_GENERAL;
 
 // =====================================================
 // 坐标转换函数实现
@@ -80,7 +81,8 @@ void PrintROIToLog()
         float x2 = std::max(roi.start.x, roi.end.x);
         float y2 = std::max(roi.start.y, roi.end.y);
 
-        LogSystem::Add(LOG_INFO, color, "ROI[%d] rect=(%.6f %.6f %.6f %.6f)", i, x1, y1, x2 - x1, y2 - y1);
+        LogSystem::Add(LOG_INFO, color, "ROI[%d] type=%d rect=(%.6f %.6f %.6f %.6f)",
+            i, roi.type, x1, y1, x2 - x1, y2 - y1);
     }
 }
 
@@ -116,7 +118,8 @@ void HandleROIInteraction()
         {
             ROI roi;
             roi.start = gROIStart;
-            roi.end = imageMouse;
+            roi.end   = imageMouse;
+            roi.type  = gCurrentROIType;  // 新ROI使用当前选中的类型
             NormalizeROI(roi);
             if (fabs(roi.start.x - roi.end.x) > 2 && fabs(roi.start.y - roi.end.y) > 2)
                 gROIs.push_back(roi);
@@ -160,9 +163,11 @@ void HandleROIInteraction()
         gSelectedROI = -1;
         gActiveHandle = HANDLE_NONE;
 
+        // 只对当前类型的ROI进行交互
         for (int i = 0; i < (int)gROIs.size(); i++)
         {
             auto& roi = gROIs[i];
+            if (roi.type != gCurrentROIType) continue;
             Box box = GetBox(roi);
 
             if (CheckHandle(box.lt, HANDLE_LT, i)) break;
@@ -217,10 +222,17 @@ void HandleROIInteraction()
         if (gActiveHandle < HANDLE_T) NormalizeROI(roi);
     }
 
+    // 绘制所有ROI（按类型颜色区分）
     for (int i = 0; i < (int)gROIs.size(); i++)
     {
         auto& roi = gROIs[i];
-        ImU32 col = (i == gSelectedROI) ? IM_COL32(255,0,0,255) : IM_COL32(0,255,0,255);
+        bool selected = (i == gSelectedROI);
+        ImU32 col = GetROIColor(roi.type, selected);
+
+        // 非当前类型的ROI用半透明，当前类型实线
+        if (roi.type != gCurrentROIType)
+            col = (col & 0x00FFFFFF) | 0x80000000;  // 50% 透明度
+
         ImVec2 p1 = ImageToScreenPos(roi.start);
         ImVec2 p2 = ImageToScreenPos(roi.end);
         drawList->AddRect(p1, p2, col, 0, 0, 2.0f);
@@ -229,6 +241,22 @@ void HandleROIInteraction()
             (roi.start.x+roi.end.x)*0.5f, (roi.start.y+roi.end.y)*0.5f));
         drawList->AddCircleFilled(pc, 4.0f, col);
         drawList->AddCircle(pc, 4.0f, IM_COL32(255,255,255,255), 0, 1.0f);
+
+        // 在当前类型ROI旁显示类型标签
+        if (roi.type == gCurrentROIType)
+        {
+            const char* typeLabel = "?";
+            switch (roi.type)
+            {
+            case ROI_TYPE_TEMPLATE:    typeLabel = "模板"; break;
+            case ROI_TYPE_RECOGNITION: typeLabel = "识别"; break;
+            case ROI_TYPE_RESERVED3:   typeLabel = "类型3"; break;
+            case ROI_TYPE_RESERVED4:   typeLabel = "类型4"; break;
+            default:                   typeLabel = "通用"; break;
+            }
+            drawList->AddText(ImVec2(p1.x + 3, p1.y - ImGui::GetTextLineHeight() - 2),
+                IM_COL32(255,255,255,255), typeLabel);
+        }
     }
 
     TemplateMatch::DrawMatches(drawList);
@@ -237,7 +265,8 @@ void HandleROIInteraction()
     {
         ImVec2 p1 = ImageToScreenPos(gROIStart);
         ImVec2 p2 = ImageToScreenPos(imageMouse);
-        drawList->AddRect(p1, p2, IM_COL32(255,255,0,255));
+        ImU32 drawCol = GetROIColor(gCurrentROIType, true);
+        drawList->AddRect(p1, p2, drawCol);
     }
 }
 

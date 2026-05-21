@@ -74,7 +74,9 @@
 | `Core/DX12Context.h/cpp` | **DX12 全局变量 + 初始化** | `gDevice`, `gTexture`, `gSrvCpuHandle`, `InitDX12Context()` |
 | `Core/OpenCVTest.h/cpp` | **OpenCV图片读取 + GPU上传** | `TestReadImage()`, `UploadToDX12()`, 延迟释放队列 |
 | `Core/OpenFileDialog.h/cpp` | **文件选择对话框** | `OpenFileDialog()` → 调用 Win32 `GetOpenFileName` |
-| `UI/DockSpaceHost.h/cpp` | **UI主框架 + 图像交互 + ROI** | DockSpace, 6个子窗口, ROI绘制/选择/拖动/缩放 |
+| `Core/ThemeManager.h/cpp` | **主题管理** | 夜间/白天切换, theme.cfg 持久化 |
+| `Core/RecipeManager.h/cpp` | **配方系统** | JSON 保存/加载阈值+匹配+ROI 参数 |
+| `UI/DockSpaceHost.h/cpp` | **主框架+所有子窗口** | DockSpace, 菜单栏, 日志/侧边栏/性能/工具窗口, 配方菜单 |
 | `Renderer/FontManager.h/cpp` | **字体管理** | 加载 simhei.ttf / msyh.ttc 中文字体 |
 | `Log/LogSystem.h/cpp` | **线程安全日志系统** | 3级日志(INFO/WARN/ERROR), 颜色, 时间戳, 2000条上限 |
 | `Algorithm/ThresholdTool.h/cpp` | **图像处理管线** | 灰度→模糊→二值化/Canny→RGBA上传, 性能计时 |
