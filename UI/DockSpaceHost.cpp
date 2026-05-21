@@ -1,5 +1,5 @@
 #include "../Windows_imgui.h"
-#include "../OpenCV/TemplateMatch.h"
+#include "../Algorithm/TemplateMatch.h"
 #include "ROIManager.h"
 
 // =====================================================
@@ -13,11 +13,7 @@ bool   g_ShowOpenCV    = true;
 bool   g_ShowTools     = true;
 ImVec4 color           = ImVec4(0.2f, 0.8f, 1.0f, 1.0f);
 
-float  gZoom           = 1.0f;
-ImVec2 gPan            = ImVec2(0, 0);
-ImVec2 gCanvasSize;
-ImVec2 gImageScreenPos;
-ImVec2 imageScreenPos;
+// 图像显示状态已移到 ImageViewer.cpp / ROIManager.cpp 中定义
 
 namespace UI
 {

@@ -43,15 +43,8 @@ extern bool   g_ShowOpenCV;
 extern bool   g_ShowTools;
 extern ImVec4 color;                     // 默认日志颜色（蓝色）
 
-// 图像显示/视图变换状态
-extern float  gZoom;
-extern ImVec2 gPan;
-extern ImVec2 gCanvasSize;
-extern ImVec2 gImageScreenPos;
-extern ImVec2 imageScreenPos;
-
-// ROI 数据与交互状态（定义已移到 ROIManager.cpp）
-// 坐标转换函数（声明已移到 ROIManager.h）
+// 图像显示状态分散在 ImageViewer.h / ROIManager.h 中声明
+// ROI 数据与交互状态在 ROIManager.h (namespace UI) 中声明
 
 // =====================================================
 // ROIBox 结构（预计算8个控制点位置）

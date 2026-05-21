@@ -1,7 +1,11 @@
 #include "../Windows_imgui.h"
 #include "ROIManager.h"
 #include "../Core/DX12Context.h"
-#include "../log/LogSystem.h"
+#include "../Log/LogSystem.h"
+#include "../Algorithm/TemplateMatch.h"
+
+namespace UI
+{
 
 // =====================================================
 // ROI 全局变量定义
@@ -14,14 +18,6 @@ bool   gDraggingROI    = false;
 ImVec2 gLastMousePos;
 HandleType gActiveHandle = HANDLE_NONE;
 int    gHoveredROI     = -1;
-
-// 图像显示状态（extern 在 DockSpaceHost.h）
-extern float  gZoom;
-extern ImVec2 gPan;
-extern ImVec2 gCanvasSize;
-extern ImVec2 gImageScreenPos;
-extern ImVec2 imageScreenPos;
-extern ImVec4 color;
 
 // =====================================================
 // 坐标转换函数实现
@@ -99,3 +95,150 @@ void ClearROIState()
     gActiveHandle = HANDLE_NONE;
     gDraggingROI = false;
 }
+
+// =====================================================
+// ROI 交互处理（创建/选中/拖动/删除/绘制）
+// =====================================================
+void HandleROIInteraction()
+{
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    ImVec2 mouse = ImGui::GetMousePos();
+    ImVec2 imageMouse = ScreenToImagePos(mouse);
+
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+    {
+        gDrawingROI = true;
+        gROIStart = imageMouse;
+    }
+    if (ImGui::IsMouseReleased(ImGuiMouseButton_Right))
+    {
+        if (gDrawingROI)
+        {
+            ROI roi;
+            roi.start = gROIStart;
+            roi.end = imageMouse;
+            NormalizeROI(roi);
+            if (fabs(roi.start.x - roi.end.x) > 2 && fabs(roi.start.y - roi.end.y) > 2)
+                gROIs.push_back(roi);
+        }
+        gDrawingROI = false;
+    }
+
+    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+    {
+        gDraggingROI = false;
+        gActiveHandle = HANDLE_NONE;
+    }
+
+    struct Box { ImVec2 lt, rt, lb, rb, t, b, l, r, c; };
+    auto GetBox = [&](const ROI& roi) -> Box
+    {
+        float minX = std::min(roi.start.x, roi.end.x);
+        float maxX = std::max(roi.start.x, roi.end.x);
+        float minY = std::min(roi.start.y, roi.end.y);
+        float maxY = std::max(roi.start.y, roi.end.y);
+        return Box{
+            {minX,minY},{maxX,minY},{minX,maxY},{maxX,maxY},
+            {(minX+maxX)*0.5f,minY},{(minX+maxX)*0.5f,maxY},
+            {minX,(minY+maxY)*0.5f},{maxX,(minY+maxY)*0.5f},
+            {(minX+maxX)*0.5f,(minY+maxY)*0.5f}
+        };
+    };
+
+    auto CheckHandle = [&](ImVec2 p, HandleType type, int i) -> bool
+    {
+        ImVec2 sp = ImageToScreenPos(p);
+        float dx = mouse.x - sp.x;
+        float dy = mouse.y - sp.y;
+        if (sqrtf(dx*dx + dy*dy) < HANDLE_SIZE * 2.0f)
+        { gSelectedROI = i; gActiveHandle = type; return true; }
+        return false;
+    };
+
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+    {
+        gSelectedROI = -1;
+        gActiveHandle = HANDLE_NONE;
+
+        for (int i = 0; i < (int)gROIs.size(); i++)
+        {
+            auto& roi = gROIs[i];
+            Box box = GetBox(roi);
+
+            if (CheckHandle(box.lt, HANDLE_LT, i)) break;
+            if (CheckHandle(box.rt, HANDLE_RT, i)) break;
+            if (CheckHandle(box.lb, HANDLE_LB, i)) break;
+            if (CheckHandle(box.rb, HANDLE_RB, i)) break;
+            if (CheckHandle(box.t, HANDLE_T, i)) break;
+            if (CheckHandle(box.b, HANDLE_B, i)) break;
+            if (CheckHandle(box.l, HANDLE_L, i)) break;
+            if (CheckHandle(box.r, HANDLE_R, i)) break;
+            if (CheckHandle(box.c, HANDLE_CENTER, i)) break;
+
+            float minX = std::min(roi.start.x, roi.end.x);
+            float maxX = std::max(roi.start.x, roi.end.x);
+            float minY = std::min(roi.start.y, roi.end.y);
+            float maxY = std::max(roi.start.y, roi.end.y);
+
+            if (imageMouse.x >= minX && imageMouse.x <= maxX &&
+                imageMouse.y >= minY && imageMouse.y <= maxY)
+            { gSelectedROI = i; break; }
+        }
+    }
+
+    if (gSelectedROI >= 0 && ImGui::IsKeyPressed(ImGuiKey_Delete))
+    {
+        gROIs.erase(gROIs.begin() + gSelectedROI);
+        gSelectedROI = -1;
+        gActiveHandle = HANDLE_NONE;
+        gDraggingROI = false;
+    }
+
+    if (gActiveHandle != HANDLE_NONE && gSelectedROI >= 0)
+    {
+        auto& roi = gROIs[gSelectedROI];
+
+        if (gActiveHandle >= HANDLE_T)
+        {
+            if (!gDraggingROI) { gDraggingROI = true; gLastMousePos = imageMouse; }
+            ImVec2 delta(imageMouse.x - gLastMousePos.x, imageMouse.y - gLastMousePos.y);
+            roi.start.x += delta.x; roi.start.y += delta.y;
+            roi.end.x += delta.x;   roi.end.y += delta.y;
+            gLastMousePos = imageMouse;
+        }
+        else switch (gActiveHandle)
+        {
+        case HANDLE_LT: roi.start = imageMouse; break;
+        case HANDLE_RB: roi.end = imageMouse; break;
+        case HANDLE_RT: roi.start.y = imageMouse.y; roi.end.x = imageMouse.x; break;
+        case HANDLE_LB: roi.start.x = imageMouse.x; roi.end.y = imageMouse.y; break;
+        }
+
+        if (gActiveHandle < HANDLE_T) NormalizeROI(roi);
+    }
+
+    for (int i = 0; i < (int)gROIs.size(); i++)
+    {
+        auto& roi = gROIs[i];
+        ImU32 col = (i == gSelectedROI) ? IM_COL32(255,0,0,255) : IM_COL32(0,255,0,255);
+        ImVec2 p1 = ImageToScreenPos(roi.start);
+        ImVec2 p2 = ImageToScreenPos(roi.end);
+        drawList->AddRect(p1, p2, col, 0, 0, 2.0f);
+
+        ImVec2 pc = ImageToScreenPos(ImVec2(
+            (roi.start.x+roi.end.x)*0.5f, (roi.start.y+roi.end.y)*0.5f));
+        drawList->AddCircleFilled(pc, 4.0f, col);
+        drawList->AddCircle(pc, 4.0f, IM_COL32(255,255,255,255), 0, 1.0f);
+    }
+
+    TemplateMatch::DrawMatches(drawList);
+
+    if (gDrawingROI)
+    {
+        ImVec2 p1 = ImageToScreenPos(gROIStart);
+        ImVec2 p2 = ImageToScreenPos(imageMouse);
+        drawList->AddRect(p1, p2, IM_COL32(255,255,0,255));
+    }
+}
+
+} // namespace UI

@@ -1,7 +1,7 @@
 #include "../imgui/imgui.h"       // 必须在 TemplateMatch.h 之前，确保 ImVec2 已定义
 #include "TemplateMatch.h"
 #include "../Core/DX12Context.h"
-#include "../log/LogSystem.h"
+#include "../Log/LogSystem.h"
 
 #include <opencv2/imgproc.hpp>
 #include <algorithm>
@@ -9,6 +9,8 @@
 #include <chrono>
 #include <thread>
 #include <mutex>
+
+using namespace UI;
 
 // =========================
 // 全局变量定义
@@ -67,8 +69,6 @@ static const char* const kMethodNamesCN[] = {
 
 extern cv::Mat gImage;                    // 当前处理图像（ThresholdTool.cpp）
 extern ImVec4 color;                      // 日志颜色（DockSpaceHost.cpp）
-extern std::vector<ROI> gROIs;            // 用户ROI（DockSpaceHost.cpp）
-extern int gSelectedROI;                  // 当前选中ROI索引（DockSpaceHost.cpp）
 extern D3D12_GPU_DESCRIPTOR_HANDLE gSrvGpuHandle;  // GPU纹理句柄（DX12Context.cpp）
 extern int gImageWidth;                   // 图片宽度（DX12Context.cpp）
 extern int gImageHeight;                  // 图片高度（DX12Context.cpp）
@@ -99,7 +99,7 @@ namespace TemplateMatch
         }
         if (gROIs.empty())
         {
-            OutputDebugStringA("[TM] FAIL: no ROI\n");
+            
             LogSystem::Add(LOG_WARN, color, "模板匹配: 请先用右键框选一个ROI作为模板");
             return;
         }

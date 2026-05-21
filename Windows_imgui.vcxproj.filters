@@ -22,13 +22,13 @@
     <Filter Include="Renderer">
       <UniqueIdentifier>{dd555055-7fd8-4a3b-ae5a-9026d3b8fd1d}</UniqueIdentifier>
     </Filter>
-    <Filter Include="log">
+    <Filter Include="Log">
       <UniqueIdentifier>{fcca3ca8-daa8-4eba-ac7c-6bf7943151a9}</UniqueIdentifier>
     </Filter>
     <Filter Include="Core">
       <UniqueIdentifier>{73e07b14-0eea-45dd-b4d0-02007dec7d4b}</UniqueIdentifier>
     </Filter>
-    <Filter Include="OpenCV">
+    <Filter Include="Algorithm">
       <UniqueIdentifier>{530a4ef7-c72a-4bc4-aca5-d1dfc50a82c2}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
@@ -72,8 +72,8 @@
     <ClInclude Include="Renderer\FontManager.h">
       <Filter>Renderer</Filter>
     </ClInclude>
-    <ClInclude Include="log\LogSystem.h">
-      <Filter>log</Filter>
+    <ClInclude Include="Log\LogSystem.h">
+      <Filter>Log</Filter>
     </ClInclude>
     <ClInclude Include="Core\OpenFileDialog.h">
       <Filter>Core</Filter>
@@ -84,11 +84,11 @@
     <ClInclude Include="Core\DX12Context.h">
       <Filter>Core</Filter>
     </ClInclude>
-    <ClInclude Include="OpenCV\ThresholdTool.h">
-      <Filter>OpenCV</Filter>
+    <ClInclude Include="Algorithm\ThresholdTool.h">
+      <Filter>Algorithm</Filter>
     </ClInclude>
-    <ClInclude Include="OpenCV\TemplateMatch.h">
-      <Filter>OpenCV</Filter>
+    <ClInclude Include="Algorithm\TemplateMatch.h">
+      <Filter>Algorithm</Filter>
     </ClInclude>
     <ClInclude Include="UI\ROIManager.h">
       <Filter>UI</Filter>
@@ -131,8 +131,8 @@
     <ClCompile Include="Renderer\FontManager.cpp">
       <Filter>Renderer</Filter>
     </ClCompile>
-    <ClCompile Include="log\LogSystem.cpp">
-      <Filter>log</Filter>
+    <ClCompile Include="Log\LogSystem.cpp">
+      <Filter>Log</Filter>
     </ClCompile>
     <ClCompile Include="Core\OpenFileDialog.cpp">
       <Filter>Core</Filter>
@@ -143,11 +143,11 @@
     <ClCompile Include="Core\DX12Context.cpp">
       <Filter>Core</Filter>
     </ClCompile>
-    <ClCompile Include="OpenCV\ThresholdTool.cpp">
-      <Filter>OpenCV</Filter>
+    <ClCompile Include="Algorithm\ThresholdTool.cpp">
+      <Filter>Algorithm</Filter>
     </ClCompile>
-    <ClCompile Include="OpenCV\TemplateMatch.cpp">
-      <Filter>OpenCV</Filter>
+    <ClCompile Include="Algorithm\TemplateMatch.cpp">
+      <Filter>Algorithm</Filter>
     </ClCompile>
     <ClCompile Include="UI\ROIManager.cpp">
       <Filter>UI</Filter>
@@ -159,14 +159,8 @@
   <ItemGroup>
     <None Include="README.md" />
     <None Include="imgui.ini" />
-    <None Include="simsun.ttc" />
-  </ItemGroup>
-  <ItemGroup>
-    <Font Include="simhei.ttf" />
-  </ItemGroup>
-  <ItemGroup>
-    <Image Include="test.jpg">
-      <Filter>资源文件</Filter>
-    </Image>
+    <None Include="assets\fonts\simhei.ttf" />
+    <None Include="assets\fonts\simsun.ttc" />
+    <None Include="assets\images\test.jpg" />
   </ItemGroup>
 </Project>

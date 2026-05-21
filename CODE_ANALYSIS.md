@@ -76,8 +76,9 @@
 | `Core/OpenFileDialog.h/cpp` | **文件选择对话框** | `OpenFileDialog()` → 调用 Win32 `GetOpenFileName` |
 | `UI/DockSpaceHost.h/cpp` | **UI主框架 + 图像交互 + ROI** | DockSpace, 6个子窗口, ROI绘制/选择/拖动/缩放 |
 | `Renderer/FontManager.h/cpp` | **字体管理** | 加载 simhei.ttf / msyh.ttc 中文字体 |
-| `log/LogSystem.h/cpp` | **线程安全日志系统** | 3级日志(INFO/WARN/ERROR), 颜色, 时间戳, 2000条上限 |
-| `OpenCV/ThresholdTool.h/cpp` | **图像处理管线** | 灰度→模糊→二值化/Canny→RGBA上传, 性能计时 |
+| `Log/LogSystem.h/cpp` | **线程安全日志系统** | 3级日志(INFO/WARN/ERROR), 颜色, 时间戳, 2000条上限 |
+| `Algorithm/ThresholdTool.h/cpp` | **图像处理管线** | 灰度→模糊→二值化/Canny→RGBA上传, 性能计时 |
+| `Algorithm/TemplateMatch.h/cpp` | **模板匹配** | 多方法模板匹配、旋转匹配、结果绘制 |
 
 ---
 
@@ -495,7 +496,7 @@ FitImageToWindow():
 
 ---
 
-### 3.6 日志系统 — `log/LogSystem.h/cpp`
+### 3.6 日志系统 — `Log/LogSystem.h/cpp`
 
 #### 3.6.1 数据结构
 
@@ -566,7 +567,7 @@ InitFonts(dpi_scale):
 
 ---
 
-### 3.8 图像处理管线 — `OpenCV/ThresholdTool.h/cpp`
+### 3.8 图像处理管线 — `Algorithm/ThresholdTool.h/cpp`
 
 #### 3.8.1 管线数据流
 
@@ -758,9 +759,9 @@ t6 ── 完成          → gTimeTotal = t6 - t0
 ### 6.1 添加新的图像处理算法
 
 ```
-① 在 OpenCV/ 目录下创建 YourTool.h 和 YourTool.cpp
+① 在 Algorithm/ 目录下创建 YourTool.h 和 YourTool.cpp
 ② 在 YourTool.h 中声明 UI 函数和参数变量
-③ 在 Windows_imgui.h 中添加 #include "OpenCV/YourTool.h"
+③ 在 Windows_imgui.h 中添加 #include "Algorithm/YourTool.h"
 ④ 在 UI::ShowToolsWindow() 中添加按钮入口
 ⑤ 在主循环中添加 YourTool::ShowWindow() 调用
 ```

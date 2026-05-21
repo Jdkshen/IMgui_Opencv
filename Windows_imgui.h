@@ -19,12 +19,12 @@
 #include "UI/ROIManager.h"
 #include "UI/ImageViewer.h"
 #include "Renderer/FontManager.h"
-#include "log/LogSystem.h"
+#include "Log/LogSystem.h"
 #include "Core/OpenFileDialog.h"
 #include "Core/OpenCVTest.h"
 #include "Core/DX12Context.h"
-#include "OpenCV/ThresholdTool.h"
-#include "OpenCV/TemplateMatch.h"
+#include "Algorithm/ThresholdTool.h"
+#include "Algorithm/TemplateMatch.h"
 
 // =========================
 // 主题切换（extern 声明，定义在 Windows_imgui.cpp）

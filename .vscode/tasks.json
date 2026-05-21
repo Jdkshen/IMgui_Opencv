@@ -45,6 +45,24 @@
             ],
             "problemMatcher": [],
             "detail": "清理 Debug 产物"
+        },
+        {
+            "label": "快速提交",
+            "type": "shell",
+            "command": "git add -A; git commit -m '${input:commitMsg}'",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "detail": "终端提交（比 VS Code GUI 快）"
+        }
+    ],
+    "inputs": [
+        {
+            "id": "commitMsg",
+            "type": "promptString",
+            "description": "提交信息",
+            "default": "更新"
         }
     ]
 }
