@@ -22,9 +22,9 @@ static ImVec4 clear_color = ImVec4(
     1.00f
 );
 
-// =========================
+// ==========================
 // 主题切换（0=Dark 1=Light 2=Classic）
-// =========================
+// ==========================
 int g_CurrentTheme = 0;
 const char* g_ThemeNames[] = { "夜间", "白天" };
 
