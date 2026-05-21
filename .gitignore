@@ -1,0 +1,21 @@
+# 编译产物
+x64/
+Debug/
+Release/
+*.ilk
+*.pdb
+*.obj
+*.tlog
+*.log
+*.ipch
+*.exe
+
+# VS
+.vs/
+*.vcxproj.user
+*.suo
+
+# 临时/本地配置
+*.tmp
+imgui.ini
+theme.cfg

@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="Windows_imgui.vcxproj" Id="dd3f0b96-f621-407c-821f-3e50c89808ef" />
+</Solution>

@@ -1,0 +1,48 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "生成 (Debug)",
+            "type": "process",
+            "command": "D:\\VisualStudio\\Community\\MSBuild\\Current\\Bin\\MSBuild.exe",
+            "args": [
+                "${workspaceFolder}\\Windows_imgui.slnx",
+                "/p:Configuration=Debug",
+                "/p:Platform=x64",
+                "/m"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": "$msCompile",
+            "detail": "MSBuild Debug x64"
+        },
+        {
+            "label": "生成 (Release)",
+            "type": "process",
+            "command": "D:\\VisualStudio\\Community\\MSBuild\\Current\\Bin\\MSBuild.exe",
+            "args": [
+                "${workspaceFolder}\\Windows_imgui.slnx",
+                "/p:Configuration=Release",
+                "/p:Platform=x64",
+                "/m"
+            ],
+            "problemMatcher": "$msCompile",
+            "detail": "MSBuild Release x64"
+        },
+        {
+            "label": "清理",
+            "type": "process",
+            "command": "D:\\VisualStudio\\Community\\MSBuild\\Current\\Bin\\MSBuild.exe",
+            "args": [
+                "${workspaceFolder}\\Windows_imgui.slnx",
+                "/t:Clean",
+                "/p:Configuration=Debug",
+                "/p:Platform=x64"
+            ],
+            "problemMatcher": [],
+            "detail": "清理 Debug 产物"
+        }
+    ]
+}
