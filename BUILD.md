@@ -47,6 +47,23 @@
 
 ---
 
+## 项目结构
+
+```
+IMgui_Opencv/
+├── assets/                     # 资源文件（自动复制到输出）
+├── Core/                       # DX12 上下文、文件选择、图像加载
+├── UI/                         # DockSpace、图像预览、ROI 管理
+├── Algorithm/                  # 阈值处理、模板匹配
+├── Renderer/                   # 字体管理
+├── Log/                        # 日志系统
+├── imgui/                      # Dear ImGui 库（第三方）
+├── DirectX-Headers-main/       # DX12 辅助头文件（第三方）
+├── include/opencv/              # OpenCV 头文件（第三方）
+├── redist/                     # OpenCV + VC++ lib/dll（第三方）
+└── Windows_imgui.slnx          # VS2022 解决方案
+```
+
 ## 搬到其他电脑
 
 1. 复制整个 `IMgui_Opencv` 文件夹

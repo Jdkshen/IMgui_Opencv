@@ -23,14 +23,14 @@ IMgui_Opencv/
 │   ├── ImageViewer.cpp/h       ←   图片预览、缩放平移、ROI 交互
 │   └── ROIManager.cpp/h        ←   ROI 数据结构、坐标转换
 │
-├── OpenCV/                     ← 图像算法
+├── Algorithm/                  ← 图像算法
 │   ├── TemplateMatch.cpp/h     ←   模板匹配
 │   └── ThresholdTool.cpp/h     ←   阈值/模糊/Canny 处理
 │
 ├── Renderer/                   ← 渲染模块
 │   └── FontManager.cpp/h       ←   中文字体加载（自动定位 exe 目录）
 │
-├── log/                        ← 日志系统
+├── Log/                        ← 日志系统
 │   └── LogSystem.cpp/h         ←   线程安全日志（颜色/时间戳）
 │
 ├── imgui/                      ← 第三方：Dear ImGui 库

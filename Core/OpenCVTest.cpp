@@ -8,8 +8,8 @@
 
 #include <wrl/client.h>
 #include <d3dx12.h>
-#include "../log/LogSystem.h"
-#include "../OpenCV/ThresholdTool.h"
+#include "../Log/LogSystem.h"
+#include "../Algorithm/ThresholdTool.h"
 
 using Microsoft::WRL::ComPtr;
 

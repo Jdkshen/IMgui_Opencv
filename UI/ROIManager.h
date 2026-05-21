@@ -2,6 +2,18 @@
 #include "DockSpaceHost.h"   // ROI 结构体
 
 // =====================================================
+// 图像显示/视图变换状态（extern，定义在 ImageViewer.cpp）
+// =====================================================
+extern float  gZoom;
+extern ImVec2 gPan;
+extern ImVec2 gCanvasSize;
+extern ImVec2 gImageScreenPos;
+extern ImVec2 imageScreenPos;
+
+namespace UI
+{
+
+// =====================================================
 // ROI 数据与交互状态（extern 声明）
 // =====================================================
 extern std::vector<ROI> gROIs;
@@ -26,3 +38,6 @@ void   NormalizeROI(ROI& roi);
 void   PrintROIToLog();       // 打印所有ROI到日志
 void   ZoomAtCenter(float d); // 以鼠标为中心缩放
 void   ClearROIState();       // 清理ROI状态
+void   HandleROIInteraction(); // ROI 交互处理（创建/选中/拖动/删除/绘制）
+
+} // namespace UI
