@@ -88,7 +88,7 @@ namespace TemplateMatch
         auto tStart = clock::now();
         OutputDebugStringA("[TM] Run() enter\n");
 
-        // 安全校验
+        // ===== 阶段1：安全校验 =====
         if (gImage.empty() || gImage.data == nullptr || gImage.dims != 2)
         {
             OutputDebugStringA("[TM] FAIL: image invalid\n");
@@ -103,7 +103,7 @@ namespace TemplateMatch
         }
         OutputDebugStringA("[TM] validation OK\n");
 
-        // 取模板ROI索引（有冻结模板时 tplIdx=-1，不跳过任何搜索区）
+        // ===== 阶段2：提取模板 ROI 坐标 =====
         float x1, y1, x2, y2;
         int tplIdx;
         if (!g_FrozenTemplate.empty())
@@ -152,9 +152,7 @@ namespace TemplateMatch
             tx, ty, tw, th, gImage.cols, gImage.rows, g_TMMatchThreshold);
         OutputDebugStringA(dbg);
 
-        // =========================
-        // 自动降采样
-        // =========================
+        // ===== 阶段3：自动降采样（缩放到 g_TMMaxImageDim 以内）=====
         cv::Mat srcImage;
         cv::Mat templ;
         float scale = 1.0f;
@@ -237,9 +235,7 @@ namespace TemplateMatch
             "模板匹配: 模板ROI[%d] (%d,%d %dx%d), 模板大小=%dx%d",
             tplIdx, tx, ty, tw, th, templ.cols, templ.rows);
 
-        // =========================
-        // 预处理：源图（大图）用全局参数（不修改原图）
-        // =========================
+        // ===== 阶段4：预处理源图（大图）=====
         {
             char pdbg[256];
             snprintf(pdbg, sizeof(pdbg), "[TM] preprocess flags: useGray=%d enableThresh=%d thresh=%d\n",
@@ -247,23 +243,25 @@ namespace TemplateMatch
             OutputDebugStringA(pdbg);
         }
         cv::Mat procSrc;
+        // 转为灰度（兼容3ch BGR 和 4ch BGRA）
+        auto ToGray = [](const cv::Mat& s, cv::Mat& d) {
+            cv::cvtColor(s, d, s.channels() == 4 ? cv::COLOR_BGRA2GRAY : cv::COLOR_BGR2GRAY);
+        };
         if (gUseGray && srcImage.channels() > 1)
-            cv::cvtColor(srcImage, procSrc, cv::COLOR_BGR2GRAY);
+            ToGray(srcImage, procSrc);
         else if (gPipe.enableThreshold && srcImage.channels() > 1)
-            cv::cvtColor(srcImage, procSrc, cv::COLOR_BGR2GRAY);
+            ToGray(srcImage, procSrc);
         else
             procSrc = srcImage.clone();  // 深拷贝，避免后续原地修改影响原图
         if (gPipe.enableThreshold)
             cv::threshold(procSrc, procSrc, gPipe.threshold, 255, cv::THRESH_BINARY);
 
-        // =========================
-        // 预处理：模板（小图）用独立参数
-        // =========================
+        // ===== 阶段5：预处理模板（小图，独立参数）=====
         cv::Mat procTpl;
         if (g_TplGray && templ.channels() > 1)
-            cv::cvtColor(templ, procTpl, cv::COLOR_BGR2GRAY);
+            ToGray(templ, procTpl);
         else if (g_TplBinary && templ.channels() > 1)
-            cv::cvtColor(templ, procTpl, cv::COLOR_BGR2GRAY);
+            ToGray(templ, procTpl);
         else
             procTpl = templ.clone();  // 深拷贝
         if (g_TplBinary)
@@ -279,7 +277,7 @@ namespace TemplateMatch
         srcImage = procSrc;
         templ = procTpl;
 
-        // 通道数对齐：matchTemplate 要求模板和源图通道数一致
+        // ===== 阶段6：通道数对齐（matchTemplate 要求一致）=====
         if (templ.channels() != srcImage.channels())
         {
             cv::Mat tmp;
@@ -291,6 +289,16 @@ namespace TemplateMatch
             else if (srcImage.channels() == 1 && templ.channels() > 1)
             {
                 cv::cvtColor(templ, tmp, cv::COLOR_BGR2GRAY);
+                templ = tmp;
+            }
+            else if (srcImage.channels() == 4)
+            {
+                cv::cvtColor(srcImage, tmp, cv::COLOR_BGRA2BGR);
+                srcImage = tmp;
+            }
+            else if (templ.channels() == 4)
+            {
+                cv::cvtColor(templ, tmp, cv::COLOR_BGRA2BGR);
                 templ = tmp;
             }
         }
@@ -305,9 +313,7 @@ namespace TemplateMatch
         gMatchScores.clear();
         gMatchAngles.clear();
 
-        // =========================
-        // 执行匹配（全图 / 区域）
-        // =========================
+        // ===== 阶段7：执行匹配（全图 / 区域ROI）=====
         const double matchThreshold = g_TMMatchThreshold;
         const int maxCandidates = g_TMMaxResults * 10;
         std::vector<Match> candidates;
@@ -449,9 +455,7 @@ namespace TemplateMatch
         LogSystem::Add(LOG_INFO, color,
             "模板匹配: 候选匹配 %d 个 (上限%d)", (int)candidates.size(), maxCandidates);
 
-        // =========================
-        // NMS 去重
-        // =========================
+        // ===== 阶段8：NMS 非极大值抑制去重 =====
         OutputDebugStringA("[TM] NMS...\n");
         auto tNms0 = clock::now();
         int tplW = templ.cols;
@@ -476,7 +480,7 @@ namespace TemplateMatch
         }
         auto tNms1 = clock::now();
 
-        // 添加匹配结果（最多 g_TMMaxResults 个）
+        // ===== 阶段9：收集结果（最多 g_TMMaxResults 个）=====
         float invScale = 1.0f / scale;
         int added = 0;
         for (size_t i = 0; i < candidates.size() && added < g_TMMaxResults; i++)

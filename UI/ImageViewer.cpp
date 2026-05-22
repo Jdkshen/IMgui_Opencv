@@ -58,22 +58,32 @@ namespace UI
 			ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 		gCanvasSize = ImGui::GetContentRegionAvail();
 
+		// 记录图片区域屏幕范围（用于限制像素坐标显示）
+		ImVec2 childScreenPos = ImGui::GetCursorScreenPos();
+		ImVec2 childScreenSize = ImGui::GetContentRegionAvail();
+
+		// 鼠标滚轮缩放（以鼠标尖端为锚点，图片自动跟随）
 		if (ImGui::IsWindowHovered())
 		{
 			float wheel = ImGui::GetIO().MouseWheel;
 			if (wheel != 0.0f)
 			{
 				ImVec2 mousePos = ImGui::GetMousePos();
-				float imageX = (mousePos.x - imageScreenPos.x) / gZoom;
-				float imageY = (mousePos.y - imageScreenPos.y) / gZoom;
+				// 鼠标指向的图片像素坐标（考虑 pan 偏移）
+				float imgScreenX = imageScreenPos.x + gPan.x;
+				float imgScreenY = imageScreenPos.y + gPan.y;
+				float imageX = (mousePos.x - imgScreenX) / gZoom;
+				float imageY = (mousePos.y - imgScreenY) / gZoom;
 				float oldZoom = gZoom;
 				gZoom += wheel * 0.1f;
-				gZoom = std::clamp(gZoom, 0.1f, 20.0f);
+				gZoom = std::clamp(gZoom, 0.005f, 50.0f);  // 最小0.5%
+				// 调整 pan 使鼠标指向的像素位置不变
 				gPan.x -= imageX * (gZoom - oldZoom);
 				gPan.y -= imageY * (gZoom - oldZoom);
 			}
 		}
 
+		// 左键拖拽平移（未拖动ROI时）
 		if (!gDraggingROI && gActiveHandle == HANDLE_NONE &&
 			ImGui::IsWindowHovered() && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
 		{
@@ -82,6 +92,7 @@ namespace UI
 			gPan.y += delta.y;
 		}
 
+		// 绘制DX12纹理（图片显示）
 		if (gTexture && gSrvGpuHandle.ptr != 0)
 		{
 			float drawW = gImageWidth * gZoom;
@@ -95,6 +106,7 @@ namespace UI
 		if (!gTexture || gImageWidth <= 0 || gImageHeight <= 0)
 			ImGui::Text("暂无图片");
 
+		// 处理ROI交互 + 绘制匹配结果
 		HandleROIInteraction();
 		ImGui::EndChild();
 
@@ -156,6 +168,39 @@ namespace UI
 			else
 			{
 				LogSystem::Add(LOG_WARN, color, "选择图片 - 用户取消了选择或路径为空");
+			}
+		}
+
+		// ===== 右侧信息栏：尺寸 | 格式 | 像素坐标 =====
+		{
+			ImGui::SameLine();
+			if (!gImage.empty())
+			{
+				const char* fmtStr = "?";
+				int ch = gImage.channels();
+				if (ch == 1) fmtStr = "Gray";
+				else if (ch == 3) fmtStr = "BGR";
+				else if (ch == 4) fmtStr = "BGRA";
+				// 仅鼠标在图片窗口范围内才显示像素坐标
+				ImVec2 mouse = ImGui::GetMousePos();
+				bool inChild = (mouse.x >= childScreenPos.x && mouse.x < childScreenPos.x + childScreenSize.x &&
+				                mouse.y >= childScreenPos.y && mouse.y < childScreenPos.y + childScreenSize.y);
+				if (inChild)
+				{
+					ImVec2 imgCoord = ScreenToImagePos(mouse);
+					bool inImg = (imgCoord.x >= 0 && imgCoord.x < gImageWidth &&
+					              imgCoord.y >= 0 && imgCoord.y < gImageHeight);
+					if (inImg)
+						ImGui::TextDisabled("%dx%d %s | X:%.0f Y:%.0f",
+							gImageWidth, gImageHeight, fmtStr, imgCoord.x, imgCoord.y);
+					else
+						ImGui::TextDisabled("%dx%d %s | X:--- Y:---",
+							gImageWidth, gImageHeight, fmtStr);
+				}
+				else
+				{
+					ImGui::TextDisabled("%dx%d %s", gImageWidth, gImageHeight, fmtStr);
+				}
 			}
 		}
 

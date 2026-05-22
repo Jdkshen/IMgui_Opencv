@@ -107,9 +107,7 @@ namespace ThresholdTool
         cv::Mat src = gImage;
         cv::Mat input;
 
-        // =========================
-        // 1. 灰度转换
-        // =========================
+        // 阶段1：灰度转换
         auto t1 = clock::now();
         if (gUseGray)
         {
@@ -128,16 +126,12 @@ namespace ThresholdTool
 
         cv::Mat result = input;
 
-        // =========================
-        // 2. 高斯模糊
-        // =========================
+        // 阶段2：高斯模糊
         if (gPipe.enableBlur)
             result = Ops::Blur(result, gPipe.blurSize);
         auto t3 = clock::now();
 
-        // =========================
-        // 3. Canny边缘检测 / 二值化
-        // =========================
+        // 阶段3：Canny边缘 / 二值化（互斥）
         if (gPipe.enableThreshold && gPipe.enableCanny)
             result = Ops::Canny(result, gPipe.cannyLow, gPipe.cannyHigh);
         else if (gPipe.enableCanny)
@@ -146,9 +140,7 @@ namespace ThresholdTool
             result = Ops::Threshold(result, gPipe.threshold);
         auto t4 = clock::now();
 
-        // =========================
-        // 4. 转换为RGBA格式（用于DX12显示）
-        // =========================
+        // 阶段4：转RGBA → 标记GPU上传
         cv::Mat rgba;
         if (result.channels() == 1)
             cv::cvtColor(result, rgba, cv::COLOR_GRAY2RGBA);
@@ -163,9 +155,7 @@ namespace ThresholdTool
         gNeedUpload = true;
         auto t6 = clock::now();
 
-        // =========================
-        // 5. 记录各阶段耗时
-        // =========================
+        // 阶段5：记录各步骤耗时
         auto ms = [](auto a, auto b)
         {
             return std::chrono::duration<float, std::milli>(b - a).count();

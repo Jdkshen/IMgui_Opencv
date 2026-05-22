@@ -78,9 +78,9 @@ struct ROIBox
 // =====================================================
 struct ToolInstance
 {
-    int type = 0;
-    cv::Mat templateImg;
-    std::vector<ROI> searchROIs;  // 该实例专属搜索区域
+    int type = 0;                      // 工具类型: 0=边缘检测 1=模板匹配 2=Blob分析 3=阈值调试
+    cv::Mat templateImg;               // 该实例的模板图像数据
+    std::vector<ROI> searchROIs;       // 该实例专属搜索区域
 
     // ---- 旋转/角度参数 ----
     bool enableRotation = false;
@@ -126,10 +126,15 @@ struct ToolInstance
 
 namespace UI
 {
+    // 绘制主停靠空间（菜单栏 + DockSpace 容器）
     void DrawDockSpaceHost();
+    // 显示日志窗口（时间戳 + 颜色分级 + 清空按钮）
     void ShowLogWindow();
+    // 显示侧边栏（图片加载/ROI操作/配方管理）
     void ShowSidebar();
+    // 显示性能统计窗口（FPS/帧耗时/DrawCall）
     void ShowStatsWindow();
+    // 显示功能窗口（手风琴工具列表 + 全部/单步执行）
     void ShowToolsWindow();
 
     // 功能窗口当前展开的工具索引（-1 = 全部折叠）

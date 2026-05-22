@@ -349,20 +349,57 @@ std::vector<ToolInstance> g_ToolInstances;
 
 		ImGui::Separator();
 
-		// ---- 全部执行 逐帧状态机 ----
-		static int  g_BatchRunIndex   = -1;
-		static int  g_StepRunIndex    = -1;   // 单步执行索引
+		// ---- 全部执行 逐帧状态机（批量/单步共用） ----
+		static int  g_BatchRunIndex   = -1;   // 批量执行当前索引
+		static int  g_StepRunIndex    = -1;   // 单步执行索引（-1=空闲）
+		static int  g_StepCursor      = 0;    // 单步进度（持久，不随帧重置）
+		static bool g_LoopMode        = false; // 循环执行模式
+		static int  g_SwitchDelay     = 0;     // 切换图片/循环等待帧数
 		static float g_StepTime       = 0.0f;  // 上一步耗时
 		static auto g_BatchStartTime  = std::chrono::high_resolution_clock::now();
 		static float g_BatchTotalTime = 0.0f;
 		static cv::Mat g_BatchOriginalImage;  // 备份原始图，每实例恢复
 
-		// 每帧执行一个工具实例（在渲染之前）—— 批量 or 单步共用
+		// 每帧执行一个工具实例（渲染之前执行，确保本帧能看到高亮）
 		int execIdx = (g_BatchRunIndex >= 0) ? g_BatchRunIndex : g_StepRunIndex;
+
+		// 切换图片/循环前的等待延迟（让用户看清结果）
+		if (execIdx < 0 && g_SwitchDelay > 0)
+		{
+			g_SwitchDelay--;
+			if (g_SwitchDelay <= 0)
+			{
+				bool hasNext = (!gImageList.empty() && gCurrentImageIndex >= 0 &&
+					gCurrentImageIndex < (int)gImageList.size() - 1);
+				if (hasNext) {
+					NavigateNextImage();
+					FitImageToWindow();      // 新图自适应窗口
+					g_SwitchDelay = 10;      // 等图片加载完
+					g_BatchRunIndex = -2;    // 标记等待加载
+				} else if (g_LoopMode) {
+					g_BatchRunIndex = 0;
+					g_BatchStartTime = std::chrono::high_resolution_clock::now();
+					g_BatchOriginalImage = gImage.clone();
+				}
+			}
+			// 切图后等待加载完成，再启动批量
+			if (g_BatchRunIndex == -2 && g_SwitchDelay > 0)
+			{
+				g_SwitchDelay--;
+				if (g_SwitchDelay <= 0 && !gImage.empty())
+				{
+					g_BatchRunIndex = 0;
+					g_BatchStartTime = std::chrono::high_resolution_clock::now();
+					g_BatchOriginalImage = gImage.clone();
+				}
+			}
+			execIdx = -2;
+		}
+
 		if (execIdx >= 0 && execIdx < (int)g_ToolInstances.size())
 		{
-			auto stepT0 = std::chrono::high_resolution_clock::now();
-			// 每个实例开始前恢复原始图
+			auto stepT0 = std::chrono::high_resolution_clock::now(); // 记录单步开始时间
+			// 每个实例开始前恢复原始图（批量模式）
 			if (!g_BatchOriginalImage.empty())
 				gImage = g_BatchOriginalImage.clone();
 
@@ -371,7 +408,7 @@ std::vector<ToolInstance> g_ToolInstances;
 			const char* modeLabel = (g_BatchRunIndex >= 0) ? "[全部执行]" : "[单步执行]";
 			LogSystem::Add(LOG_INFO, color, "%s %d/%zu: %s",
 				modeLabel, execIdx + 1, g_ToolInstances.size(), kToolNames[t]);
-			if (t == 0)
+			if (t == 0) // 边缘检测：同步实例参数 → ApplyProcess
 			{
 				gCannyLow = it.cannyLow; gCannyHigh = it.cannyHigh;
 				gUseGray = it.edgeUseGray;
@@ -379,7 +416,7 @@ std::vector<ToolInstance> g_ToolInstances;
 				gPipe.cannyLow = it.cannyLow; gPipe.cannyHigh = it.cannyHigh;
 				ThresholdTool::ApplyProcess();
 			}
-			else if (t == 1) {
+			else if (t == 1) { // 模板匹配：同步全部参数 + 图像预处理 + Run
 				g_TMEnableRotation = it.enableRotation;
 				g_TMRotationStart  = it.rotationStart;
 				g_TMRotationEnd    = it.rotationEnd;
@@ -396,6 +433,7 @@ std::vector<ToolInstance> g_ToolInstances;
 				g_TplEdgeLow       = it.tplEdgeLow;
 				g_TplEdgeHigh      = it.tplEdgeHigh;
 
+				// 图像预处理：灰度/二值化 gImage（批量模式）
 				bool didPreprocess = false;
 				if (it.imgUseGray || it.imgEnableThreshold)
 				{
@@ -427,8 +465,8 @@ std::vector<ToolInstance> g_ToolInstances;
 					gROIs = it.searchROIs;
 				TemplateMatch::Run();
 			}
-			else if (t == 2) { LogSystem::Add(LOG_INFO, color, "Blob分析: 执行完成"); }
-			else if (t == 3) {
+			else if (t == 2) { LogSystem::Add(LOG_INFO, color, "Blob分析: 执行完成"); } // Blob分析（占位）
+			else if (t == 3) { // 阈值调试：同步参数 → ApplyProcess
 				gUseGray = it.dbgUseGray;
 				gPipe.enableBlur = it.dbgEnableBlur; gPipe.blurSize = it.dbgBlurSize;
 				gPipe.enableThreshold = it.dbgEnableThresh; gPipe.threshold = it.dbgThreshold;
@@ -436,7 +474,7 @@ std::vector<ToolInstance> g_ToolInstances;
 				gPipe.cannyLow = it.dbgCannyLow; gPipe.cannyHigh = it.dbgCannyHigh;
 				ThresholdTool::ApplyProcess();
 			}
-			// 推进索引
+			// 推进索引：批量自动+1，单步由按钮控制
 			if (g_BatchRunIndex >= 0)
 			{
 				g_BatchRunIndex++;
@@ -444,7 +482,18 @@ std::vector<ToolInstance> g_ToolInstances;
 				{
 					auto t1 = std::chrono::high_resolution_clock::now();
 					g_BatchTotalTime = std::chrono::duration<float, std::milli>(t1 - g_BatchStartTime).count();
-					g_BatchRunIndex = -1;
+					// 多图/循环模式：先停留若干帧让用户看清结果，再切换
+					bool hasNextImage = (!gImageList.empty() && gCurrentImageIndex >= 0 &&
+						gCurrentImageIndex < (int)gImageList.size() - 1);
+					if (hasNextImage || g_LoopMode)
+					{
+						g_BatchRunIndex = -1;       // 暂停执行
+						g_SwitchDelay = 60;          // 等待约1秒（60帧）再切换
+					}
+					else
+					{
+						g_BatchRunIndex = -1;
+					}
 					// 恢复原始图到显示
 					if (!g_BatchOriginalImage.empty())
 					{
@@ -460,11 +509,12 @@ std::vector<ToolInstance> g_ToolInstances;
 						g_ToolInstances.size(), g_BatchTotalTime);
 				}
 			}
-			// 单步模式不重置索引，由按钮控制推进
+			// 单步模式：执行完当前即停，防止循环
 			if (g_StepRunIndex >= 0)
 			{
 				auto stepT1 = std::chrono::high_resolution_clock::now();
 				g_StepTime = std::chrono::duration<float, std::milli>(stepT1 - stepT0).count();
+				g_StepRunIndex = -1;  // 标记已执行，等待下次按钮点击
 			}
 		}
 
@@ -491,7 +541,7 @@ std::vector<ToolInstance> g_ToolInstances;
 					kToolNames[type], inst + 1);
 
 				// 全部执行/单步执行时高亮当前实例
-				bool isBatchActive = (inst == g_BatchRunIndex || inst == g_StepRunIndex);
+				bool isBatchActive = (inst == g_BatchRunIndex || inst == g_StepRunIndex || (g_StepCursor > 0 && inst == g_StepCursor - 1));
 				if (isBatchActive)
 					ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.2f, 0.5f, 0.9f, 1.0f));
 
@@ -819,51 +869,80 @@ std::vector<ToolInstance> g_ToolInstances;
 
 		ImGui::EndChild();
 
-		// ---- 底部：全部执行按钮 ----
+		// ---- 底部：全部执行 / 单步执行 按钮 ----
 		if (!g_ToolInstances.empty())
 		{
 			ImGui::Separator();
+			// 全部执行按钮：一键启动所有工具逐帧执行
 			if (ImGui::Button("全部执行"))
 			{
 				g_BatchOriginalImage = gImage.clone();
 				g_BatchStartTime = std::chrono::high_resolution_clock::now();
 				g_BatchRunIndex = 0;
 				g_BatchTotalTime = 0.0f;
-				g_StepRunIndex = -1;  // 取消单步
+				g_SwitchDelay = 0;       // 清除切换延迟
+				g_StepRunIndex = -1;   // 取消单步执行
+				g_StepCursor = 0;       // 重置单步进度
 			}
 			ImGui::SameLine();
-			bool stepping = (g_StepRunIndex >= 0);
+			// 单步执行按钮：点一下执行一个，按钮变蓝"单步中..."
+			bool stepping = (g_StepCursor > 0 && g_StepCursor <= (int)g_ToolInstances.size());
 			if (stepping) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.5f, 0.9f, 1.0f));
 			if (ImGui::Button(stepping ? "单步中..." : "单步执行"))
 			{
-				g_BatchRunIndex = -1;  // 取消批量
+				g_BatchRunIndex = -1;
 				g_BatchTotalTime = 0.0f;
-				if (g_StepRunIndex < 0)
+				if (g_StepCursor >= (int)g_ToolInstances.size())
 				{
-					g_BatchOriginalImage = gImage.clone();
-					g_StepRunIndex = 0;
+					// 上一轮已完成，重置且不执行（回到空闲）
+					g_StepCursor = 0;
+					g_StepRunIndex = -1;
+					g_StepTime = 0.0f;
+					if (!g_BatchOriginalImage.empty())
+					{
+						gImage = g_BatchOriginalImage.clone();
+						cv::Mat rgba;
+						if (gImage.channels() == 1) cv::cvtColor(gImage, rgba, cv::COLOR_GRAY2RGBA);
+						else if (gImage.channels() == 3) cv::cvtColor(gImage, rgba, cv::COLOR_BGR2RGBA);
+						else cv::cvtColor(gImage, rgba, cv::COLOR_BGRA2RGBA);
+						gPendingUpload = rgba;
+						gNeedUpload = true;
+					}
 				}
 				else
 				{
-					// 当前正在单步中，点按钮推进到下一个
-					g_StepRunIndex++;
-					if (g_StepRunIndex >= (int)g_ToolInstances.size())
-					{
-						g_StepRunIndex = -1;
-						if (!g_BatchOriginalImage.empty())
-						{
-							gImage = g_BatchOriginalImage.clone();
-							cv::Mat rgba;
-							if (gImage.channels() == 1) cv::cvtColor(gImage, rgba, cv::COLOR_GRAY2RGBA);
-							else if (gImage.channels() == 3) cv::cvtColor(gImage, rgba, cv::COLOR_BGR2RGBA);
-							else cv::cvtColor(gImage, rgba, cv::COLOR_BGRA2RGBA);
-							gPendingUpload = rgba;
-							gNeedUpload = true;
-						}
-					}
+					if (g_StepCursor == 0)
+						g_BatchOriginalImage = gImage.clone();  // 新轮：备份原图
+					g_StepRunIndex = g_StepCursor;  // 触发执行当前步骤
+					g_StepCursor++;
 				}
 			}
 			if (stepping) ImGui::PopStyleColor();
+			ImGui::SameLine();
+			// 循环按钮：自动重复执行所有工具（先存状态，避免按钮内修改导致 Pop 丢失）
+			bool wasLooping = g_LoopMode;
+			if (wasLooping) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.8f, 0.3f, 1.0f));
+			if (ImGui::Button(wasLooping ? "循环中" : "循环"))
+			{
+				g_LoopMode = !g_LoopMode;
+				if (!g_LoopMode)
+				{
+					// 关闭循环：停止批量执行，恢复原图
+					g_BatchRunIndex = -1;
+					g_SwitchDelay = 0;
+					if (!g_BatchOriginalImage.empty())
+					{
+						gImage = g_BatchOriginalImage.clone();
+						cv::Mat rgba;
+						if (gImage.channels() == 1) cv::cvtColor(gImage, rgba, cv::COLOR_GRAY2RGBA);
+						else if (gImage.channels() == 3) cv::cvtColor(gImage, rgba, cv::COLOR_BGR2RGBA);
+						else cv::cvtColor(gImage, rgba, cv::COLOR_BGRA2RGBA);
+						gPendingUpload = rgba;
+						gNeedUpload = true;
+					}
+				}
+			}
+			if (wasLooping) ImGui::PopStyleColor();
 			if (g_StepTime > 0.0f)
 			{
 				ImGui::SameLine();

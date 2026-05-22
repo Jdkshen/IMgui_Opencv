@@ -54,7 +54,7 @@ void ZoomAtCenter(float delta)
     ImVec2 before = ScreenToImagePos(mouse);
     float oldZoom = gZoom;
     gZoom *= (1.0f + delta);
-    gZoom = std::clamp(gZoom, 0.05f, 50.0f);
+    gZoom = std::clamp(gZoom, 0.005f, 50.0f);  // 最小0.5%，最大5000%
     ImVec2 after = ImageToScreenPos(before);
     gPan.x += mouse.x - after.x;
     gPan.y += mouse.y - after.y;
@@ -107,11 +107,13 @@ void HandleROIInteraction()
     ImVec2 mouse = ImGui::GetMousePos();
     ImVec2 imageMouse = ScreenToImagePos(mouse);
 
+    // 右键按下：开始绘制新ROI
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
     {
         gDrawingROI = true;
         gROIStart = imageMouse;
     }
+    // 右键释放：完成ROI绘制（最小尺寸过滤）
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Right))
     {
         if (gDrawingROI)
@@ -127,6 +129,7 @@ void HandleROIInteraction()
         gDrawingROI = false;
     }
 
+    // 左键释放：停止拖动/缩放
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left))
     {
         gDraggingROI = false;
@@ -158,6 +161,7 @@ void HandleROIInteraction()
         return false;
     };
 
+    // 左键点击：检测是否点击到ROI的控制点或内部区域
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
     {
         gSelectedROI = -1;
@@ -191,6 +195,7 @@ void HandleROIInteraction()
         }
     }
 
+    // Delete键：删除选中的ROI
     if (gSelectedROI >= 0 && ImGui::IsKeyPressed(ImGuiKey_Delete))
     {
         gROIs.erase(gROIs.begin() + gSelectedROI);
@@ -199,10 +204,12 @@ void HandleROIInteraction()
         gDraggingROI = false;
     }
 
+    // 拖动/缩放：根据当前激活的控制点类型调整ROI
     if (gActiveHandle != HANDLE_NONE && gSelectedROI >= 0)
     {
         auto& roi = gROIs[gSelectedROI];
 
+        // 四边中点/中心：整体移动ROI
         if (gActiveHandle >= HANDLE_T)
         {
             if (!gDraggingROI) { gDraggingROI = true; gLastMousePos = imageMouse; }
@@ -211,6 +218,7 @@ void HandleROIInteraction()
             roi.end.x += delta.x;   roi.end.y += delta.y;
             gLastMousePos = imageMouse;
         }
+        // 四角：拉伸/缩放ROI
         else switch (gActiveHandle)
         {
         case HANDLE_LT: roi.start = imageMouse; break;
@@ -222,7 +230,7 @@ void HandleROIInteraction()
         if (gActiveHandle < HANDLE_T) NormalizeROI(roi);
     }
 
-    // 绘制所有ROI（按类型颜色区分）
+    // ===== 绘制所有ROI矩形 + 标签 =====
     for (int i = 0; i < (int)gROIs.size(); i++)
     {
         auto& roi = gROIs[i];
