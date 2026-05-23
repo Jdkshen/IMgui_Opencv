@@ -4,16 +4,16 @@
             "name": "Win32",
             "includePath": [
                 "${workspaceFolder}/**",
-                "D:/opencv/build/include",
-                "E:/UIimgui/Windows_imgui/DirectX-Headers-main/include/directx",
-                "D:/Windows Kits/10/Include/10.0.26100.0/um",
+                "${workspaceFolder}/include/opencv",
+                "${workspaceFolder}/DirectX-Headers-main/include/directx",
+                "D:/VisualStudio/Community/VC/Tools/MSVC/14.51.36231/include",
                 "D:/Windows Kits/10/Include/10.0.26100.0/ucrt",
-                "D:/Windows Kits/10/Include/10.0.26100.0/shared",
-                "D:/VisualStudio/Community/VC/Tools/MSVC/14.50.35717/include"
+                "D:/Windows Kits/10/Include/10.0.26100.0/um",
+                "D:/Windows Kits/10/Include/10.0.26100.0/shared"
             ],
             "defines": [],
             "windowsSdkVersion": "10.0.26100.0",
-            "compilerPath": "D:/VisualStudio/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/cl.exe",
+            "compilerPath": "D:/VisualStudio/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe",
             "cStandard": "c17",
             "cppStandard": "c++20",
             "intelliSenseMode": "windows-msvc-x64"

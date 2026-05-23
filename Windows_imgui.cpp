@@ -178,7 +178,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		g_pd3dCommandList->Reset(frameCtx->CommandAllocator, nullptr);
 
 		// =========================
-		// ⭐ 处理图片加载请求（UI线程写入→主循环读取）
+		// ⭐ 处理图片加载请求 + 异步加载调度
 		// =========================
 		if (!pendingPath.empty())
 		{
@@ -187,33 +187,38 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			requestLoadImage = true;
 		}
 
-		// =========================
-		// ⭐ 执行图片加载（同步方式，后续可改为异步）
-		// =========================
 		if (requestLoadImage && !uploadRequest.empty())
 		{
-			// 释放上一张图片的GPU纹理（GPU已完成渲染）
-			FlushPendingRelease();
-
-			LogSystem::Add(LOG_INFO, "开始加载图片...");
-
-			static OpenCVTest test;
-			test.TestReadImage(
-				uploadRequest,
-				g_pd3dDevice,
-				g_pd3dCommandList,
-				&gTexture,
-				gSrvCpuHandle
-			);
-
-			LogSystem::Add(LOG_INFO, "图片加载完成");
-			UI::FitImageToWindow();       // 自动调整缩放使图片适配窗口
-			UI::ClearROIState();           // 切换图片时清理所有ROI
-			TemplateMatch::Clear();        // 切换图片时清理模板匹配结果
-
-			//uploadRequest.clear();
 			requestLoadImage = false;
+			AsyncImageLoader::RequestLoad(uploadRequest);
 		}
+
+		// 检查异步加载完成，上传到 GPU
+		AsyncImageLoader::CheckAndProcess([](cv::Mat img) {
+			// 释放旧纹理
+			FlushPendingRelease();
+			if (gTexture)
+			{
+				gPendingReleaseTextures.push_back(gTexture);
+				gTexture = nullptr;
+			}
+
+			// 更新全局图像
+			gImage = img;
+			gImageWidth = img.cols;
+			gImageHeight = img.rows;
+
+			// 转 RGBA + 上传 GPU
+			cv::Mat rgba;
+			cv::cvtColor(img, rgba, cv::COLOR_BGR2RGBA);
+			UploadToDX12(g_pd3dDevice, g_pd3dCommandList, &gTexture, rgba,
+				DXGI_FORMAT_R8G8B8A8_UNORM, gSrvCpuHandle);
+
+			LogSystem::Add(LOG_INFO, "异步图片加载完成: %dx%d", img.cols, img.rows);
+			UI::FitImageToWindow();
+			UI::ClearROIState();
+			TemplateMatch::Clear();
+		});
 
 		// =========================
 		// ⭐ GPU上传（阈值处理/图像管线产出的结果上传到显存）

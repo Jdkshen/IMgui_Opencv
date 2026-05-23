@@ -167,7 +167,7 @@ void HandleROIInteraction()
         gSelectedROI = -1;
         gActiveHandle = HANDLE_NONE;
 
-        // 只对当前类型的ROI进行交互
+        // 先检查当前类型ROI的控制点（8方向+中心）
         for (int i = 0; i < (int)gROIs.size(); i++)
         {
             auto& roi = gROIs[i];
@@ -183,15 +183,23 @@ void HandleROIInteraction()
             if (CheckHandle(box.l, HANDLE_L, i)) break;
             if (CheckHandle(box.r, HANDLE_R, i)) break;
             if (CheckHandle(box.c, HANDLE_CENTER, i)) break;
+        }
 
-            float minX = std::min(roi.start.x, roi.end.x);
-            float maxX = std::max(roi.start.x, roi.end.x);
-            float minY = std::min(roi.start.y, roi.end.y);
-            float maxY = std::max(roi.start.y, roi.end.y);
+        // 控制点未命中：从后往前检查内部区域（后画在上，嵌套小ROI优先）
+        if (gSelectedROI < 0)
+        {
+            for (int i = (int)gROIs.size() - 1; i >= 0; i--)
+            {
+                auto& roi = gROIs[i];
+                float minX = std::min(roi.start.x, roi.end.x);
+                float maxX = std::max(roi.start.x, roi.end.x);
+                float minY = std::min(roi.start.y, roi.end.y);
+                float maxY = std::max(roi.start.y, roi.end.y);
 
-            if (imageMouse.x >= minX && imageMouse.x <= maxX &&
-                imageMouse.y >= minY && imageMouse.y <= maxY)
-            { gSelectedROI = i; break; }
+                if (imageMouse.x >= minX && imageMouse.x <= maxX &&
+                    imageMouse.y >= minY && imageMouse.y <= maxY)
+                { gSelectedROI = i; break; }
+            }
         }
     }
 

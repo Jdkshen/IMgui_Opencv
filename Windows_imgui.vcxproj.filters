@@ -81,6 +81,9 @@
     <ClInclude Include="Core\OpenCVTest.h">
       <Filter>Core</Filter>
     </ClInclude>
+    <ClInclude Include="Core\AsyncImageLoader.h">
+      <Filter>Core</Filter>
+    </ClInclude>
     <ClInclude Include="Core\RecipeManager.h">
       <Filter>Core</Filter>
     </ClInclude>
@@ -100,6 +103,18 @@
       <Filter>UI</Filter>
     </ClInclude>
     <ClInclude Include="UI\ImageViewer.h">
+      <Filter>UI</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\LogWindow.h">
+      <Filter>UI</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\Sidebar.h">
+      <Filter>UI</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\StatsWindow.h">
+      <Filter>UI</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\ToolsWindow.h">
       <Filter>UI</Filter>
     </ClInclude>
   </ItemGroup>
@@ -146,6 +161,9 @@
     <ClCompile Include="Core\OpenCVTest.cpp">
       <Filter>Core</Filter>
     </ClCompile>
+    <ClCompile Include="Core\AsyncImageLoader.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
     <ClCompile Include="Core\RecipeManager.cpp">
       <Filter>Core</Filter>
     </ClCompile>
@@ -165,6 +183,18 @@
       <Filter>UI</Filter>
     </ClCompile>
     <ClCompile Include="UI\ImageViewer.cpp">
+      <Filter>UI</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\LogWindow.cpp">
+      <Filter>UI</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\Sidebar.cpp">
+      <Filter>UI</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\StatsWindow.cpp">
+      <Filter>UI</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\ToolsWindow.cpp">
       <Filter>UI</Filter>
     </ClCompile>
   </ItemGroup>

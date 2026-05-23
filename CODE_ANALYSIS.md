@@ -73,10 +73,17 @@
 | `framework.h` | **系统包含文件** | Win32 / DX12 / OpenCV 基础库引用 |
 | `Core/DX12Context.h/cpp` | **DX12 全局变量 + 初始化** | `gDevice`, `gTexture`, `gSrvCpuHandle`, `InitDX12Context()` |
 | `Core/OpenCVTest.h/cpp` | **OpenCV图片读取 + GPU上传** | `TestReadImage()`, `UploadToDX12()`, 延迟释放队列 |
-| `Core/OpenFileDialog.h/cpp` | **文件选择对话框** | `OpenFileDialog()` → 调用 Win32 `GetOpenFileName` |
+| `Core/AsyncImageLoader.h/cpp` | **异步图片加载** | `RequestLoad()`, `CheckAndProcess()` 后台解码+主线程回调 |
+| `Core/OpenFileDialog.h/cpp` | **文件选择对话框** | `OpenFileDialog()` `OpenFolderDialog()` `ScanImageFiles()` |
 | `Core/ThemeManager.h/cpp` | **主题管理** | 夜间/白天切换, theme.cfg 持久化 |
 | `Core/RecipeManager.h/cpp` | **配方系统** | JSON 保存/加载阈值+匹配+ROI 参数 |
-| `UI/DockSpaceHost.h/cpp` | **主框架+所有子窗口** | DockSpace, 菜单栏, 日志/侧边栏/性能/工具窗口, 配方菜单 |
+| `UI/DockSpaceHost.h/cpp` | **主框架** | DockSpace 容器 + 菜单栏 + 配方菜单 |
+| `UI/LogWindow.h/cpp` | **日志窗口** | 带颜色分级和时间戳的日志列表 |
+| `UI/Sidebar.h/cpp` | **侧边栏** | ROI 类型切换、快捷操作、自定义日志 |
+| `UI/StatsWindow.h/cpp` | **性能统计窗口** | FPS、帧耗时、渲染信息 |
+| `UI/ToolsWindow.h/cpp` | **功能窗口** | 手风琴工具列表 + 全部/单步/循环执行 |
+| `UI/ImageViewer.h/cpp` | **图像显示** | 缩放/平移/图片列表导航 |
+| `UI/ROIManager.h/cpp` | **ROI 交互管理** | 画框/拖拽/控制点/坐标转换 |
 | `Renderer/FontManager.h/cpp` | **字体管理** | 加载 simhei.ttf / msyh.ttc 中文字体 |
 | `Log/LogSystem.h/cpp` | **线程安全日志系统** | 3级日志(INFO/WARN/ERROR), 颜色, 时间戳, 2000条上限 |
 | `Algorithm/ThresholdTool.h/cpp` | **图像处理管线** | 灰度→模糊→二值化/Canny→RGBA上传, 性能计时 |

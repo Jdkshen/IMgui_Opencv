@@ -43,7 +43,7 @@ enum HandleType
 // =====================================================
 // UI参数常量
 // =====================================================
-constexpr float HANDLE_SIZE = 6.0f;       // 控制点大小
+constexpr float HANDLE_SIZE = 8.0f;       // 控制点大小（增大易点击）
 constexpr float gMinROIWidth  = 5.0f;     // ROI最小宽度
 constexpr float gMinROIHeight = 5.0f;     // ROI最小高度
 
@@ -74,72 +74,10 @@ struct ROIBox
 // UI 命名空间 - 窗口函数声明
 // =====================================================
 // =====================================================
-// 工具实例（可包含模板匹配的独立模板）
+// UI 命名空间 - 窗口函数声明
 // =====================================================
-struct ToolInstance
-{
-    int type = 0;                      // 工具类型: 0=边缘检测 1=模板匹配 2=Blob分析 3=阈值调试
-    cv::Mat templateImg;               // 该实例的模板图像数据
-    std::vector<ROI> searchROIs;       // 该实例专属搜索区域
-
-    // ---- 旋转/角度参数 ----
-    bool enableRotation = false;
-    int  rotationStart  = -45;
-    int  rotationEnd    = 45;
-    int  rotationStep   = 1;
-
-    // ---- 匹配参数 ----
-    int   maxResults     = 5;
-    float matchThreshold = 0.7f;
-    int   maxImageDim    = 1000;
-    float nmsThreshold   = 0.3f;
-    int   searchMode     = 0;   // 0=全图, 1=ROI内
-
-    // ---- 模板预处理 ----
-    bool tplGray      = false;
-    bool tplBinary    = false;
-    int  tplBinThresh = 128;
-    bool tplEdge      = false;
-    int  tplEdgeLow   = 50;
-    int  tplEdgeHigh  = 150;
-
-    // ---- 图像预处理（模板匹配用） ----
-    bool imgUseGray        = false;
-    bool imgEnableThreshold = false;
-    int  imgThreshold      = 128;
-
-    // ---- 边缘检测参数（type==0） ----
-    int  cannyLow  = 50;
-    int  cannyHigh = 150;
-    bool edgeUseGray = false;
-
-    // ---- 阈值调试参数（type==3） ----
-    bool dbgUseGray     = false;
-    bool dbgEnableBlur  = false;
-    int  dbgBlurSize    = 5;
-    bool dbgEnableThresh = false;
-    int  dbgThreshold   = 128;
-    bool dbgEnableCanny = false;
-    int  dbgCannyLow    = 50;
-    int  dbgCannyHigh   = 150;
-};
-
 namespace UI
 {
     // 绘制主停靠空间（菜单栏 + DockSpace 容器）
     void DrawDockSpaceHost();
-    // 显示日志窗口（时间戳 + 颜色分级 + 清空按钮）
-    void ShowLogWindow();
-    // 显示侧边栏（图片加载/ROI操作/配方管理）
-    void ShowSidebar();
-    // 显示性能统计窗口（FPS/帧耗时/DrawCall）
-    void ShowStatsWindow();
-    // 显示功能窗口（手风琴工具列表 + 全部/单步执行）
-    void ShowToolsWindow();
-
-    // 功能窗口当前展开的工具索引（-1 = 全部折叠）
-    extern int g_ActiveToolIndex;
-
-    // 功能窗口中已添加的工具实例列表
-    extern std::vector<ToolInstance> g_ToolInstances;
 }

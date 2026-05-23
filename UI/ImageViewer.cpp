@@ -13,6 +13,9 @@ ImVec2 gPan            = ImVec2(0, 0);
 ImVec2 gCanvasSize;
 ImVec2 gImageScreenPos;
 ImVec2 imageScreenPos;
+bool   g_ShowPixelGrid = false;  // 像素网格开关
+bool   g_ShowCoordGrid = false;  // 坐标网格开关
+int    g_GridStep      = 1;    // 坐标网格步长（图片像素）
 
 // 图片列表浏览状态
 std::vector<std::string> gImageList;
@@ -50,10 +53,32 @@ namespace UI
 		ImGui::SameLine();
 		if (ImGui::Button("清理图片"))
 			ClearImage();
+		ImGui::SameLine();
+		// 像素网格开关（放大后显示像素格子）
+		if (gZoom >= 3.0f)
+		{
+			ImGui::Checkbox("像素网格", &g_ShowPixelGrid);
+		}
+		else
+		{
+			ImGui::BeginDisabled();
+			bool dummy = false;
+			ImGui::Checkbox("像素网格", &dummy);
+			ImGui::EndDisabled();
+			if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+				ImGui::SetTooltip("放大到 3x 以上可用");
+		}
+
+	// 坐标网格：固定步长，跟随图片平移（参照 ImGui Demo Canvas 实现）
+	ImGui::SameLine();
+	ImGui::Checkbox("坐标网格", &g_ShowCoordGrid);
+	ImGui::SameLine();
+	ImGui::SetNextItemWidth(80);
+	ImGui::SliderInt("步长(px)", &g_GridStep, 10, 500);
 
 		ImGui::Separator();
 
-		// 为底部浏览工具栏预留空间（分隔线 + 按钮行约 35px）
+		// 为底部浏览工具栏预留空间
 		ImGui::BeginChild("ImageRegion", ImVec2(0, -35.0f), true,
 			ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 		gCanvasSize = ImGui::GetContentRegionAvail();
@@ -101,9 +126,59 @@ namespace UI
 			ImVec2 drawPos = ImVec2(imageScreenPos.x + gPan.x, imageScreenPos.y + gPan.y);
 			ImGui::SetCursorScreenPos(drawPos);
 			ImGui::Image((ImTextureID)gSrvGpuHandle.ptr, ImVec2(drawW, drawH));
+
+			// 像素网格：fmodf 模式，跟随平移（参照 ImGui Demo）
+			if (g_ShowPixelGrid && gZoom >= 3.0f)
+			{
+				ImDrawList* dl = ImGui::GetWindowDrawList();
+
+				ImU32 fineColor  = IM_COL32(0, 0, 0, 60);
+				ImU32 majorColor = IM_COL32(0, 0, 0, 120);
+
+				// 竖线：步长 = 1 像素 × 缩放
+				float x0 = drawPos.x + fmodf(gPan.x, gZoom);
+				int col = (int)((x0 - drawPos.x) / gZoom);  // 起始列号
+				for (float x = x0; x < drawPos.x + drawW; x += gZoom, col++)
+				{
+					if (x < drawPos.x) continue;
+					bool isMajor = (col % 10 == 0);
+					dl->AddLine(ImVec2(x, drawPos.y), ImVec2(x, drawPos.y + drawH),
+						isMajor ? majorColor : fineColor,
+						isMajor ? 1.0f : 0.5f);
+				}
+
+				// 横线
+				float y0 = drawPos.y + fmodf(gPan.y, gZoom);
+				int row = (int)((y0 - drawPos.y) / gZoom);
+				for (float y = y0; y < drawPos.y + drawH; y += gZoom, row++)
+				{
+					if (y < drawPos.y) continue;
+					bool isMajor = (row % 10 == 0);
+					dl->AddLine(ImVec2(drawPos.x, y), ImVec2(drawPos.x + drawW, y),
+						isMajor ? majorColor : fineColor,
+						isMajor ? 1.0f : 0.5f);
+				}
+			}
+
+			// 坐标网格：固定步长，跟随平移（参照 ImGui Demo）
+			if (g_ShowCoordGrid)
+			{
+				ImDrawList* dl = ImGui::GetWindowDrawList();
+				float step = g_GridStep * gZoom;
+				if (step < 8.0f) step = 8.0f;
+				ImU32 gridColor = IM_COL32(255, 255, 255, 60);
+
+				float x0 = drawPos.x + fmodf(gPan.x, step);
+				for (float x = x0; x < drawPos.x + drawW; x += step)
+					dl->AddLine(ImVec2(x, drawPos.y), ImVec2(x, drawPos.y + drawH), gridColor, 1.0f);
+
+				float y0 = drawPos.y + fmodf(gPan.y, step);
+				for (float y = y0; y < drawPos.y + drawH; y += step)
+					dl->AddLine(ImVec2(drawPos.x, y), ImVec2(drawPos.x + drawW, y), gridColor, 1.0f);
+			}
 		}
 
-		if (!gTexture || gImageWidth <= 0 || gImageHeight <= 0)
+	if (!gTexture || gImageWidth <= 0 || gImageHeight <= 0)
 			ImGui::Text("暂无图片");
 
 		// 处理ROI交互 + 绘制匹配结果
@@ -123,6 +198,14 @@ namespace UI
 					folderPath.c_str(), gImageList.size());
 			}
 		}
+		ImGui::SameLine();
+
+		// 首张按钮（回到第一张）
+		bool hasFirst = (!gImageList.empty() && gCurrentImageIndex > 0);
+		if (!hasFirst) ImGui::BeginDisabled();
+		if (ImGui::Button("首张", ImVec2(buttonWidth, 0)))
+			NavigateToImage(0);
+		if (!hasFirst) ImGui::EndDisabled();
 		ImGui::SameLine();
 
 		// 上一张按钮（只有列表非空且有上一张时可用）
@@ -171,7 +254,7 @@ namespace UI
 			}
 		}
 
-		// ===== 右侧信息栏：尺寸 | 格式 | 像素坐标 =====
+		// ===== 右侧信息栏：尺寸 | 格式 | 像素坐标 | RGB值 =====
 		{
 			ImGui::SameLine();
 			if (!gImage.empty())
@@ -188,11 +271,30 @@ namespace UI
 				if (inChild)
 				{
 					ImVec2 imgCoord = ScreenToImagePos(mouse);
-					bool inImg = (imgCoord.x >= 0 && imgCoord.x < gImageWidth &&
-					              imgCoord.y >= 0 && imgCoord.y < gImageHeight);
+					int ix = (int)imgCoord.x, iy = (int)imgCoord.y;
+					bool inImg = (ix >= 0 && ix < gImageWidth && iy >= 0 && iy < gImageHeight);
 					if (inImg)
-						ImGui::TextDisabled("%dx%d %s | X:%.0f Y:%.0f",
-							gImageWidth, gImageHeight, fmtStr, imgCoord.x, imgCoord.y);
+					{
+						// 读取像素值
+						char pixInfo[64] = "";
+						if (ch == 1)
+						{
+							uchar v = gImage.at<uchar>(iy, ix);
+							snprintf(pixInfo, sizeof(pixInfo), " | Gray:%d", v);
+						}
+						else if (ch == 3)
+						{
+							cv::Vec3b bgr = gImage.at<cv::Vec3b>(iy, ix);
+							snprintf(pixInfo, sizeof(pixInfo), " | R:%d G:%d B:%d", bgr[2], bgr[1], bgr[0]);
+						}
+						else if (ch == 4)
+						{
+							cv::Vec4b bgra = gImage.at<cv::Vec4b>(iy, ix);
+							snprintf(pixInfo, sizeof(pixInfo), " | R:%d G:%d B:%d A:%d", bgra[2], bgra[1], bgra[0], bgra[3]);
+						}
+						ImGui::TextDisabled("%dx%d %s | X:%.0f Y:%.0f%s",
+							gImageWidth, gImageHeight, fmtStr, imgCoord.x, imgCoord.y, pixInfo);
+					}
 					else
 						ImGui::TextDisabled("%dx%d %s | X:--- Y:---",
 							gImageWidth, gImageHeight, fmtStr);

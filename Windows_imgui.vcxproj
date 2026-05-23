@@ -154,6 +154,7 @@
     </PreLinkEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="Core\AsyncImageLoader.h" />
     <ClInclude Include="Core\RecipeManager.h" />
     <ClInclude Include="Core\ThemeManager.h" />
     <ClInclude Include="Core\DX12Context.h" />
@@ -175,10 +176,15 @@
     <ClInclude Include="Renderer\FontManager.h" />
     <ClInclude Include="UI\DockSpaceHost.h" />
     <ClInclude Include="UI\ImageViewer.h" />
+    <ClInclude Include="UI\LogWindow.h" />
     <ClInclude Include="UI\ROIManager.h" />
+    <ClInclude Include="UI\Sidebar.h" />
+    <ClInclude Include="UI\StatsWindow.h" />
+    <ClInclude Include="UI\ToolsWindow.h" />
     <ClInclude Include="Windows_imgui.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="Core\AsyncImageLoader.cpp" />
     <ClCompile Include="Core\RecipeManager.cpp" />
     <ClCompile Include="Core\ThemeManager.cpp" />
     <ClCompile Include="Core\DX12Context.cpp" />
@@ -198,7 +204,11 @@
     <ClCompile Include="Renderer\FontManager.cpp" />
     <ClCompile Include="UI\DockSpaceHost.cpp" />
     <ClCompile Include="UI\ImageViewer.cpp" />
+    <ClCompile Include="UI\LogWindow.cpp" />
     <ClCompile Include="UI\ROIManager.cpp" />
+    <ClCompile Include="UI\Sidebar.cpp" />
+    <ClCompile Include="UI\StatsWindow.cpp" />
+    <ClCompile Include="UI\ToolsWindow.cpp" />
     <ClCompile Include="Windows_imgui.cpp" />
   </ItemGroup>
   <ItemGroup>
