@@ -22,7 +22,6 @@ theme.cfg
 
 # 第三方依赖（不纳入版本控制，直接复制文件夹即可移植）
 include/opencv/
-redist/
 
 # 配方文件（用户数据，不入库）
 recipes/
