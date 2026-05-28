@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <cmath>
 #include <chrono>
+
+extern float g_DPIScale;  // Windows_imgui.cpp
 #include <thread>
 #include <mutex>
 
@@ -708,7 +710,7 @@ namespace TemplateMatch
     {
         if (!g_ShowTplEditor || g_FrozenTemplate.empty()) return;
 
-        ImGui::SetNextWindowSize(ImVec2(420, 420), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(420 * g_DPIScale, 420 * g_DPIScale), ImGuiCond_FirstUseEver);
         if (ImGui::Begin("模板编辑", &g_ShowTplEditor))
         {
             // 模板独立处理（不影响源图）
@@ -897,7 +899,7 @@ namespace TemplateMatch
             g_PendingMatch = false;
             RunAsync();
         }
-        ImGui::SetNextWindowSize(ImVec2(380, 620), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(380 * g_DPIScale, 620 * g_DPIScale), ImGuiCond_FirstUseEver);
         if (ImGui::Begin("模板匹配调试", &g_ShowTemplateMatch))  //,ImGuiWindowFlags_NoDocking  禁止停靠窗口
         {
             // =========================

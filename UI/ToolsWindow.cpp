@@ -2,9 +2,11 @@
 #include "ToolsWindow.h"
 #include "ImageViewer.h"
 #include "ROIManager.h"
+#include "../Core/VideoCapture.h"
 #include "../Log/LogSystem.h"
 #include "../Algorithm/ThresholdTool.h"
 #include "../Algorithm/TemplateMatch.h"
+#include "../Algorithm/YOLODetector.h"
 
 extern cv::Mat g_FrozenTemplate;  // 定义在 TemplateMatch.cpp
 
@@ -12,6 +14,7 @@ namespace UI
 {
 
 int g_ActiveToolIndex = -1;
+bool g_YoloLiveDetect = false;
 std::vector<ToolInstance> g_ToolInstances;
 
 void ShowToolsWindow()
@@ -21,14 +24,14 @@ void ShowToolsWindow()
 
     ImGui::Begin("功能窗口", &g_ShowTools);
 
-    const char* kToolNames[] = { "边缘检测", "模板匹配", "Blob分析", "阈值调试" };
+    const char* kToolNames[] = { "边缘检测", "模板匹配", "Blob分析", "阈值调试", "YOLO检测" };
 
     // ---- 顶部工具栏（固定，不滚动） ----
     if (ImGui::Button("+ 添加工具"))
         ImGui::OpenPopup("AddToolPopup");
     if (ImGui::BeginPopup("AddToolPopup"))
     {
-        for (int i = 0; i < 4; i++)
+        for (int i = 0; i < 5; i++)
             if (ImGui::Selectable(kToolNames[i]))
                 g_ToolInstances.push_back({i});
         ImGui::EndPopup();
@@ -163,6 +166,47 @@ void ShowToolsWindow()
             gPipe.cannyLow = it.dbgCannyLow; gPipe.cannyHigh = it.dbgCannyHigh;
             ThresholdTool::ApplyProcess();
         }
+        else if (t == 4) { // YOLO检测
+            if (!YOLODetector::IsLoaded() && !it.yoloModelPath.empty())
+                YOLODetector::LoadModel(it.yoloModelPath, it.yoloClassesPath);
+            if (YOLODetector::IsLoaded())
+            {
+                cv::Rect roi;
+                if (it.yoloUseROI && !gROIs.empty())
+                {
+                    int ri = (gSelectedROI >= 0 && gSelectedROI < (int)gROIs.size()) ? gSelectedROI : 0;
+                    auto& fr = gROIs[ri];
+                    int x = (int)std::min(fr.start.x, fr.end.x);
+                    int y = (int)std::min(fr.start.y, fr.end.y);
+                    int w = (int)std::abs(fr.end.x - fr.start.x);
+                    int h = (int)std::abs(fr.end.y - fr.start.y);
+                    roi = cv::Rect(x, y, w, h);
+                }
+                auto objs = YOLODetector::Detect(gImage, it.yoloConfThreshold, it.yoloNmsThreshold, roi);
+                LogSystem::Add(LOG_INFO, color, "YOLO检测: 发现 %zu 个目标", objs.size());
+                for (const auto& o : objs)
+                {
+                    LogSystem::Add(LOG_INFO, ImVec4(0,1,0.5f,1),
+                        "  %s %.2f [%d,%d %dx%d]",
+                        o.className.c_str(), o.confidence,
+                        o.box.x, o.box.y, o.box.width, o.box.height);
+                }
+                // 绘制结果到图像
+                cv::Mat drawImg = gImage.clone();
+                YOLODetector::DrawDetections(drawImg, objs, true);
+                cv::Mat rgba;
+                if (drawImg.channels() == 1) cv::cvtColor(drawImg, rgba, cv::COLOR_GRAY2RGBA);
+                else if (drawImg.channels() == 3) cv::cvtColor(drawImg, rgba, cv::COLOR_BGR2RGBA);
+                else cv::cvtColor(drawImg, rgba, cv::COLOR_BGRA2RGBA);
+                gPendingUpload = rgba;
+                gNeedUpload = true;
+                g_BatchImageDirty = true;
+            }
+            else
+            {
+                LogSystem::Add(LOG_WARN, "YOLO: 模型未加载，请先设置模型路径");
+            }
+        }
         // 推进索引：批量自动+1，单步由按钮控制
         if (g_BatchRunIndex >= 0)
         {
@@ -183,8 +227,8 @@ void ShowToolsWindow()
                 {
                     g_BatchRunIndex = -1;
                 }
-                // 恢复原始图到显示
-                if (!g_BatchOriginalImage.empty())
+                // 恢复原始图到显示（仅当没有工具已绘制结果时）
+                if (!g_BatchOriginalImage.empty() && !gNeedUpload)
                 {
                     gImage = g_BatchOriginalImage.clone();
                     cv::Mat rgba;
@@ -515,6 +559,118 @@ void ShowToolsWindow()
                     }
                     if (gTimeTotal > 0.0f) ImGui::TextDisabled("总耗时: %.1fms", gTimeTotal);
                 }
+                else if (type == 4) // YOLO检测
+                {
+                    auto& it = g_ToolInstances[inst];
+
+                    // 模型文件
+                    if (ImGui::Button("选择 ONNX 模型"))
+                    {
+                        std::string path = OpenFileDialogWithFilter(
+                            L"ONNX模型 (*.onnx)\0*.onnx\0所有文件 (*.*)\0*.*\0",
+                            L"选择 YOLO ONNX 模型文件");
+                        if (!path.empty()) it.yoloModelPath = path;
+                    }
+                    ImGui::SameLine();
+                    if (!it.yoloModelPath.empty())
+                    {
+                        // 只显示文件名
+                        size_t pos = it.yoloModelPath.find_last_of("\\/");
+                        ImGui::TextDisabled("%s", (pos != std::string::npos)
+                            ? it.yoloModelPath.substr(pos + 1).c_str()
+                            : it.yoloModelPath.c_str());
+                    }
+                    else
+                        ImGui::TextDisabled("未选择");
+
+                    // 类别文件（可选）
+                    if (ImGui::Button("选择类别文件"))
+                    {
+                        std::string path = OpenFileDialogWithFilter(
+                            L"文本文件 (*.txt)\0*.txt\0所有文件 (*.*)\0*.*\0",
+                            L"选择类别名称文件");
+                        if (!path.empty()) it.yoloClassesPath = path;
+                    }
+                    ImGui::SameLine();
+                    if (!it.yoloClassesPath.empty())
+                    {
+                        size_t pos = it.yoloClassesPath.find_last_of("\\/");
+                        ImGui::TextDisabled("%s", (pos != std::string::npos)
+                            ? it.yoloClassesPath.substr(pos + 1).c_str()
+                            : it.yoloClassesPath.c_str());
+                    }
+                    else
+                        ImGui::TextDisabled("默认 COCO 80 类");
+
+                    ImGui::Separator();
+                    ImGui::SliderFloat("置信度阈值", &it.yoloConfThreshold, 0.1f, 1.0f, "%.2f");
+                    ImGui::SliderFloat("NMS阈值", &it.yoloNmsThreshold, 0.1f, 1.0f, "%.2f");
+                    ImGui::Checkbox("限定ROI区域", &it.yoloUseROI);
+
+                    ImGui::Separator();
+                    // 摄像头/视频模式 → 实时检测开关；图片模式 → 单次检测
+                    bool isLiveMode = VideoCapture::IsOpen();
+                    const char* btnLabel = isLiveMode ?
+                        (g_YoloLiveDetect ? "停止实时检测" : "开始实时检测") : "执行检测";
+                    bool wasDetecting = g_YoloLiveDetect;  // 按钮前快照，确保 Push/Pop 配对
+                    if (wasDetecting)
+                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.8f, 0.3f, 1.0f));
+                    if (ImGui::Button(btnLabel, ImVec2(-1, 28)))
+                    {
+                        if (!YOLODetector::IsLoaded() && !it.yoloModelPath.empty())
+                            YOLODetector::LoadModel(it.yoloModelPath, it.yoloClassesPath);
+
+                        if (isLiveMode)
+                        {
+                            // 摄像头/视频模式：切换实时检测（自动播放）
+                            if (YOLODetector::IsLoaded())
+                            {
+                                g_YoloLiveDetect = !g_YoloLiveDetect;
+                                if (g_YoloLiveDetect && !VideoCapture::IsPlaying())
+                                    VideoCapture::Play();  // 自动开始播放
+                            }
+                            else
+                                LogSystem::Add(LOG_WARN, "YOLO: 请先选择模型文件");
+                        }
+                        else if (YOLODetector::IsLoaded() || (!it.yoloModelPath.empty() &&
+                            YOLODetector::LoadModel(it.yoloModelPath, it.yoloClassesPath)))
+                        {
+                            // 图片模式：单次检测
+                            cv::Rect roi;
+                            if (it.yoloUseROI && !gROIs.empty())
+                            {
+                                int ri = (gSelectedROI >= 0 && gSelectedROI < (int)gROIs.size()) ? gSelectedROI : 0;
+                                auto& fr = gROIs[ri];
+                                int x = (int)std::min(fr.start.x, fr.end.x);
+                                int y = (int)std::min(fr.start.y, fr.end.y);
+                                int w = (int)std::abs(fr.end.x - fr.start.x);
+                                int h = (int)std::abs(fr.end.y - fr.start.y);
+                                roi = cv::Rect(x, y, w, h);
+                            }
+                            auto objs = YOLODetector::Detect(gImage, it.yoloConfThreshold, it.yoloNmsThreshold, roi);
+                            LogSystem::Add(LOG_INFO, color, "YOLO: %zu 个目标", objs.size());
+                            for (const auto& o : objs)
+                            {
+                                LogSystem::Add(LOG_INFO, ImVec4(0,1,0.5f,1),
+                                    "  %s %.2f [%d,%d %dx%d]",
+                                    o.className.c_str(), o.confidence,
+                                    o.box.x, o.box.y, o.box.width, o.box.height);
+                            }
+                            cv::Mat drawImg = gImage.clone();
+                            YOLODetector::DrawDetections(drawImg, objs, true);
+                            cv::Mat rgba;
+                            if (drawImg.channels() == 1) cv::cvtColor(drawImg, rgba, cv::COLOR_GRAY2RGBA);
+                            else if (drawImg.channels() == 3) cv::cvtColor(drawImg, rgba, cv::COLOR_BGR2RGBA);
+                            else cv::cvtColor(drawImg, rgba, cv::COLOR_BGRA2RGBA);
+                            gPendingUpload = rgba;
+                            gNeedUpload = true;
+                        }
+                        else
+                            LogSystem::Add(LOG_WARN, "YOLO: 请先选择模型文件");
+                    }
+                    if (wasDetecting)
+                        ImGui::PopStyleColor();
+                }
 
                 ImGui::Separator();
                 if (ImGui::Button("移除", ImVec2(-1, 0)))
@@ -588,7 +744,7 @@ void ShowToolsWindow()
                 g_StepCursor = 0;
                 g_StepRunIndex = -1;
                 g_StepTime = 0.0f;
-                if (!g_BatchOriginalImage.empty())
+                if (!g_BatchOriginalImage.empty() && !gNeedUpload)
                 {
                     gImage = g_BatchOriginalImage.clone();
                     cv::Mat rgba;

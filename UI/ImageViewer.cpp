@@ -71,6 +71,7 @@ namespace UI
 			VideoCapture::OpenCamera(0);
 		}
 		ImGui::SameLine();
+
 		// 像素网格开关（放大后显示像素格子）
 		if (gZoom >= 3.0f)
 		{

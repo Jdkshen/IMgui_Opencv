@@ -227,6 +227,10 @@ static bool ReadFrame()
     if (s_Playing)
         s_LastFrameTime = std::chrono::steady_clock::now();
 
+    // 摄像头画面水平镜像（自拍更自然）
+    if (s_IsCamera)
+        cv::flip(frame, frame, 1);
+
     // 保存原始 BGR 帧到 gImage（供像素读取和处理工具使用）
     gImage = frame.clone();
     gOriginalImage = gImage;

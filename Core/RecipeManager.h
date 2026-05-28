@@ -93,6 +93,13 @@ struct RecipeToolInstance
 
     // ---- 搜索ROI ----
     std::vector<RecipeROI> searchROIs;
+
+    // ---- YOLO 检测参数（type==4）----
+    std::string yoloModelPath;      // ONNX 模型路径
+    std::string yoloClassesPath;    // 类别文件路径
+    float yoloConfThreshold = 0.5f;
+    float yoloNmsThreshold  = 0.4f;
+    bool  yoloUseROI        = false;
 };
 
 struct RecipeData

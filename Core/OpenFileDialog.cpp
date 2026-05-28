@@ -44,8 +44,9 @@ std::string OpenFileDialog()
         int len = WideCharToMultiByte(CP_UTF8, 0, filename, -1, nullptr, 0, nullptr, nullptr);
         if (len > 0)
         {
-            std::string result(len - 1, '\0'); // 去掉末尾的null终止符
+            std::string result(len, '\0');  // len 含末尾 \0
             WideCharToMultiByte(CP_UTF8, 0, filename, -1, &result[0], len, nullptr, nullptr);
+            result.resize(len - 1);          // 去掉末尾 \0
             return result;
         }
     }
@@ -78,8 +79,40 @@ std::string OpenVideoDialog()
         int len = WideCharToMultiByte(CP_UTF8, 0, filename, -1, nullptr, 0, nullptr, nullptr);
         if (len > 0)
         {
-            std::string result(len - 1, '\0');
+            std::string result(len, '\0');
             WideCharToMultiByte(CP_UTF8, 0, filename, -1, &result[0], len, nullptr, nullptr);
+            result.resize(len - 1);
+            return result;
+        }
+    }
+    return "";
+}
+
+// ========================================
+// 通用文件选择对话框（自定义筛选和标题）
+// ========================================
+std::string OpenFileDialogWithFilter(const wchar_t* filter, const wchar_t* title)
+{
+    wchar_t filename[MAX_PATH] = {};
+
+    OPENFILENAMEW ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = nullptr;
+    ofn.lpstrFile = filename;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrFilter = filter;
+    ofn.lpstrTitle = title;
+    ofn.nFilterIndex = 1;
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+
+    if (GetOpenFileNameW(&ofn))
+    {
+        int len = WideCharToMultiByte(CP_UTF8, 0, filename, -1, nullptr, 0, nullptr, nullptr);
+        if (len > 0)
+        {
+            std::string result(len, '\0');
+            WideCharToMultiByte(CP_UTF8, 0, filename, -1, &result[0], len, nullptr, nullptr);
+            result.resize(len - 1);
             return result;
         }
     }

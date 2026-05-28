@@ -113,8 +113,8 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>$(ProjectDir)DirectX-Headers-main\include\directx;$(ProjectDir)include\opencv;$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <AdditionalIncludeDirectories>$(ProjectDir)include\directx;$(ProjectDir)include\opencv;$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -123,7 +123,7 @@
       <AdditionalLibraryDirectories>$(ProjectDir)redist;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /Y /D "$(ProjectDir)assets\fonts\*" "$(OutDir)" &amp; xcopy /Y /D "$(ProjectDir)assets\images\*" "$(OutDir)" &amp; if exist "$(ProjectDir)imgui.ini" xcopy /Y /D "$(ProjectDir)imgui.ini" "$(OutDir)" &amp; if exist "$(ProjectDir)theme.cfg" xcopy /Y /D "$(ProjectDir)theme.cfg" "$(OutDir)"</Command>
+      <Command>xcopy /Y /D "$(ProjectDir)assets\fonts\*" "$(OutDir)" &amp; xcopy /Y /D "$(ProjectDir)assets\images\*" "$(OutDir)" &amp; if exist "$(ProjectDir)imgui.ini" xcopy /Y /D "$(ProjectDir)imgui.ini" "$(OutDir)" &amp; if exist "$(ProjectDir)theme.cfg" xcopy /Y /D "$(ProjectDir)theme.cfg" "$(OutDir)" &amp; xcopy /Y /D "$(ProjectDir)redist\onnxruntime*.dll" "$(OutDir)" &amp; xcopy /Y /D "$(ProjectDir)models\*" "$(OutDir)models\"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -136,7 +136,7 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>$(ProjectDir)DirectX-Headers-main\include\directx;$(ProjectDir)include\opencv;$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)include\directx;$(ProjectDir)include\opencv;$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
     </ClCompile>
     <Link>
@@ -146,7 +146,7 @@
       <AdditionalDependencies>opencv_world4120d.lib;opencv_world4120.lib;d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;Comdlg32.lib</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /Y /D "$(ProjectDir)assets\fonts\*" "$(OutDir)" &amp; xcopy /Y /D "$(ProjectDir)assets\images\*" "$(OutDir)" &amp; if exist "$(ProjectDir)imgui.ini" xcopy /Y /D "$(ProjectDir)imgui.ini" "$(OutDir)" &amp; if exist "$(ProjectDir)theme.cfg" xcopy /Y /D "$(ProjectDir)theme.cfg" "$(OutDir)"</Command>
+      <Command>xcopy /Y /D "$(ProjectDir)assets\fonts\*" "$(OutDir)" &amp; xcopy /Y /D "$(ProjectDir)assets\images\*" "$(OutDir)" &amp; if exist "$(ProjectDir)imgui.ini" xcopy /Y /D "$(ProjectDir)imgui.ini" "$(OutDir)" &amp; if exist "$(ProjectDir)theme.cfg" xcopy /Y /D "$(ProjectDir)theme.cfg" "$(OutDir)" &amp; xcopy /Y /D "$(ProjectDir)redist\onnxruntime*.dll" "$(OutDir)" &amp; xcopy /Y /D "$(ProjectDir)models\*" "$(OutDir)models\"</Command>
     </PostBuildEvent>
     <PreLinkEvent>
       <Command>
@@ -174,6 +174,7 @@
     <ClInclude Include="imgui\imstb_truetype.h" />
     <ClInclude Include="Log\LogSystem.h" />
     <ClInclude Include="Algorithm\TemplateMatch.h" />
+    <ClInclude Include="Algorithm\YOLODetector.h" />
     <ClInclude Include="Algorithm\ThresholdTool.h" />
     <ClInclude Include="Renderer\FontManager.h" />
     <ClInclude Include="UI\DockSpaceHost.h" />
@@ -204,6 +205,7 @@
     <ClCompile Include="imgui\imgui_widgets.cpp" />
     <ClCompile Include="Log\LogSystem.cpp" />
     <ClCompile Include="Algorithm\TemplateMatch.cpp" />
+    <ClCompile Include="Algorithm\YOLODetector.cpp" />
     <ClCompile Include="Algorithm\ThresholdTool.cpp" />
     <ClCompile Include="Renderer\FontManager.cpp" />
     <ClCompile Include="UI\DockSpaceHost.cpp" />

@@ -116,6 +116,13 @@ bool Save(const char* filepath, const RecipeData& data)
         tj["dbgCannyLow"]    = t.dbgCannyLow;
         tj["dbgCannyHigh"]   = t.dbgCannyHigh;
 
+        // YOLO 参数
+        tj["yoloModelPath"]    = t.yoloModelPath;
+        tj["yoloClassesPath"]  = t.yoloClassesPath;
+        tj["yoloConfThreshold"] = t.yoloConfThreshold;
+        tj["yoloNmsThreshold"]  = t.yoloNmsThreshold;
+        tj["yoloUseROI"]       = t.yoloUseROI;
+
         // 搜索 ROI 子数组
         json& srois = tj["searchROIs"] = json::array();
         for (const auto& r : t.searchROIs)
@@ -294,6 +301,13 @@ bool Load(const char* filepath, RecipeData& data)
             t.dbgCannyLow      = tj.value("dbgCannyLow", 50);
             t.dbgCannyHigh     = tj.value("dbgCannyHigh", 150);
 
+            // YOLO 参数
+            t.yoloModelPath     = tj.value("yoloModelPath", "");
+            t.yoloClassesPath   = tj.value("yoloClassesPath", "");
+            t.yoloConfThreshold = tj.value("yoloConfThreshold", 0.5f);
+            t.yoloNmsThreshold  = tj.value("yoloNmsThreshold", 0.4f);
+            t.yoloUseROI        = tj.value("yoloUseROI", false);
+
             // 搜索 ROI 子数组
             if (tj.contains("searchROIs") && tj["searchROIs"].is_array())
             {
@@ -445,6 +459,13 @@ RecipeData Capture(const char* name)
         t.dbgCannyLow      = src.dbgCannyLow;
         t.dbgCannyHigh     = src.dbgCannyHigh;
 
+        // YOLO 参数
+        t.yoloModelPath     = src.yoloModelPath;
+        t.yoloClassesPath   = src.yoloClassesPath;
+        t.yoloConfThreshold = src.yoloConfThreshold;
+        t.yoloNmsThreshold  = src.yoloNmsThreshold;
+        t.yoloUseROI        = src.yoloUseROI;
+
         for (const auto& roi : src.searchROIs)
         {
             RecipeROI r;
@@ -543,6 +564,13 @@ void Apply(const RecipeData& data)
         it.dbgEnableCanny   = t.dbgEnableCanny;
         it.dbgCannyLow      = t.dbgCannyLow;
         it.dbgCannyHigh     = t.dbgCannyHigh;
+
+        // YOLO 参数
+        it.yoloModelPath     = t.yoloModelPath;
+        it.yoloClassesPath   = t.yoloClassesPath;
+        it.yoloConfThreshold = t.yoloConfThreshold;
+        it.yoloNmsThreshold  = t.yoloNmsThreshold;
+        it.yoloUseROI        = t.yoloUseROI;
 
         // 搜索ROI
         for (const auto& r : t.searchROIs)

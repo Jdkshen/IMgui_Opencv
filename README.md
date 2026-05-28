@@ -32,6 +32,7 @@ IMgui_Opencv/
 │   └── ROIManager.cpp/h        ←   ROI 数据结构 + 交互 + 坐标转换
 │
 ├── Algorithm/                  ← 图像算法
+│   ├── YOLODetector.cpp/h       ←   YOLO 目标检测（OpenCV DNN）
 │   ├── TemplateMatch.cpp/h     ←   模板匹配（多方法/旋转/NMS）
 │   └── ThresholdTool.cpp/h     ←   图像处理管线（灰度/模糊/Canny/二值化）
 │
@@ -93,6 +94,7 @@ wWinMain()
 | 图像处理 | 灰度化、高斯模糊、二值化、Canny 边缘检测 |
 | ROI 管理 | 交互式创建/选中/拖动/缩放/删除感兴趣区域，多类型颜色区分 |
 | 模板匹配 | 多实例模板匹配，旋转/NMS/阈值，结果可视化 |
+| YOLO 检测 | OpenCV DNN 推理 YOLOv8 ONNX，支持 ROI 限定区域，NMS 后处理 |
 | 工具实例 | 手风琴式工具面板，每实例独立参数（模板/ROI/角度/预处理） |
 | 批量执行 | 全部执行（逐帧高亮当前实例）+ 单步执行（点击推进） |
 | 配方系统 | 保存/加载全部工具实例参数、模板图片、搜索ROI（JSON） |

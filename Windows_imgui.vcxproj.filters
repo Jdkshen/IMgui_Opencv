@@ -99,6 +99,9 @@
     <ClInclude Include="Core\DX12Context.h">
       <Filter>Core</Filter>
     </ClInclude>
+    <ClInclude Include="Algorithm\YOLODetector.h">
+      <Filter>Algorithm</Filter>
+    </ClInclude>
     <ClInclude Include="Algorithm\ThresholdTool.h">
       <Filter>Algorithm</Filter>
     </ClInclude>
@@ -184,6 +187,9 @@
     </ClCompile>
     <ClCompile Include="Core\DX12Context.cpp">
       <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="Algorithm\YOLODetector.cpp">
+      <Filter>Algorithm</Filter>
     </ClCompile>
     <ClCompile Include="Algorithm\ThresholdTool.cpp">
       <Filter>Algorithm</Filter>

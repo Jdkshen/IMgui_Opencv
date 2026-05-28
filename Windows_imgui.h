@@ -1,6 +1,8 @@
 #pragma once
 #include "framework.h"
 
+extern float g_DPIScale;          // DPI 缩放比例
+
 #include "imgui/imconfig.h"
 #include "imgui/imgui.h"
 #include "imgui/imgui_impl_win32.h"

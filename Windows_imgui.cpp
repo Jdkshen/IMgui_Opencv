@@ -1,6 +1,7 @@
 ﻿// Windows_imgui.cpp : 应用程序入口点 - DirectX12 + Dear ImGui + OpenCV 桌面视觉工具中文版
 #include "framework.h"
 #include "Windows_imgui.h"
+#include "../Algorithm/YOLODetector.h"
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -20,7 +21,7 @@
 static std::string uploadRequest;                // 图片加载请求路径（主循环处理）
 static bool requestLoadImage = false;            // 图片加载请求标志
 HWND g_hWnd = nullptr;                    // 主窗口句柄（主题切换用）
-static float g_DPIScale = 1.0f;                   // DPI 缩放（主题切换时复用）
+float g_DPIScale = 1.0f;                   // DPI 缩放（主题切换时复用）
 
 // 全局或主循环前定义
 static ImVec4 clear_color = ImVec4(
@@ -53,7 +54,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	// ===== 阶段2：创建应用程序窗口 =====
 	WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr, L"ImGui Example", nullptr };
 	::RegisterClassExW(&wc);
-	HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"Dear ImGui DirectX12", WS_OVERLAPPEDWINDOW, 100, 20, (int)(1280 * main_scale), (int)(800 * main_scale), nullptr, nullptr, wc.hInstance, nullptr);
+	int screenW = GetSystemMetrics(SM_CXSCREEN);
+	int screenH = GetSystemMetrics(SM_CYSCREEN);
+	int winW = (int)(1280 * main_scale);
+	int winH = (int)(800 * main_scale);
+	if (winW > screenW) winW = screenW;
+	if (winH > screenH) winH = screenH;
+	HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"Dear ImGui DirectX12", WS_OVERLAPPEDWINDOW, 100, 20, winW, winH, nullptr, nullptr, wc.hInstance, nullptr);
 	g_hWnd = hwnd;
 
 	// ===== 阶段3：初始化 Direct3D 12 =====
@@ -183,6 +190,75 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		// =========================
 		VideoCapture::Update();
 
+	// =========================
+	// ⭐ YOLO 实时检测（摄像头/视频模式下每N帧运行一次）
+	// =========================
+	if (UI::g_YoloLiveDetect && YOLODetector::IsLoaded() && !gImage.empty())
+	{
+		// 摄像头/视频已关闭则自动停止实时检测
+		if (!VideoCapture::IsOpen())
+		{
+			UI::g_YoloLiveDetect = false;
+		}
+		else
+		{
+			static int s_LiveFrameSkip = 0;
+			if (++s_LiveFrameSkip >= 3)  // 每3帧检测一次（约10fps@30fps摄像头）
+			{
+				s_LiveFrameSkip = 0;
+				try
+				{
+					// 查找第一个 YOLO 工具实例的参数
+					float confTh = 0.5f, nmsTh = 0.4f;
+					cv::Rect roi;
+					for (auto& it : UI::g_ToolInstances)
+					{
+						if (it.type == 4) {
+							confTh = it.yoloConfThreshold;
+							nmsTh  = it.yoloNmsThreshold;
+							if (it.yoloUseROI && !UI::gROIs.empty())
+							{
+								int ri = (UI::gSelectedROI >= 0 && UI::gSelectedROI < (int)UI::gROIs.size()) ? UI::gSelectedROI : 0;
+								auto& fr = UI::gROIs[ri];
+								roi = cv::Rect(
+									(int)std::min(fr.start.x, fr.end.x),
+									(int)std::min(fr.start.y, fr.end.y),
+									(int)std::abs(fr.end.x - fr.start.x),
+									(int)std::abs(fr.end.y - fr.start.y));
+							}
+							break;
+						}
+					}
+					auto objs = YOLODetector::Detect(gImage, confTh, nmsTh, roi);
+					// 目标数变化时打印每个目标的坐标和置信度
+					static size_t s_LastObjCount = (size_t)-1;
+					if (objs.size() != s_LastObjCount)
+					{
+						s_LastObjCount = objs.size();
+						LogSystem::Add(LOG_INFO, ImVec4(0,1,0,1), "YOLO: %d 个目标", (int)objs.size());
+						for (const auto& o : objs)
+						{
+							LogSystem::Add(LOG_INFO, ImVec4(0,1,0.5f,1),
+								"  %s %.2f [%d,%d %dx%d]",
+								o.className.c_str(), o.confidence,
+								o.box.x, o.box.y, o.box.width, o.box.height);
+						}
+					}
+					// 始终绘制（有目标画框，无目标保持原图），避免闪烁
+					cv::Mat drawImg = gImage.clone();
+					YOLODetector::DrawDetections(drawImg, objs, true);
+					cv::Mat rgba;
+					if (drawImg.channels() == 1) cv::cvtColor(drawImg, rgba, cv::COLOR_GRAY2RGBA);
+					else if (drawImg.channels() == 3) cv::cvtColor(drawImg, rgba, cv::COLOR_BGR2RGBA);
+					else cv::cvtColor(drawImg, rgba, cv::COLOR_BGRA2RGBA);
+					gPendingUpload = rgba;
+					gNeedUpload = true;
+				}
+				catch (...) {}  // 防止检测异常导致崩溃
+			}
+		}
+	}
+
 		// =========================
 		// ⭐ 处理图片加载请求 + 异步加载调度
 		// =========================
@@ -233,8 +309,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		// =========================
 		if (gNeedUpload)
 		{
-			LogSystem::Add(LOG_INFO, color, "UPLOAD_BEGIN");
-
 			UploadToDX12(
 				g_pd3dDevice,
 				g_pd3dCommandList,
@@ -244,7 +318,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 				gSrvCpuHandle
 			);
 			gNeedUpload = false;
-			LogSystem::Add(LOG_INFO, color, "UPLOAD_END");
 		}
 
 		// ----- 6.6 渲染管线：状态切换 + 绘制 + 呈现 -----

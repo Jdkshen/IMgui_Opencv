@@ -52,6 +52,13 @@ struct ToolInstance
     bool dbgEnableCanny  = false;
     int  dbgCannyLow     = 50;
     int  dbgCannyHigh    = 150;
+
+    // ---- YOLO检测参数（type==4） ----
+    std::string yoloModelPath;       // ONNX 模型路径
+    std::string yoloClassesPath;     // 类别文件路径
+    float yoloConfThreshold = 0.5f;  // 置信度阈值
+    float yoloNmsThreshold  = 0.4f;  // NMS 阈值
+    bool  yoloUseROI        = false; // 是否限定 ROI 区域
 };
 
 // =====================================================
@@ -59,6 +66,7 @@ struct ToolInstance
 // =====================================================
 namespace UI
 {
+    extern bool g_YoloLiveDetect;    // YOLO 实时检测开关
     void ShowToolsWindow();
 
     extern int g_ActiveToolIndex;
