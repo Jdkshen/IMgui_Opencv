@@ -16,6 +16,8 @@
 #include "Core/OpenFileDialog.h"
 #include "Core/ThemeManager.h"
 #include "Core/AsyncImageLoader.h"
+#include "Core/VideoCapture.h"
+#include "Core/RecipeManager.h"
 
 // 渲染与日志
 #include "Renderer/FontManager.h"

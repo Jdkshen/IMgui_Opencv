@@ -54,6 +54,39 @@ std::string OpenFileDialog()
 }
 
 // ========================================
+// 打开视频文件选择对话框
+// ========================================
+std::string OpenVideoDialog()
+{
+    wchar_t filename[MAX_PATH] = {};
+
+    OPENFILENAMEW ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = nullptr;
+    ofn.lpstrFile = filename;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrFilter =
+        L"视频文件 (*.mp4;*.avi;*.mov;*.mkv)\0"
+        L"*.mp4;*.avi;*.mov;*.mkv\0"
+        L"所有文件 (*.*)\0"
+        L"*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+
+    if (GetOpenFileNameW(&ofn))
+    {
+        int len = WideCharToMultiByte(CP_UTF8, 0, filename, -1, nullptr, 0, nullptr, nullptr);
+        if (len > 0)
+        {
+            std::string result(len - 1, '\0');
+            WideCharToMultiByte(CP_UTF8, 0, filename, -1, &result[0], len, nullptr, nullptr);
+            return result;
+        }
+    }
+    return "";
+}
+
+// ========================================
 // 打开文件夹选择对话框（使用 IFileDialog）
 // 返回 Unicode 路径转 UTF-8
 // ========================================

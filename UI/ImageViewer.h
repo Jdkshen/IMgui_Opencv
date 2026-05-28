@@ -1,4 +1,5 @@
 #pragma once
+#include "../imgui/imgui.h"
 
 // 图像显示/视图变换状态（定义在 ImageViewer.cpp）
 extern float  gZoom;

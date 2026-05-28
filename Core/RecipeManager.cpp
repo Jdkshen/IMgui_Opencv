@@ -6,9 +6,13 @@
 #include "../UI/ROIManager.h"
 #include "../UI/DockSpaceHost.h"
 
+#define NOMINMAX
 #include <windows.h>
 #include <fstream>
 #include <sstream>
+#include <nlohmann/json.hpp>
+
+using json = nlohmann::json;
 
 // 外部变量引用
 extern std::string pendingPath;
@@ -24,154 +28,121 @@ extern PipelineState gPipe;
 namespace RecipeManager
 {
 
-// ===================== 手写 JSON 辅助 =====================
-static void WriteBool(std::ofstream& f, const char* key, bool val)
-{
-    f << "\"" << key << "\": " << (val ? "true" : "false");
-}
-static void WriteInt(std::ofstream& f, const char* key, int val)
-{
-    f << "\"" << key << "\": " << val;
-}
-static void WriteFloat(std::ofstream& f, const char* key, float val)
-{
-    f << "\"" << key << "\": " << std::fixed << std::setprecision(4) << val;
-}
-static void WriteString(std::ofstream& f, const char* key, const std::string& val)
-{
-    f << "\"" << key << "\": \"" << val << "\"";
-}
-
 // ===================== 保存 =====================
 bool Save(const char* filepath, const RecipeData& data)
 {
+    json j;
+
+    j["name"] = data.name;
+    j["imagePath"] = data.imagePath;
+    j["templateImage"] = data.templateImage;
+
+    // 阈值参数
+    json& th = j["threshold"];
+    th["useGray"]         = data.threshold.useGray;
+    th["thresholdValue"]  = data.threshold.thresholdValue;
+    th["binaryInv"]       = data.threshold.binaryInv;
+    th["blurSize"]        = data.threshold.blurSize;
+    th["cannyLow"]        = data.threshold.cannyLow;
+    th["cannyHigh"]       = data.threshold.cannyHigh;
+    th["brightness"]      = data.threshold.brightness;
+    th["contrast"]        = data.threshold.contrast;
+    th["processMode"]     = data.threshold.processMode;
+    th["pipeBlur"]        = data.threshold.pipeBlur;
+    th["pipeThreshold"]   = data.threshold.pipeThreshold;
+    th["pipeCanny"]       = data.threshold.pipeCanny;
+    th["pipeBlurSize"]    = data.threshold.pipeBlurSize;
+    th["pipeThresholdVal"] = data.threshold.pipeThresholdVal;
+    th["pipeCannyLow"]    = data.threshold.pipeCannyLow;
+    th["pipeCannyHigh"]   = data.threshold.pipeCannyHigh;
+
+    // 模板匹配参数
+    json& tm = j["templateMatch"];
+    tm["method"]         = data.tmMatch.method;
+    tm["searchMode"]     = data.tmMatch.searchMode;
+    tm["maxResults"]     = data.tmMatch.maxResults;
+    tm["maxImageDim"]    = data.tmMatch.maxImageDim;
+    tm["matchThreshold"] = data.tmMatch.matchThreshold;
+    tm["enableRotation"] = data.tmMatch.enableRotation;
+    tm["rotationStart"]  = data.tmMatch.rotationStart;
+    tm["rotationEnd"]    = data.tmMatch.rotationEnd;
+    tm["rotationStep"]   = data.tmMatch.rotationStep;
+
+    // ROI 数组
+    json& rois = j["rois"] = json::array();
+    for (const auto& r : data.rois)
+    {
+        rois.push_back({
+            {"startX", r.startX}, {"startY", r.startY},
+            {"endX",   r.endX},   {"endY",   r.endY},
+            {"type",   r.type}
+        });
+    }
+
+    // 工具实例数组
+    json& tools = j["tools"] = json::array();
+    for (const auto& t : data.tools)
+    {
+        json tj;
+        tj["type"]           = t.type;
+        tj["templateFile"]   = t.templateFile;
+        tj["enableRotation"] = t.enableRotation;
+        tj["rotationStart"]  = t.rotationStart;
+        tj["rotationEnd"]    = t.rotationEnd;
+        tj["rotationStep"]   = t.rotationStep;
+        tj["maxResults"]     = t.maxResults;
+        tj["matchThreshold"] = t.matchThreshold;
+        tj["maxImageDim"]    = t.maxImageDim;
+        tj["nmsThreshold"]   = t.nmsThreshold;
+        tj["searchMode"]     = t.searchMode;
+        tj["tplGray"]        = t.tplGray;
+        tj["tplBinary"]      = t.tplBinary;
+        tj["tplBinThresh"]   = t.tplBinThresh;
+        tj["tplEdge"]        = t.tplEdge;
+        tj["tplEdgeLow"]     = t.tplEdgeLow;
+        tj["tplEdgeHigh"]    = t.tplEdgeHigh;
+        tj["imgUseGray"]     = t.imgUseGray;
+        tj["imgEnableThreshold"] = t.imgEnableThreshold;
+        tj["imgThreshold"]   = t.imgThreshold;
+        tj["cannyLow"]       = t.cannyLow;
+        tj["cannyHigh"]      = t.cannyHigh;
+        tj["edgeUseGray"]    = t.edgeUseGray;
+        tj["dbgUseGray"]     = t.dbgUseGray;
+        tj["dbgEnableBlur"]  = t.dbgEnableBlur;
+        tj["dbgBlurSize"]    = t.dbgBlurSize;
+        tj["dbgEnableThresh"] = t.dbgEnableThresh;
+        tj["dbgThreshold"]   = t.dbgThreshold;
+        tj["dbgEnableCanny"] = t.dbgEnableCanny;
+        tj["dbgCannyLow"]    = t.dbgCannyLow;
+        tj["dbgCannyHigh"]   = t.dbgCannyHigh;
+
+        // 搜索 ROI 子数组
+        json& srois = tj["searchROIs"] = json::array();
+        for (const auto& r : t.searchROIs)
+        {
+            srois.push_back({
+                {"startX", r.startX}, {"startY", r.startY},
+                {"endX",   r.endX},   {"endY",   r.endY},
+                {"type",   r.type}
+            });
+        }
+        tools.push_back(tj);
+    }
+
+    // 写入文件
     std::ofstream f(filepath);
     if (!f)
     {
         LogSystem::Add(LOG_ERROR, "RecipeManager: 无法写入 %s", filepath);
         return false;
     }
-
-    f << "{\n";
-    f << "\"name\": \"" << data.name << "\",\n";
-    f << "\"imagePath\": \"" << data.imagePath << "\",\n";
-
-    // 阈值
-    f << "\"threshold\": {\n";
-    WriteBool(f, "useGray",         data.threshold.useGray);         f << ",\n";
-    WriteInt (f, "thresholdValue",  data.threshold.thresholdValue);  f << ",\n";
-    WriteBool(f, "binaryInv",       data.threshold.binaryInv);       f << ",\n";
-    WriteInt (f, "blurSize",        data.threshold.blurSize);        f << ",\n";
-    WriteInt (f, "cannyLow",        data.threshold.cannyLow);        f << ",\n";
-    WriteInt (f, "cannyHigh",       data.threshold.cannyHigh);       f << ",\n";
-    WriteFloat(f, "brightness",     data.threshold.brightness);      f << ",\n";
-    WriteFloat(f, "contrast",       data.threshold.contrast);        f << ",\n";
-    WriteInt (f, "processMode",     data.threshold.processMode);     f << ",\n";
-    WriteBool(f, "pipeBlur",        data.threshold.pipeBlur);        f << ",\n";
-    WriteBool(f, "pipeThreshold",   data.threshold.pipeThreshold);   f << ",\n";
-    WriteBool(f, "pipeCanny",       data.threshold.pipeCanny);       f << ",\n";
-    WriteInt (f, "pipeBlurSize",    data.threshold.pipeBlurSize);    f << ",\n";
-    WriteInt (f, "pipeThresholdVal", data.threshold.pipeThresholdVal); f << ",\n";
-    WriteInt (f, "pipeCannyLow",    data.threshold.pipeCannyLow);    f << ",\n";
-    WriteInt (f, "pipeCannyHigh",   data.threshold.pipeCannyHigh);   f << "\n";
-    f << "},\n";
-
-    // 模板匹配
-    f << "\"templateMatch\": {\n";
-    WriteInt (f, "method",          data.tmMatch.method);            f << ",\n";
-    WriteInt (f, "searchMode",      data.tmMatch.searchMode);        f << ",\n";
-    WriteInt (f, "maxResults",      data.tmMatch.maxResults);        f << ",\n";
-    WriteInt (f, "maxImageDim",     data.tmMatch.maxImageDim);       f << ",\n";
-    WriteFloat(f, "matchThreshold", data.tmMatch.matchThreshold);    f << ",\n";
-    WriteBool(f, "enableRotation",  data.tmMatch.enableRotation);    f << ",\n";
-    WriteInt (f, "rotationStart",   data.tmMatch.rotationStart);     f << ",\n";
-    WriteInt (f, "rotationEnd",     data.tmMatch.rotationEnd);       f << ",\n";
-    WriteInt (f, "rotationStep",    data.tmMatch.rotationStep);      f << "\n";
-    f << "},\n";
-
-    // ROI
-    f << "\"rois\": [\n";
-    for (size_t i = 0; i < data.rois.size(); i++)
-    {
-        const auto& r = data.rois[i];
-        f << "  {";
-        WriteFloat(f, "startX", r.startX); f << ", ";
-        WriteFloat(f, "startY", r.startY); f << ", ";
-        WriteFloat(f, "endX",   r.endX);   f << ", ";
-        WriteFloat(f, "endY",   r.endY);   f << ", ";
-        WriteInt  (f, "type",   r.type);   f << "}";
-        if (i + 1 < data.rois.size()) f << ",";
-        f << "\n";
-    }
-    f << "],\n";
-
-    // ---- 工具实例 ----
-    f << "\"tools\": [\n";
-    for (size_t ti = 0; ti < data.tools.size(); ti++)
-    {
-        const auto& t = data.tools[ti];
-        f << "  {\n";
-        WriteInt   (f, "type",           t.type);           f << ",\n";
-        WriteString(f, "templateFile",   t.templateFile);   f << ",\n";
-        WriteBool  (f, "enableRotation", t.enableRotation); f << ",\n";
-        WriteInt   (f, "rotationStart",  t.rotationStart);  f << ",\n";
-        WriteInt   (f, "rotationEnd",    t.rotationEnd);    f << ",\n";
-        WriteInt   (f, "rotationStep",   t.rotationStep);   f << ",\n";
-        WriteInt   (f, "maxResults",     t.maxResults);     f << ",\n";
-        WriteFloat (f, "matchThreshold", t.matchThreshold); f << ",\n";
-        WriteInt   (f, "maxImageDim",    t.maxImageDim);    f << ",\n";
-        WriteFloat (f, "nmsThreshold",   t.nmsThreshold);   f << ",\n";
-        WriteInt   (f, "searchMode",     t.searchMode);     f << ",\n";
-        WriteBool  (f, "tplGray",        t.tplGray);        f << ",\n";
-        WriteBool  (f, "tplBinary",      t.tplBinary);      f << ",\n";
-        WriteInt   (f, "tplBinThresh",   t.tplBinThresh);   f << ",\n";
-        WriteBool  (f, "tplEdge",        t.tplEdge);        f << ",\n";
-        WriteInt   (f, "tplEdgeLow",     t.tplEdgeLow);     f << ",\n";
-        WriteInt   (f, "tplEdgeHigh",    t.tplEdgeHigh);    f << ",\n";
-        WriteBool  (f, "imgUseGray",     t.imgUseGray);     f << ",\n";
-        WriteBool  (f, "imgEnableThresh", t.imgEnableThreshold); f << ",\n";
-        WriteInt   (f, "imgThreshold",   t.imgThreshold);   f << ",\n";
-        WriteInt   (f, "cannyLow",       t.cannyLow);       f << ",\n";
-        WriteInt   (f, "cannyHigh",      t.cannyHigh);      f << ",\n";
-        WriteBool  (f, "edgeUseGray",    t.edgeUseGray);    f << ",\n";
-        WriteBool  (f, "dbgUseGray",     t.dbgUseGray);     f << ",\n";
-        WriteBool  (f, "dbgEnableBlur",  t.dbgEnableBlur);  f << ",\n";
-        WriteInt   (f, "dbgBlurSize",    t.dbgBlurSize);    f << ",\n";
-        WriteBool  (f, "dbgEnableThresh", t.dbgEnableThresh); f << ",\n";
-        WriteInt   (f, "dbgThreshold",   t.dbgThreshold);   f << ",\n";
-        WriteBool  (f, "dbgEnableCanny", t.dbgEnableCanny); f << ",\n";
-        WriteInt   (f, "dbgCannyLow",    t.dbgCannyLow);    f << ",\n";
-        WriteInt   (f, "dbgCannyHigh",   t.dbgCannyHigh);   f << ",\n";
-        // searchROIs
-        f << "\"searchROIs\": [";
-        for (size_t ri = 0; ri < t.searchROIs.size(); ri++)
-        {
-            const auto& r = t.searchROIs[ri];
-            f << "{";
-            WriteFloat(f, "startX", r.startX); f << ", ";
-            WriteFloat(f, "startY", r.startY); f << ", ";
-            WriteFloat(f, "endX",   r.endX);   f << ", ";
-            WriteFloat(f, "endY",   r.endY);   f << ", ";
-            WriteInt  (f, "type",   r.type);   f << "}";
-            if (ri + 1 < t.searchROIs.size()) f << ", ";
-        }
-        f << "]\n";
-        f << "  }";
-        if (ti + 1 < data.tools.size()) f << ",";
-        f << "\n";
-    }
-    f << "],\n";
-
-    // 模板图像路径（与配方文件同名 .png）
-    f << "\"templateImage\": \"" << data.templateImage << "\"\n";
-    f << "}\n";
+    f << j.dump(2);
 
     LogSystem::Add(LOG_INFO, color, "[Save] 已写入 %zu 个工具实例", data.tools.size());
 
     // 保存模板图像（与配方同目录、同名 .png）
     if (!data.templateImage.empty())
     {
-        // 从 recipe 文件路径推导模板图像路径
         std::string tplPath(filepath);
         size_t slash = tplPath.find_last_of("\\/");
         tplPath = (slash != std::string::npos)
@@ -193,7 +164,6 @@ bool Save(const char* filepath, const RecipeData& data)
             ? tplPath.substr(0, slash + 1) + t.templateFile
             : t.templateFile;
 
-        // 从 g_ToolInstances 找到对应实例的模板数据并保存
         if (ti < UI::g_ToolInstances.size() && !UI::g_ToolInstances[ti].templateImg.empty())
         {
             cv::Mat& tpl = UI::g_ToolInstances[ti].templateImg;
@@ -206,274 +176,145 @@ bool Save(const char* filepath, const RecipeData& data)
     return true;
 }
 
-// ===================== 简易 JSON 解析 =====================
-static std::string ReadFile(const char* path)
-{
-    std::ifstream f(path);
-    if (!f) return "";
-    std::stringstream ss;
-    ss << f.rdbuf();
-    return ss.str();
-}
-static std::string StrVal(const std::string& json, const char* key)
-{
-    std::string k = std::string("\"") + key + "\"";
-    size_t p = json.find(k);
-    if (p == std::string::npos) return "";
-    p = json.find(':', p + k.size());
-    if (p == std::string::npos) return "";
-    p = json.find('"', p + 1);
-    if (p == std::string::npos) return "";
-    size_t e = json.find('"', p + 1);
-    if (e == std::string::npos) return "";
-    return json.substr(p + 1, e - p - 1);
-}
-static int IntVal(const std::string& json, const char* key, int def = 0)
-{
-    std::string k = std::string("\"") + key + "\"";
-    size_t p = json.find(k);
-    if (p == std::string::npos) return def;
-    p = json.find(':', p + k.size());
-    if (p == std::string::npos) return def;
-    p++;
-    while (p < json.size() && (json[p] == ' ' || json[p] == '\t' || json[p] == '\n')) p++;
-    std::string num;
-    bool neg = false;
-    if (p < json.size() && json[p] == '-') { neg = true; p++; }
-    while (p < json.size() && json[p] >= '0' && json[p] <= '9') { num += json[p]; p++; }
-    if (num.empty()) return def;
-    int v = std::stoi(num);
-    return neg ? -v : v;
-}
-static float FloatVal(const std::string& json, const char* key, float def = 0.0f)
-{
-    std::string k = std::string("\"") + key + "\"";
-    size_t p = json.find(k);
-    if (p == std::string::npos) return def;
-    p = json.find(':', p + k.size());
-    if (p == std::string::npos) return def;
-    p++;
-    while (p < json.size() && (json[p] == ' ' || json[p] == '\t' || json[p] == '\n')) p++;
-    std::string num;
-    bool neg = false;
-    if (p < json.size() && json[p] == '-') { neg = true; p++; }
-    while (p < json.size() && ((json[p] >= '0' && json[p] <= '9') || json[p] == '.'))
-    {
-        num += json[p]; p++;
-    }
-    if (num.empty()) return def;
-    float v = std::stof(num);
-    return neg ? -v : v;
-}
-static bool BoolVal(const std::string& json, const char* key, bool def = false)
-{
-    std::string k = std::string("\"") + key + "\"";
-    size_t p = json.find(k);
-    if (p == std::string::npos) return def;
-    p = json.find(':', p + k.size());
-    if (p == std::string::npos) return def;
-    p++;
-    while (p < json.size() && (json[p] == ' ' || json[p] == '\t' || json[p] == '\n')) p++;
-    if (p + 4 <= json.size() && json.substr(p, 4) == "true") return true;
-    return false;
-}
-
 // ===================== 加载 =====================
-static std::string g_LastRecipePath; // 记录最近加载的配方路径（用于加载工具模板）
+static std::string g_LastRecipePath;
 
 bool Load(const char* filepath, RecipeData& data)
 {
-    g_LastRecipePath = filepath;  // 记录路径供 Apply() 加载工具模板
-    std::string json = ReadFile(filepath);
-    if (json.empty())
+    g_LastRecipePath = filepath;
+
+    std::ifstream f(filepath);
+    if (!f)
     {
         LogSystem::Add(LOG_ERROR, "RecipeManager: 无法打开 %s", filepath);
         return false;
     }
 
-    data.name      = StrVal(json, "name");
-    data.imagePath = StrVal(json, "imagePath");
-    data.templateImage = StrVal(json, "templateImage");
+    json j;
+    try { f >> j; }
+    catch (const json::parse_error& e)
+    {
+        LogSystem::Add(LOG_ERROR, "RecipeManager: JSON 解析失败 %s (byte %zu)", e.what(), e.byte);
+        return false;
+    }
 
-    // 阈值
-    data.threshold.useGray          = BoolVal(json, "useGray");
-    data.threshold.thresholdValue   = IntVal(json, "thresholdValue", 128);
-    data.threshold.binaryInv        = BoolVal(json, "binaryInv");
-    data.threshold.blurSize         = IntVal(json, "blurSize", 1);
-    data.threshold.cannyLow         = IntVal(json, "cannyLow", 50);
-    data.threshold.cannyHigh        = IntVal(json, "cannyHigh", 150);
-    data.threshold.brightness       = FloatVal(json, "brightness");
-    data.threshold.contrast         = FloatVal(json, "contrast", 1.0f);
-    data.threshold.processMode      = IntVal(json, "processMode");
-    data.threshold.pipeBlur         = BoolVal(json, "pipeBlur");
-    data.threshold.pipeThreshold    = BoolVal(json, "pipeThreshold");
-    data.threshold.pipeCanny        = BoolVal(json, "pipeCanny");
-    data.threshold.pipeBlurSize     = IntVal(json, "pipeBlurSize", 5);
-    data.threshold.pipeThresholdVal = IntVal(json, "pipeThresholdVal", 128);
-    data.threshold.pipeCannyLow     = IntVal(json, "pipeCannyLow", 50);
-    data.threshold.pipeCannyHigh    = IntVal(json, "pipeCannyHigh", 150);
+    data.name          = j.value("name", "");
+    data.imagePath     = j.value("imagePath", "");
+    data.templateImage = j.value("templateImage", "");
 
-    // 模板匹配
-    data.tmMatch.method          = IntVal(json, "method", 5);
-    data.tmMatch.searchMode      = IntVal(json, "searchMode");
-    data.tmMatch.maxResults      = IntVal(json, "maxResults", 10);
-    data.tmMatch.maxImageDim     = IntVal(json, "maxImageDim", 1000);
-    data.tmMatch.matchThreshold  = FloatVal(json, "matchThreshold", 0.75f);
-    data.tmMatch.enableRotation  = BoolVal(json, "enableRotation");
-    data.tmMatch.rotationStart   = IntVal(json, "rotationStart", -5);
-    data.tmMatch.rotationEnd     = IntVal(json, "rotationEnd", 5);
-    data.tmMatch.rotationStep    = IntVal(json, "rotationStep", 5);
+    // 阈值参数
+    if (j.contains("threshold"))
+    {
+        auto& th = j["threshold"];
+        data.threshold.useGray          = th.value("useGray", false);
+        data.threshold.thresholdValue   = th.value("thresholdValue", 128);
+        data.threshold.binaryInv        = th.value("binaryInv", false);
+        data.threshold.blurSize         = th.value("blurSize", 1);
+        data.threshold.cannyLow         = th.value("cannyLow", 50);
+        data.threshold.cannyHigh        = th.value("cannyHigh", 150);
+        data.threshold.brightness       = th.value("brightness", 0.0f);
+        data.threshold.contrast         = th.value("contrast", 1.0f);
+        data.threshold.processMode      = th.value("processMode", 0);
+        data.threshold.pipeBlur         = th.value("pipeBlur", false);
+        data.threshold.pipeThreshold    = th.value("pipeThreshold", false);
+        data.threshold.pipeCanny        = th.value("pipeCanny", false);
+        data.threshold.pipeBlurSize     = th.value("pipeBlurSize", 5);
+        data.threshold.pipeThresholdVal = th.value("pipeThresholdVal", 128);
+        data.threshold.pipeCannyLow     = th.value("pipeCannyLow", 50);
+        data.threshold.pipeCannyHigh    = th.value("pipeCannyHigh", 150);
+    }
 
-    // ROI — 解析数组
+    // 模板匹配参数
+    if (j.contains("templateMatch"))
+    {
+        auto& tm = j["templateMatch"];
+        data.tmMatch.method         = tm.value("method", 5);
+        data.tmMatch.searchMode     = tm.value("searchMode", 0);
+        data.tmMatch.maxResults     = tm.value("maxResults", 10);
+        data.tmMatch.maxImageDim    = tm.value("maxImageDim", 1000);
+        data.tmMatch.matchThreshold = tm.value("matchThreshold", 0.75f);
+        data.tmMatch.enableRotation = tm.value("enableRotation", false);
+        data.tmMatch.rotationStart  = tm.value("rotationStart", -5);
+        data.tmMatch.rotationEnd    = tm.value("rotationEnd", 5);
+        data.tmMatch.rotationStep   = tm.value("rotationStep", 5);
+    }
+
+    // ROI 数组
     data.rois.clear();
-    size_t arrStart = json.find("\"rois\"");
-    if (arrStart != std::string::npos)
+    if (j.contains("rois") && j["rois"].is_array())
     {
-        size_t roiBracket = json.find('[', arrStart);
-        if (roiBracket != std::string::npos)
+        for (const auto& r : j["rois"])
         {
-            // 用深度计数找 rois 数组的结束 ]
-            int roiArrDepth = 1;
-            size_t roiEnd = roiBracket + 1;
-            while (roiEnd < json.size() && roiArrDepth > 0)
-            {
-                if (json[roiEnd] == '[') roiArrDepth++;
-                else if (json[roiEnd] == ']') roiArrDepth--;
-                roiEnd++;
-            }
-            roiEnd--; // 指向 ]
-
-            size_t pos = roiBracket + 1;
-            while (pos < roiEnd)
-            {
-                size_t objStart = json.find('{', pos);
-                if (objStart == std::string::npos || objStart >= roiEnd) break;
-                size_t objEnd = json.find('}', objStart);
-                if (objEnd == std::string::npos) break;
-
-                RecipeROI roi;
-                roi.startX = FloatVal(json.substr(objStart, objEnd - objStart + 1), "startX");
-                roi.startY = FloatVal(json.substr(objStart, objEnd - objStart + 1), "startY");
-                roi.endX   = FloatVal(json.substr(objStart, objEnd - objStart + 1), "endX");
-                roi.endY   = FloatVal(json.substr(objStart, objEnd - objStart + 1), "endY");
-                roi.type   = IntVal(json.substr(objStart, objEnd - objStart + 1), "type", 0);
-                data.rois.push_back(roi);
-                pos = objEnd + 1;
-            }
+            RecipeROI roi;
+            roi.startX = r.value("startX", 0.0f);
+            roi.startY = r.value("startY", 0.0f);
+            roi.endX   = r.value("endX", 0.0f);
+            roi.endY   = r.value("endY", 0.0f);
+            roi.type   = r.value("type", 0);
+            data.rois.push_back(roi);
         }
     }
 
-    // ---- 工具实例 ----
+    // 工具实例数组
     data.tools.clear();
-    size_t toolsStart = json.find("\"tools\"");
-    if (toolsStart != std::string::npos)
+    if (j.contains("tools") && j["tools"].is_array())
     {
-        size_t toolsBracket = json.find('[', toolsStart);
-        if (toolsBracket != std::string::npos)
+        for (const auto& tj : j["tools"])
         {
-            // 用深度计数找 tools 数组的结束 ]
-            int arrDepth = 1;
-            size_t toolsEnd = toolsBracket + 1;
-            while (toolsEnd < json.size() && arrDepth > 0)
+            RecipeToolInstance t;
+            t.type             = tj.value("type", 0);
+            t.templateFile     = tj.value("templateFile", "");
+            t.enableRotation   = tj.value("enableRotation", false);
+            t.rotationStart    = tj.value("rotationStart", -45);
+            t.rotationEnd      = tj.value("rotationEnd", 45);
+            t.rotationStep     = tj.value("rotationStep", 1);
+            t.maxResults       = tj.value("maxResults", 5);
+            t.matchThreshold   = tj.value("matchThreshold", 0.7f);
+            t.maxImageDim      = tj.value("maxImageDim", 1000);
+            t.nmsThreshold     = tj.value("nmsThreshold", 0.3f);
+            t.searchMode       = tj.value("searchMode", 0);
+            t.tplGray          = tj.value("tplGray", false);
+            t.tplBinary        = tj.value("tplBinary", false);
+            t.tplBinThresh     = tj.value("tplBinThresh", 128);
+            t.tplEdge          = tj.value("tplEdge", false);
+            t.tplEdgeLow       = tj.value("tplEdgeLow", 50);
+            t.tplEdgeHigh      = tj.value("tplEdgeHigh", 150);
+            t.imgUseGray       = tj.value("imgUseGray", false);
+            t.imgEnableThreshold = tj.value("imgEnableThreshold", false);
+            t.imgThreshold     = tj.value("imgThreshold", 128);
+            t.cannyLow         = tj.value("cannyLow", 50);
+            t.cannyHigh        = tj.value("cannyHigh", 150);
+            t.edgeUseGray      = tj.value("edgeUseGray", false);
+            t.dbgUseGray       = tj.value("dbgUseGray", false);
+            t.dbgEnableBlur    = tj.value("dbgEnableBlur", false);
+            t.dbgBlurSize      = tj.value("dbgBlurSize", 5);
+            t.dbgEnableThresh  = tj.value("dbgEnableThresh", false);
+            t.dbgThreshold     = tj.value("dbgThreshold", 128);
+            t.dbgEnableCanny   = tj.value("dbgEnableCanny", false);
+            t.dbgCannyLow      = tj.value("dbgCannyLow", 50);
+            t.dbgCannyHigh     = tj.value("dbgCannyHigh", 150);
+
+            // 搜索 ROI 子数组
+            if (tj.contains("searchROIs") && tj["searchROIs"].is_array())
             {
-                if (json[toolsEnd] == '[') arrDepth++;
-                else if (json[toolsEnd] == ']') arrDepth--;
-                toolsEnd++;
-            }
-            toolsEnd--; // 指向 ]
-
-            size_t pos = toolsBracket + 1;
-            int toolCount = 0;
-            while (pos < toolsEnd)
-            {
-                size_t objStart = json.find('{', pos);
-                if (objStart == std::string::npos || objStart >= toolsEnd) break;
-                size_t objEnd = json.find('}', objStart);
-                if (objEnd == std::string::npos) break;
-                // 找嵌套对象结束（searchROIs数组可能包含 {}）
-                int depth = 1;
-                size_t p = objStart + 1;
-                while (p < json.size() && depth > 0)
+                for (const auto& r : tj["searchROIs"])
                 {
-                    if (json[p] == '{') depth++;
-                    else if (json[p] == '}') depth--;
-                    p++;
+                    RecipeROI rr;
+                    rr.startX = r.value("startX", 0.0f);
+                    rr.startY = r.value("startY", 0.0f);
+                    rr.endX   = r.value("endX", 0.0f);
+                    rr.endY   = r.value("endY", 0.0f);
+                    rr.type   = r.value("type", 0);
+                    t.searchROIs.push_back(rr);
                 }
-                objEnd = p - 1;
-
-                std::string toolJson = json.substr(objStart, objEnd - objStart + 1);
-                toolCount++;
-                LogSystem::Add(LOG_INFO, color, "[Load] 解析工具 #%d, json长度=%zu", toolCount, toolJson.size());
-
-                RecipeToolInstance t;
-                t.type             = IntVal(toolJson, "type");
-                t.templateFile     = StrVal(toolJson, "templateFile");
-                t.enableRotation   = BoolVal(toolJson, "enableRotation");
-                t.rotationStart    = IntVal(toolJson, "rotationStart", -45);
-                t.rotationEnd      = IntVal(toolJson, "rotationEnd", 45);
-                t.rotationStep     = IntVal(toolJson, "rotationStep", 1);
-                t.maxResults       = IntVal(toolJson, "maxResults", 5);
-                t.matchThreshold   = FloatVal(toolJson, "matchThreshold", 0.7f);
-                t.maxImageDim      = IntVal(toolJson, "maxImageDim", 1000);
-                t.nmsThreshold     = FloatVal(toolJson, "nmsThreshold", 0.3f);
-                t.searchMode       = IntVal(toolJson, "searchMode");
-                t.tplGray          = BoolVal(toolJson, "tplGray");
-                t.tplBinary        = BoolVal(toolJson, "tplBinary");
-                t.tplBinThresh     = IntVal(toolJson, "tplBinThresh", 128);
-                t.tplEdge          = BoolVal(toolJson, "tplEdge");
-                t.tplEdgeLow       = IntVal(toolJson, "tplEdgeLow", 50);
-                t.tplEdgeHigh      = IntVal(toolJson, "tplEdgeHigh", 150);
-                t.imgUseGray       = BoolVal(toolJson, "imgUseGray");
-                t.imgEnableThreshold = BoolVal(toolJson, "imgEnableThresh");
-                t.imgThreshold     = IntVal(toolJson, "imgThreshold", 128);
-                t.cannyLow         = IntVal(toolJson, "cannyLow", 50);
-                t.cannyHigh        = IntVal(toolJson, "cannyHigh", 150);
-                t.edgeUseGray      = BoolVal(toolJson, "edgeUseGray");
-                t.dbgUseGray       = BoolVal(toolJson, "dbgUseGray");
-                t.dbgEnableBlur    = BoolVal(toolJson, "dbgEnableBlur");
-                t.dbgBlurSize      = IntVal(toolJson, "dbgBlurSize", 5);
-                t.dbgEnableThresh  = BoolVal(toolJson, "dbgEnableThresh");
-                t.dbgThreshold     = IntVal(toolJson, "dbgThreshold", 128);
-                t.dbgEnableCanny   = BoolVal(toolJson, "dbgEnableCanny");
-                t.dbgCannyLow      = IntVal(toolJson, "dbgCannyLow", 50);
-                t.dbgCannyHigh     = IntVal(toolJson, "dbgCannyHigh", 150);
-
-                // 解析 searchROIs 子数组
-                size_t srStart = toolJson.find("\"searchROIs\"");
-                if (srStart != std::string::npos)
-                {
-                    srStart = toolJson.find('[', srStart);
-                    if (srStart != std::string::npos)
-                    {
-                        size_t sp = srStart + 1;
-                        while (sp < toolJson.size())
-                        {
-                            size_t soStart = toolJson.find('{', sp);
-                            if (soStart == std::string::npos || soStart > toolJson.find(']', srStart)) break;
-                            size_t soEnd = toolJson.find('}', soStart);
-                            if (soEnd == std::string::npos) break;
-                            std::string roiJson = toolJson.substr(soStart, soEnd - soStart + 1);
-                            RecipeROI rr;
-                            rr.startX = FloatVal(roiJson, "startX");
-                            rr.startY = FloatVal(roiJson, "startY");
-                            rr.endX   = FloatVal(roiJson, "endX");
-                            rr.endY   = FloatVal(roiJson, "endY");
-                            rr.type   = IntVal(roiJson, "type", 0);
-                            t.searchROIs.push_back(rr);
-                            sp = soEnd + 1;
-                        }
-                    }
-                }
-
-                data.tools.push_back(t);
-                pos = objEnd + 1;
             }
+            data.tools.push_back(t);
         }
     }
 
+    // 加载模板图像
     if (!data.templateImage.empty())
     {
-        // 从 recipe 文件路径推导模板图像路径
         std::string tplPath(filepath);
         size_t slash = tplPath.find_last_of("\\/");
         tplPath = (slash != std::string::npos)
@@ -483,9 +324,6 @@ bool Load(const char* filepath, RecipeData& data)
         if (TemplateMatch::LoadTemplate(tplPath.c_str()))
             LogSystem::Add(LOG_INFO, "模板图像已加载: %s", tplPath.c_str());
     }
-
-    // 加载每个工具实例的模板图像（在 Apply 中恢复 g_ToolInstances 后加载）
-    // 这里只记录路径，实际加载在 Apply() 中
 
     LogSystem::Add(LOG_INFO, color, "[Load] 解析到 %zu 个工具实例", data.tools.size());
     LogSystem::Add(LOG_INFO, color, "配方已加载: %s (ROI: %zu, 工具: %zu)", data.name.c_str(), data.rois.size(), data.tools.size());
@@ -563,10 +401,9 @@ RecipeData Capture(const char* name)
         d.rois.push_back(r);
     }
 
-    // 模板图像路径（与配方同名 .png）
     d.templateImage = d.name + ".png";
 
-    // ---- 工具实例 ----
+    // 工具实例
     d.tools.clear();
     LogSystem::Add(LOG_INFO, color, "[Capture] g_ToolInstances 共 %zu 个实例",
         UI::g_ToolInstances.size());
@@ -626,7 +463,6 @@ RecipeData Capture(const char* name)
 // ===================== 应用配方到当前环境 =====================
 void Apply(const RecipeData& data)
 {
-    // 图片路径
     if (!data.imagePath.empty())
         pendingPath = data.imagePath;
 
@@ -670,7 +506,7 @@ void Apply(const RecipeData& data)
         UI::gROIs.push_back(roi);
     }
 
-    // ---- 工具实例 ----
+    // 工具实例
     UI::g_ToolInstances.clear();
     LogSystem::Add(LOG_INFO, color, "[Apply] 准备恢复 %zu 个工具实例", data.tools.size());
     for (size_t ti = 0; ti < data.tools.size(); ti++)

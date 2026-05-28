@@ -3,6 +3,7 @@
 #include "ROIManager.h"
 #include "../Core/OpenFileDialog.h"
 #include "../Core/DX12Context.h"
+#include "../Core/VideoCapture.h"
 #include "../Log/LogSystem.h"
 
 extern std::string pendingPath;
@@ -54,6 +55,22 @@ namespace UI
 		if (ImGui::Button("清理图片"))
 			ClearImage();
 		ImGui::SameLine();
+		// 打开视频文件
+		if (ImGui::Button("打开视频"))
+		{
+			std::string path = OpenVideoDialog();
+			if (!path.empty())
+			{
+				VideoCapture::OpenVideo(path);
+			}
+		}
+		ImGui::SameLine();
+		// 打开摄像头
+		if (ImGui::Button("打开摄像头"))
+		{
+			VideoCapture::OpenCamera(0);
+		}
+		ImGui::SameLine();
 		// 像素网格开关（放大后显示像素格子）
 		if (gZoom >= 3.0f)
 		{
@@ -77,6 +94,86 @@ namespace UI
 	ImGui::SliderInt("步长(px)", &g_GridStep, 10, 500);
 
 		ImGui::Separator();
+
+		// ===== 视频/摄像头播放控制栏（仅当视频打开时显示）=====
+		if (VideoCapture::IsOpen())
+		{
+			bool playing = VideoCapture::IsPlaying();
+			const float btnW = 60.0f;
+
+			// --- 播放/暂停按钮（绿/橙） ---
+			{
+				ImGui::PushStyleColor(ImGuiCol_Button,        playing ? ImVec4(0.85f, 0.45f, 0.05f, 0.75f) : ImVec4(0.10f, 0.55f, 0.10f, 0.75f));
+				ImGui::PushStyleColor(ImGuiCol_ButtonHovered,  playing ? ImVec4(0.95f, 0.55f, 0.10f, 0.85f) : ImVec4(0.15f, 0.65f, 0.15f, 0.85f));
+				ImGui::PushStyleColor(ImGuiCol_ButtonActive,   playing ? ImVec4(0.75f, 0.35f, 0.00f, 0.85f) : ImVec4(0.05f, 0.45f, 0.05f, 0.85f));
+				ImGui::PushStyleColor(ImGuiCol_Text,           ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+				if (ImGui::Button(playing ? " 暂停 " : " 播放 ", ImVec2(btnW, 0)))
+					VideoCapture::TogglePlay();
+				ImGui::PopStyleColor(4);
+			}
+			ImGui::SameLine();
+
+			// --- 停止按钮（红） ---
+			{
+				ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.70f, 0.18f, 0.18f, 0.75f));
+				ImGui::PushStyleColor(ImGuiCol_ButtonHovered,  ImVec4(0.80f, 0.25f, 0.25f, 0.85f));
+				ImGui::PushStyleColor(ImGuiCol_ButtonActive,   ImVec4(0.60f, 0.12f, 0.12f, 0.85f));
+				ImGui::PushStyleColor(ImGuiCol_Text,           ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+				if (ImGui::Button(" 停止 ", ImVec2(btnW, 0)))
+					VideoCapture::Stop();
+				ImGui::PopStyleColor(4);
+			}
+			ImGui::SameLine();
+
+			// --- 关闭按钮（灰） ---
+			{
+				ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.35f, 0.35f, 0.35f, 0.75f));
+				ImGui::PushStyleColor(ImGuiCol_ButtonHovered,  ImVec4(0.45f, 0.45f, 0.45f, 0.85f));
+				ImGui::PushStyleColor(ImGuiCol_ButtonActive,   ImVec4(0.30f, 0.30f, 0.30f, 0.85f));
+				ImGui::PushStyleColor(ImGuiCol_Text,           ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+				if (ImGui::Button(" 关闭 ", ImVec2(btnW, 0)))
+					VideoCapture::Close();
+				ImGui::PopStyleColor(4);
+			}
+			ImGui::SameLine();
+
+			// --- 进度条 / 帧滑动条 ---
+			if (!VideoCapture::IsCamera())
+			{
+				int total = VideoCapture::GetFrameCount();
+				int cur   = VideoCapture::GetCurrentFrame();
+				if (total > 0)
+				{
+					ImGui::PushItemWidth(200);
+					if (ImGui::SliderInt("##frameSlider", &cur, 0, total - 1, "%d"))
+						VideoCapture::SeekFrame(cur);
+					ImGui::PopItemWidth();
+					if (ImGui::IsItemHovered())
+						ImGui::SetTooltip("拖动跳转到指定帧");
+					ImGui::SameLine();
+				}
+			}
+			else
+			{
+				ImGui::Text(" 帧: %d", VideoCapture::GetCurrentFrame());
+				ImGui::SameLine();
+			}
+
+			// --- 循环播放开关 ---
+			bool loop = VideoCapture::IsLooping();
+			if (ImGui::Checkbox("循环", &loop))
+				VideoCapture::SetLoop(loop);
+			ImGui::SameLine();
+
+			// --- FPS 和状态指示 ---
+			ImGui::TextColored(
+				playing ? ImVec4(0.3f, 1.0f, 0.3f, 1) : ImVec4(0.7f, 0.7f, 0.7f, 1),
+				"%.1f fps %s",
+				VideoCapture::GetFPS(),
+				VideoCapture::IsCamera() ? "[摄像头]" : "[视频]");
+
+			ImGui::Separator();
+		}
 
 		// 为底部浏览工具栏预留空间
 		ImGui::BeginChild("ImageRegion", ImVec2(0, -35.0f), true,

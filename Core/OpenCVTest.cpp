@@ -28,67 +28,76 @@ void UploadToDX12(
 {
 	if (!device || !cmdList || rgba.empty()) return;
 
+	// 确保连续性（不连续内存无法直接上传到 GPU）
 	cv::Mat img = rgba;
-	bool isContinuous = img.isContinuous();
-	bool wasCloned = false;
-
-	if (!isContinuous)
-	{
+	if (!img.isContinuous())
 		img = img.clone();
-		wasCloned = true;
-	}
 
-	LogSystem::Add(LOG_INFO, color,
-		"[图像] continuous=%d cloned=%d size=%dx%d step=%d",
-		isContinuous, wasCloned, img.cols, img.rows, (int)img.step);
+	// 纹理缓存：尺寸未变时复用已有纹理，只更新数据
+	static UINT64 cachedWidth = 0, cachedHeight = 0;
+	bool sizeChanged = (cachedWidth != (UINT64)img.cols || cachedHeight != (UINT64)img.rows);
 
-	D3D12_RESOURCE_DESC desc = {};
-	desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-	desc.Width = img.cols;
-	desc.Height = img.rows;
-	desc.DepthOrArraySize = 1;
-	desc.MipLevels = 1;
-	desc.Format = format;
-	desc.SampleDesc.Count = 1;
-	desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-
-	// 每次重新创建纹理资源（尺寸可能不同）
-	if (*texture)
+	if (*texture && sizeChanged)
 	{
 		(*texture)->Release();
 		*texture = nullptr;
 	}
 
-	CD3DX12_HEAP_PROPERTIES heapDefault(D3D12_HEAP_TYPE_DEFAULT);
-	HRESULT hr = device->CreateCommittedResource(
-		&heapDefault, D3D12_HEAP_FLAG_NONE, &desc,
-		D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-		IID_PPV_ARGS(texture));
-	if (FAILED(hr))
+	if (*texture == nullptr)
 	{
-		LogSystem::Add(LOG_ERROR, color, "创建纹理资源失败 hr=0x%08X", hr);
-		return;
+		D3D12_RESOURCE_DESC desc = {};
+		desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+		desc.Width = img.cols;
+		desc.Height = img.rows;
+		desc.DepthOrArraySize = 1;
+		desc.MipLevels = 1;
+		desc.Format = format;
+		desc.SampleDesc.Count = 1;
+		desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+
+		CD3DX12_HEAP_PROPERTIES heapDefault(D3D12_HEAP_TYPE_DEFAULT);
+		HRESULT hr = device->CreateCommittedResource(
+			&heapDefault, D3D12_HEAP_FLAG_NONE, &desc,
+			D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+			IID_PPV_ARGS(texture));
+		if (FAILED(hr))
+		{
+			LogSystem::Add(LOG_ERROR, color, "创建纹理资源失败 hr=0x%08X", hr);
+			return;
+		}
+
+		// 创建着色器资源视图（仅新建纹理时需要）
+		D3D12_SHADER_RESOURCE_VIEW_DESC srv = {};
+		srv.Format = format;
+		srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+		srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+		srv.Texture2D.MipLevels = 1;
+		device->CreateShaderResourceView(*texture, &srv, srvHandle);
+
+		cachedWidth = img.cols;
+		cachedHeight = img.rows;
+	}
+	else
+	{
+		// 复用已有纹理：仅需从 PRESENT/SRV 切回 COPY_DEST
+		auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+			*texture,
+			D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+			D3D12_RESOURCE_STATE_COPY_DEST);
+		cmdList->ResourceBarrier(1, &barrier);
 	}
 
-	// 创建着色器资源视图
-	D3D12_SHADER_RESOURCE_VIEW_DESC srv = {};
-	srv.Format = format;
-	srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-	srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-	srv.Texture2D.MipLevels = 1;
-	device->CreateShaderResourceView(*texture, &srv, srvHandle);
-
-	// 计算所需上传缓冲区大小，按需重新分配
+	// 上传缓冲区按需扩容
 	UINT64 uploadSize = GetRequiredIntermediateSize(*texture, 0, 1);
 	static ComPtr<ID3D12Resource> upload;
 	static UINT64 uploadCapacity = 0;
 
 	if (upload == nullptr || uploadSize > uploadCapacity)
 	{
-		upload.Reset();  // 释放旧缓冲区
+		upload.Reset();
 		CD3DX12_HEAP_PROPERTIES heapUpload(D3D12_HEAP_TYPE_UPLOAD);
 		auto bufferDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadSize);
-		hr = device->CreateCommittedResource(
+		HRESULT hr = device->CreateCommittedResource(
 			&heapUpload, D3D12_HEAP_FLAG_NONE, &bufferDesc,
 			D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
 			IID_PPV_ARGS(&upload));
@@ -101,7 +110,6 @@ void UploadToDX12(
 		}
 	}
 
-	// 设置子资源数据描述
 	D3D12_SUBRESOURCE_DATA sub = {};
 	sub.pData = img.data;
 	sub.RowPitch = (LONG_PTR)img.step;
@@ -115,8 +123,6 @@ void UploadToDX12(
 		D3D12_RESOURCE_STATE_COPY_DEST,
 		D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 	cmdList->ResourceBarrier(1, &barrier);
-
-	OutputDebugStringA("DX12纹理上传成功\n");
 }
 
 // ========================================

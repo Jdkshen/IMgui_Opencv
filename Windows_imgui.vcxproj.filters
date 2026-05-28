@@ -84,6 +84,12 @@
     <ClInclude Include="Core\AsyncImageLoader.h">
       <Filter>Core</Filter>
     </ClInclude>
+    <ClInclude Include="Core\AudioPlayer.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Core\VideoCapture.h">
+      <Filter>Core</Filter>
+    </ClInclude>
     <ClInclude Include="Core\RecipeManager.h">
       <Filter>Core</Filter>
     </ClInclude>
@@ -162,6 +168,12 @@
       <Filter>Core</Filter>
     </ClCompile>
     <ClCompile Include="Core\AsyncImageLoader.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="Core\AudioPlayer.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="Core\VideoCapture.cpp">
       <Filter>Core</Filter>
     </ClCompile>
     <ClCompile Include="Core\RecipeManager.cpp">

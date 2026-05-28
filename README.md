@@ -15,13 +15,20 @@ IMgui_Opencv/
 ├── Core/                       ← 核心模块
 │   ├── DX12Context.cpp/h       ←   DX12 设备管理 + 全局状态
 │   ├── OpenCVTest.cpp/h        ←   图片读取 + GPU 纹理上传
+│   ├── AsyncImageLoader.cpp/h  ←   异步图片加载（后台线程 + 回调）
 │   ├── OpenFileDialog.cpp/h    ←   文件/文件夹选择对话框
+│   ├── VideoCapture.cpp/h      ←   视频/摄像头播放
+│   ├── AudioPlayer.cpp/h       ←   XAudio2 + Media Foundation 音频播放
 │   ├── ThemeManager.cpp/h      ←   主题切换（夜间/白天）
 │   └── RecipeManager.cpp/h     ←   配方保存/加载（JSON，支持工具实例序列化）
 │
 ├── UI/                         ← 界面模块
 │   ├── DockSpaceHost.cpp/h     ←   主停靠空间 + 菜单栏 + 功能窗口 + 工具实例
-│   ├── ImageViewer.cpp/h       ←   图片预览 + 缩放平移 + 文件夹浏览
+│   ├── ImageViewer.cpp/h       ←   图片预览 + 缩放平移 + 文件夹浏览 + 视频控制
+│   ├── LogWindow.cpp/h         ←   日志窗口
+│   ├── Sidebar.cpp/h           ←   侧边栏
+│   ├── StatsWindow.cpp/h       ←   状态窗口
+│   ├── ToolsWindow.cpp/h       ←   工具窗口
 │   └── ROIManager.cpp/h        ←   ROI 数据结构 + 交互 + 坐标转换
 │
 ├── Algorithm/                  ← 图像算法
@@ -64,6 +71,7 @@ wWinMain()
   └── 主循环
         ├── PeekMessage 消息处理
         ├── 窗口遮挡检测
+        ├── 视频帧更新（VideoCapture::Update + AudioPlayer 同步）
         ├── ImGui 新帧
         ├── UI 绘制（DockSpace/侧边栏/日志/图像/工具/阈值/模板匹配）
         ├── 图片加载调度（OpenCV → GPU 纹理上传）
@@ -79,7 +87,9 @@ wWinMain()
 
 | 模块 | 功能 |
 |------|------|
-| 图片加载 | 支持 JPG/PNG/BMP，文件对话框 + 文件夹浏览（上/下张切换） |
+| 图片加载 | 支持 JPG/PNG/BMP，文件对话框 + 文件夹浏览（上/下张切换）+ 异步加载 |
+| 视频播放 | 打开视频文件 / 摄像头，播放/暂停/停止/循环，帧滑动条跳转，FPS 显示 |
+| 音频播放 | XAudio2 + Media Foundation，与视频同步播放/暂停/跳转 |
 | 图像处理 | 灰度化、高斯模糊、二值化、Canny 边缘检测 |
 | ROI 管理 | 交互式创建/选中/拖动/缩放/删除感兴趣区域，多类型颜色区分 |
 | 模板匹配 | 多实例模板匹配，旋转/NMS/阈值，结果可视化 |

@@ -22,6 +22,13 @@ using UI::ScreenToImagePos;
 using UI::NormalizeROI;
 
 // =========================
+// 异步匹配状态
+// =========================
+static std::future<void> s_MatchFuture;
+static bool              s_Matching = false;
+static std::mutex        s_MatchMutex;
+
+// =========================
 // 全局变量定义
 // =========================
 std::vector<ROI> gMatchROIs;             // 模板匹配结果
@@ -515,8 +522,147 @@ namespace TemplateMatch
     }
 
     // =========================
-    // 立即应用预处理到图片显示（复选框/滑块变化时调用）
+    // 异步执行：拷贝输入数据，在后台线程运行匹配
     // =========================
+    void RunAsync()
+    {
+        std::lock_guard<std::mutex> lock(s_MatchMutex);
+        if (s_Matching) return;  // 已有任务在执行
+
+        s_Matching = true;
+
+        // 深拷贝所有输入数据（脱离主线程共享状态）
+        cv::Mat imgCopy = gImage.clone();
+        cv::Mat tplCopy;
+        if (!g_FrozenTemplate.empty())
+            tplCopy = g_FrozenTemplate.clone();
+        std::vector<ROI> roisCopy = gROIs;
+
+        // 拷贝所有参数（值类型，无需同步）
+        int    searchMode     = g_TMSearchMode;
+        int    maxResults     = g_TMMaxResults;
+        int    maxImageDim    = g_TMMaxImageDim;
+        float  matchThreshold = g_TMMatchThreshold;
+        bool   enableRotation = g_TMEnableRotation;
+        int    rotStart       = g_TMRotationStart;
+        int    rotEnd         = g_TMRotationEnd;
+        int    rotStep        = g_TMRotationStep;
+        float  nmsThreshold   = g_NmsThreshold;
+        bool   useGray        = gUseGray;
+        bool   pipeThresh     = gPipe.enableThreshold;
+        int    pipeThreshVal  = gPipe.threshold;
+        bool   tplGray        = g_TplGray;
+        bool   tplBinary      = g_TplBinary;
+        int    tplBinThresh   = g_TplBinThresh;
+        bool   tplEdge        = g_TplEdge;
+        int    tplEdgeLow     = g_TplEdgeLow;
+        int    tplEdgeHigh    = g_TplEdgeHigh;
+        int    selectedROI    = gSelectedROI;
+
+        s_MatchFuture = std::async(std::launch::async, [=]() {
+            // 后台线程：临时替换全局变量 → 执行 Run() → 恢复
+            cv::Mat savedImg = gImage;
+            cv::Mat savedTpl = g_FrozenTemplate;
+            auto   savedROIs = gROIs;
+            int    savedSearch = g_TMSearchMode;
+            int    savedMaxRes = g_TMMaxResults;
+            int    savedMaxDim = g_TMMaxImageDim;
+            float  savedThresh = g_TMMatchThreshold;
+            bool   savedRot    = g_TMEnableRotation;
+            int    savedRS     = g_TMRotationStart;
+            int    savedRE     = g_TMRotationEnd;
+            int    savedRStep  = g_TMRotationStep;
+            float  savedNMS    = g_NmsThreshold;
+            bool   savedGray   = gUseGray;
+            bool   savedPTh    = gPipe.enableThreshold;
+            int    savedPTVal  = gPipe.threshold;
+            bool   savedTplG   = g_TplGray;
+            bool   savedTplB   = g_TplBinary;
+            int    savedTplBT  = g_TplBinThresh;
+            bool   savedTplE   = g_TplEdge;
+            int    savedTplEL  = g_TplEdgeLow;
+            int    savedTplEH  = g_TplEdgeHigh;
+            int    savedSelROI = gSelectedROI;
+
+            // 设置线程局部参数
+            gImage = imgCopy;
+            g_FrozenTemplate = tplCopy;
+            gROIs = roisCopy;
+            g_TMSearchMode = searchMode;
+            g_TMMaxResults = maxResults;
+            g_TMMaxImageDim = maxImageDim;
+            g_TMMatchThreshold = matchThreshold;
+            g_TMEnableRotation = enableRotation;
+            g_TMRotationStart = rotStart;
+            g_TMRotationEnd = rotEnd;
+            g_TMRotationStep = rotStep;
+            g_NmsThreshold = nmsThreshold;
+            gUseGray = useGray;
+            gPipe.enableThreshold = pipeThresh;
+            gPipe.threshold = pipeThreshVal;
+            g_TplGray = tplGray;
+            g_TplBinary = tplBinary;
+            g_TplBinThresh = tplBinThresh;
+            g_TplEdge = tplEdge;
+            g_TplEdgeLow = tplEdgeLow;
+            g_TplEdgeHigh = tplEdgeHigh;
+            gSelectedROI = selectedROI;
+
+            // 执行匹配（结果写入 gMatchROIs 等全局变量）
+            Run();
+
+            // 恢复原全局变量（除了结果变量）
+            gImage = savedImg;
+            g_FrozenTemplate = savedTpl;
+            gROIs = savedROIs;
+            g_TMSearchMode = savedSearch;
+            g_TMMaxResults = savedMaxRes;
+            g_TMMaxImageDim = savedMaxDim;
+            g_TMMatchThreshold = savedThresh;
+            g_TMEnableRotation = savedRot;
+            g_TMRotationStart = savedRS;
+            g_TMRotationEnd = savedRE;
+            g_TMRotationStep = savedRStep;
+            g_NmsThreshold = savedNMS;
+            gUseGray = savedGray;
+            gPipe.enableThreshold = savedPTh;
+            gPipe.threshold = savedPTVal;
+            g_TplGray = savedTplG;
+            g_TplBinary = savedTplB;
+            g_TplBinThresh = savedTplBT;
+            g_TplEdge = savedTplE;
+            g_TplEdgeLow = savedTplEL;
+            g_TplEdgeHigh = savedTplEH;
+            gSelectedROI = savedSelROI;
+        });
+    }
+
+    // =========================
+    // 每帧检查异步匹配是否完成
+    // =========================
+    void CheckAsyncResult()
+    {
+        std::lock_guard<std::mutex> lock(s_MatchMutex);
+        if (!s_Matching || !s_MatchFuture.valid())
+            return;
+
+        auto status = s_MatchFuture.wait_for(std::chrono::milliseconds(0));
+        if (status == std::future_status::ready)
+        {
+            s_MatchFuture.get();
+            s_Matching = false;
+        }
+    }
+
+    // =========================
+    // 是否正在执行异步匹配
+    // =========================
+    bool IsMatching()
+    {
+        std::lock_guard<std::mutex> lock(s_MatchMutex);
+        return s_Matching;
+    }
+
     void ApplyPreprocessDisplay()
     {
         if (gImage.empty()) return;
@@ -741,13 +887,15 @@ namespace TemplateMatch
     void ShowWindow()
     {
         if (!g_ShowTemplateMatch) return;
-        // 延迟执行：先渲染"匹配中..."再跑 Run()，避免 UI 假死无反馈
+
+        // 每帧检查异步匹配完成
+        CheckAsyncResult();
+
+        // 延迟执行：异步启动匹配，避免 UI 假死
         if (g_PendingMatch)
         {
             g_PendingMatch = false;
-            OutputDebugStringA("TEMPLATE_MATCH: Run() begin\n");
-            Run();
-            OutputDebugStringA("TEMPLATE_MATCH: Run() end\n");
+            RunAsync();
         }
         ImGui::SetNextWindowSize(ImVec2(380, 620), ImGuiCond_FirstUseEver);
         if (ImGui::Begin("模板匹配调试", &g_ShowTemplateMatch))  //,ImGuiWindowFlags_NoDocking  禁止停靠窗口
@@ -942,14 +1090,16 @@ namespace TemplateMatch
             // =========================
             // 执行按钮
             // =========================
-            if (g_PendingMatch)
+            bool matching = IsMatching();
+            if (matching)
             {
                 ImGui::TextColored(ImVec4(1, 0.8f, 0, 1), "正在匹配，请稍候...");
             }
 
             if (ImGui::Button("执行匹配", ImVec2(-1, 36)))
             {
-                g_PendingMatch = true;  // 下一帧执行，本帧先显示提示
+                if (!matching)
+                    g_PendingMatch = true;  // 下一帧执行，本帧先显示提示
             }
 
             ImGui::SameLine();

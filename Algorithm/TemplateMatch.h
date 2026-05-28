@@ -49,8 +49,17 @@ extern bool   g_ShowPreview;
 // =====================================================
 namespace TemplateMatch
 {
-    // 执行模板匹配（使用当前参数）
+    // 执行模板匹配（使用当前参数，同步阻塞）
     void Run();
+
+    // 异步执行（后台线程，结果在 CheckAsyncResult 中取回）
+    void RunAsync();
+
+    // 每帧调用：检查异步匹配是否完成
+    void CheckAsyncResult();
+
+    // 是否正在执行异步匹配
+    bool IsMatching();
 
     // 显示调试窗口（模板预览 + 参数调节 + 执行）
     void ShowWindow();

@@ -166,6 +166,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		ThresholdTool::ShowThresholdWindow();  // 阈值调试/图像处理窗口
 		TemplateMatch::ShowWindow();           // 模板匹配调试窗口
 		TemplateMatch::ShowTemplateEditor();   // 模板编辑弹窗
+		TemplateMatch::CheckAsyncResult();    // 收尾异步匹配结果（窗口关闭时也能完成）
 
 		// ----- 6.4 渲染 Dear ImGui 绘制数据 -----
 		ImGui::Render();
@@ -178,10 +179,17 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		g_pd3dCommandList->Reset(frameCtx->CommandAllocator, nullptr);
 
 		// =========================
+		// ⭐ 视频/摄像头帧更新（在GPU上传之前）
+		// =========================
+		VideoCapture::Update();
+
+		// =========================
 		// ⭐ 处理图片加载请求 + 异步加载调度
 		// =========================
 		if (!pendingPath.empty())
 		{
+			// 加载新图片时关闭视频/摄像头
+			VideoCapture::Close();
 			uploadRequest = pendingPath;
 			pendingPath.clear();
 			requestLoadImage = true;
@@ -285,6 +293,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
 	// ===== 清理阶段：等待GPU完成，释放所有资源 =====
 	WaitForPendingOperations();
+
+	// 关闭视频/音频资源（先于 ImGui 销毁）
+	VideoCapture::Close();
+
 	ImGui_ImplDX12_Shutdown();
 	ImGui_ImplWin32_Shutdown();
 	ImGui::DestroyContext();

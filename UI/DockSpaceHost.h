@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <vector>
 #include <opencv2/core/mat.hpp>
+#include "../imgui/imgui.h"
 #include "../Core/DX12Context.h"
 
 // =====================================================

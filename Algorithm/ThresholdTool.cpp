@@ -213,8 +213,16 @@ namespace ThresholdTool
             changed |= ImGui::SliderInt("低阈值", &gPipe.cannyLow, 0, 255);
             changed |= ImGui::SliderInt("高阈值", &gPipe.cannyHigh, 0, 255);
 
+            // 防抖：拖动滑块时等3帧再执行，避免每帧都跑完整管线
+            static int debounceFrames = 0;
             if (changed)
-                ApplyProcess();
+                debounceFrames = 3;
+            if (debounceFrames > 0)
+            {
+                debounceFrames--;
+                if (debounceFrames == 0)
+                    ApplyProcess();
+            }
 
             // =========================
             // 显示当前参数值
