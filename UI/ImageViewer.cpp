@@ -4,6 +4,7 @@
 #include "../Core/OpenFileDialog.h"
 #include "../Core/DX12Context.h"
 #include "../Core/VideoCapture.h"
+#include "../Algorithm/YOLODetector.h"
 #include "../Log/LogSystem.h"
 
 extern std::string pendingPath;
@@ -21,6 +22,10 @@ int    g_GridStep      = 1;    // 坐标网格步长（图片像素）
 // 图片列表浏览状态
 std::vector<std::string> gImageList;
 int                      gCurrentImageIndex = -1;
+
+// YOLO 检测状态
+static std::vector<DetectedObject> s_YOLOResults;
+static bool s_YOLOShowResults = false;
 
 namespace UI
 {
@@ -71,6 +76,68 @@ namespace UI
 			VideoCapture::OpenCamera(0);
 		}
 		ImGui::SameLine();
+
+		// --- YOLO 检测按钮组 ---
+		if (ImGui::Button("加载YOLO"))
+		{
+			std::string onnxPath = OpenFileDialog();
+			if (!onnxPath.empty())
+			{
+				std::string dir = onnxPath.substr(0, onnxPath.find_last_of("\\/") + 1);
+				std::string classesPath = dir + "classes.txt";
+				if (!YOLODetector::LoadModel(onnxPath, classesPath))
+				{
+					std::string txtPath = OpenFileDialog();
+					if (!txtPath.empty())
+						YOLODetector::LoadModel(onnxPath, txtPath);
+				}
+			}
+		}
+		ImGui::SameLine();
+
+		bool yoloLoaded = YOLODetector::IsLoaded();
+		if (!yoloLoaded) ImGui::BeginDisabled();
+		if (ImGui::Button("YOLO检测"))
+		{
+			if (!gImage.empty())
+			{
+				// 如果有选中的 ROI，限定检测区域
+				cv::Rect roi;
+				if (gSelectedROI >= 0 && gSelectedROI < (int)gROIs.size())
+				{
+					const ROI& r = gROIs[gSelectedROI];
+					roi = cv::Rect(
+						(int)r.start.x, (int)r.start.y,
+						(int)(r.end.x - r.start.x), (int)(r.end.y - r.start.y));
+				}
+				s_YOLOResults = YOLODetector::Detect(gImage, 0.4f, 0.45f, roi);
+				s_YOLOShowResults = true;
+				LogSystem::Add(LOG_INFO, color, "YOLO 检测完成: %zu 个目标", s_YOLOResults.size());
+
+				// 在 gOriginalImage 上绘制 → 重新上传 GPU
+				cv::Mat display = gImage.clone();
+				YOLODetector::DrawDetections(display, s_YOLOResults);
+				cv::Mat rgba;
+				int ch = display.channels();
+				if (ch == 4)      cv::cvtColor(display, rgba, cv::COLOR_BGRA2RGBA);
+				else if (ch == 3) cv::cvtColor(display, rgba, cv::COLOR_BGR2RGBA);
+				else              cv::cvtColor(display, rgba, cv::COLOR_GRAY2RGBA);
+				gPendingUpload = rgba;
+				gNeedUpload = true;
+			}
+		}
+		if (!yoloLoaded) ImGui::EndDisabled();
+		ImGui::SameLine();
+
+		// 显示/隐藏检测结果
+		if (s_YOLOShowResults && ImGui::SmallButton("清除检测"))
+		{
+			s_YOLOResults.clear();
+			s_YOLOShowResults = false;
+			gNeedUpload = true; // 刷新显示
+		}
+		ImGui::SameLine();
+
 		// 像素网格开关（放大后显示像素格子）
 		if (gZoom >= 3.0f)
 		{
