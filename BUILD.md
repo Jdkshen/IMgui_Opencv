@@ -21,9 +21,11 @@
 | 目录 | 内容 | 用途 |
 |------|------|------|
 | `include/opencv/` | OpenCV 头文件 | 编译时 |
-| `redist/` | OpenCV .lib + .dll + VC++ 运行时 | 链接 + 运行时 |
-| `imgui/` | Dear ImGui 源码 | 编译时 |
-| `DirectX-Headers-main/` | DX12 辅助头文件（d3dx12.h） | 编译时 |
+| `include/onnxruntime/` | ONNX Runtime C++ API 头文件 | 编译时 |
+| `include/directx/` | DX12 辅助头文件（d3dx12.h） | 编译时 |
+| `include/nlohmann/` | JSON 库 | 编译时 |
+| `redist/` | OpenCV + ONNX Runtime .lib + .dll + VC++ 运行时 | 链接 + 运行时 |
+| `models/` | YOLO11 ONNX 模型 | 运行时（自动复制） |
 | `assets/fonts/` | 中文字体 | 运行时（自动复制） |
 | `assets/images/` | 测试图片 | 运行时（自动复制） |
 
@@ -52,15 +54,15 @@
 ```
 IMgui_Opencv/
 ├── assets/                     # 资源文件（自动复制到输出）
-├── Core/                       # DX12 上下文、图片加载、文件对话框、主题、配方
-├── UI/                         # DockSpace、图像预览、ROI 管理
-├── Algorithm/                  # 阈值处理管线、模板匹配
+├── Core/                       # DX12 上下文、图片/视频/音频加载、文件对话框、主题、配方
+├── UI/                         # DockSpace、图像预览、ROI 管理、日志、侧边栏、统计、工具
+├── Algorithm/                  # YOLO 检测（ONNX Runtime）、阈值处理、模板匹配
 ├── Renderer/                   # 字体管理
 ├── Log/                        # 线程安全日志系统
 ├── imgui/                      # Dear ImGui 库（第三方）
-├── DirectX-Headers-main/       # DX12 辅助头文件（第三方）
-├── include/opencv/              # OpenCV 头文件（第三方）
-├── redist/                     # OpenCV + VC++ lib/dll（第三方）
+├── include/                    # 第三方头文件（DX12/OpenCV/ONNX Runtime/nlohmann）
+├── redist/                     # OpenCV + ONNX Runtime + VC++ 运行时
+├── models/                     # 预训练模型（YOLO11）
 └── Windows_imgui.slnx          # VS2022 解决方案
 ```
 

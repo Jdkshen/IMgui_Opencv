@@ -17,9 +17,9 @@ IMgui_Opencv/
 │   ├── OpenCVTest.cpp/h        ←   图片读取 + GPU 纹理上传
 │   ├── AsyncImageLoader.cpp/h  ←   异步图片加载（后台线程 + 回调）
 │   ├── OpenFileDialog.cpp/h    ←   文件/文件夹选择对话框
-│   ├── VideoCapture.cpp/h      ←   视频/摄像头播放
+│   ├── VideoCapture.cpp/h      ←   视频/摄像头播放（cv::VideoCapture）
 │   ├── AudioPlayer.cpp/h       ←   XAudio2 + Media Foundation 音频播放
-│   ├── ThemeManager.cpp/h      ←   主题切换（夜间/白天）
+│   ├── ThemeManager.cpp/h      ←   主题切换（夜间/白天）+ theme.cfg 持久化
 │   └── RecipeManager.cpp/h     ←   配方保存/加载（JSON，支持工具实例序列化）
 │
 ├── UI/                         ← 界面模块
@@ -32,7 +32,7 @@ IMgui_Opencv/
 │   └── ROIManager.cpp/h        ←   ROI 数据结构 + 交互 + 坐标转换
 │
 ├── Algorithm/                  ← 图像算法
-│   ├── YOLODetector.cpp/h       ←   YOLO 目标检测（OpenCV DNN）
+│   ├── YOLODetector.cpp/h      ←   YOLO 目标检测（ONNX Runtime 推理）
 │   ├── TemplateMatch.cpp/h     ←   模板匹配（多方法/旋转/NMS）
 │   └── ThresholdTool.cpp/h     ←   图像处理管线（灰度/模糊/Canny/二值化）
 │
@@ -43,9 +43,19 @@ IMgui_Opencv/
 │   └── LogSystem.cpp/h         ←   线程安全日志（颜色/时间戳/2000条上限）
 │
 ├── imgui/                      ← 第三方：Dear ImGui 1.92.8
-├── DirectX-Headers-main/       ← 第三方：DX12 辅助头文件（d3dx12.h）
-├── include/opencv/             ← 第三方：OpenCV 头文件
-├── redist/                     ← 第三方：OpenCV + VC++ 库与 DLL
+├── include/                    ← 第三方头文件
+│   ├── directx/                ←   DX12 辅助头文件（d3dx12.h 等）
+│   ├── opencv/                 ←   OpenCV 头文件
+│   ├── onnxruntime/            ←   ONNX Runtime C++ API
+│   ├── nlohmann/               ←   JSON 库（nlohmann/json.hpp）
+│   ├── dxguids/                ←   DX GUID 定义
+│   └── wsl/                    ←   WSL 辅助头
+├── redist/                     ← 第三方：运行时 DLL + .lib
+│   ├── opencv_world4120*.dll   ←   OpenCV 运行时
+│   ├── onnxruntime*.dll        ←   ONNX Runtime 运行时
+│   └── vc*140*.dll             ←   VC++ 运行时
+├── models/                     ← 预训练模型
+│   └── yolo11n.onnx            ←   YOLO11 Nano ONNX 模型
 │
 ├── Windows_imgui.cpp           ← 程序入口 + 主循环 + 窗口消息处理
 ├── Windows_imgui.h             ← 公共头文件汇总
@@ -94,7 +104,7 @@ wWinMain()
 | 图像处理 | 灰度化、高斯模糊、二值化、Canny 边缘检测 |
 | ROI 管理 | 交互式创建/选中/拖动/缩放/删除感兴趣区域，多类型颜色区分 |
 | 模板匹配 | 多实例模板匹配，旋转/NMS/阈值，结果可视化 |
-| YOLO 检测 | OpenCV DNN 推理 YOLOv8 ONNX，支持 ROI 限定区域，NMS 后处理 |
+| YOLO 检测 | ONNX Runtime 推理 YOLO11 ONNX 模型，支持 ROI 限定区域，NMS 后处理 |
 | 工具实例 | 手风琴式工具面板，每实例独立参数（模板/ROI/角度/预处理） |
 | 批量执行 | 全部执行（逐帧高亮当前实例）+ 单步执行（点击推进） |
 | 配方系统 | 保存/加载全部工具实例参数、模板图片、搜索ROI（JSON） |

@@ -49,7 +49,9 @@
               │  ├─ ShowStatsWindow  │
               │  ├─ ShowOpenCV       │
               │  ├─ ShowToolsWindow  │
-              │  └─ ShowThresholdWin │
+              │  ├─ ShowThresholdWin │
+              │  ├─ TemplateMatch    │
+              │  └─ YOLODetector     │
               └──────────────────────┘
                           │
                           ▼
@@ -74,6 +76,8 @@
 | `Core/DX12Context.h/cpp` | **DX12 全局变量 + 初始化** | `gDevice`, `gTexture`, `gSrvCpuHandle`, `InitDX12Context()` |
 | `Core/OpenCVTest.h/cpp` | **OpenCV图片读取 + GPU上传** | `TestReadImage()`, `UploadToDX12()`, 延迟释放队列 |
 | `Core/AsyncImageLoader.h/cpp` | **异步图片加载** | `RequestLoad()`, `CheckAndProcess()` 后台解码+主线程回调 |
+| `Core/VideoCapture.h/cpp` | **视频/摄像头播放** | OpenCV cv::VideoCapture，播放/暂停/跳帧/FPS |
+| `Core/AudioPlayer.h/cpp` | **音频播放** | XAudio2 + Media Foundation，与视频同步 |
 | `Core/OpenFileDialog.h/cpp` | **文件选择对话框** | `OpenFileDialog()` `OpenFolderDialog()` `ScanImageFiles()` |
 | `Core/ThemeManager.h/cpp` | **主题管理** | 夜间/白天切换, theme.cfg 持久化 |
 | `Core/RecipeManager.h/cpp` | **配方系统** | JSON 保存/加载阈值+匹配+ROI 参数 |
@@ -82,12 +86,13 @@
 | `UI/Sidebar.h/cpp` | **侧边栏** | ROI 类型切换、快捷操作、自定义日志 |
 | `UI/StatsWindow.h/cpp` | **性能统计窗口** | FPS、帧耗时、渲染信息 |
 | `UI/ToolsWindow.h/cpp` | **功能窗口** | 手风琴工具列表 + 全部/单步/循环执行 |
-| `UI/ImageViewer.h/cpp` | **图像显示** | 缩放/平移/图片列表导航 |
+| `UI/ImageViewer.h/cpp` | **图像/视频显示** | 缩放/平移/图片列表导航/视频控制栏 |
 | `UI/ROIManager.h/cpp` | **ROI 交互管理** | 画框/拖拽/控制点/坐标转换 |
-| `Renderer/FontManager.h/cpp` | **字体管理** | 加载 simhei.ttf / msyh.ttc 中文字体 |
+| `Renderer/FontManager.h/cpp` | **字体管理** | 加载 simsun.ttc 中文字体 |
 | `Log/LogSystem.h/cpp` | **线程安全日志系统** | 3级日志(INFO/WARN/ERROR), 颜色, 时间戳, 2000条上限 |
 | `Algorithm/ThresholdTool.h/cpp` | **图像处理管线** | 灰度→模糊→二值化/Canny→RGBA上传, 性能计时 |
 | `Algorithm/TemplateMatch.h/cpp` | **模板匹配** | 多方法模板匹配、旋转匹配、结果绘制 |
+| `Algorithm/YOLODetector.h/cpp` | **YOLO 目标检测** | ONNX Runtime 推理 YOLO11，ROI 限定区域，NMS 后处理 |
 
 ---
 
@@ -563,8 +568,8 @@ struct LogItem {
 ```
 InitFonts(dpi_scale):
   ① 通过 GetModuleFileName 获取 exe 所在目录
-  ② 尝试加载 exe目录/simhei.ttf:
-     io.Fonts->AddFontFromFileTTF(exeDir+"simhei.ttf", 18.0f,
+  ② 尝试加载 exe目录/simsun.ttc:
+     io.Fonts->AddFontFromFileTTF(exeDir+"simsun.ttc", 18.0f,
        nullptr, io.Fonts->GetGlyphRangesChineseFull())
   ③ 失败 → 尝试 C:/Windows/Fonts/msyh.ttc（系统微软雅黑）
   ④ 全部失败 → 使用默认字体
@@ -672,7 +677,70 @@ t6 ── 完成          → gTimeTotal = t6 - t0
 
 ---
 
-## 四、数据流全景图
+### 3.9 YOLO 目标检测 — `Algorithm/YOLODetector.h/cpp`
+
+#### 3.9.1 架构
+
+基于 **ONNX Runtime** 进行 YOLO11 模型推理，支持手动 DLL 加载避免静态初始化问题。
+
+```
+YOLODetector 命名空间
+  ├── LoadModel(onnxPath, classesPath)   ← 加载 ONNX + 类别
+  ├── IsLoaded()                         ← 检查就绪状态
+  ├── Detect(image, conf, nms, roi)      ← 执行推理
+  ├── DrawDetections(image, objs)        ← 绘制结果
+  └── Unload()                           ← 释放资源
+
+全局状态（延迟初始化指针）:
+  s_OrtDll      → LoadLibrary("onnxruntime.dll")
+  s_Env         → Ort::Env（ORT 环境）
+  s_Session     → Ort::Session（模型会话）
+  s_Allocator   → Ort::AllocatorWithDefaultOptions
+  s_MemInfo     → Ort::MemoryInfo（CPU 内存信息）
+```
+
+#### 3.9.2 推理流程
+
+```
+Detect(image, confThreshold, nmsThreshold, roi)
+  │
+  ├── ① ROI 裁剪 + 预处理
+  │     Preprocess(image, roi)
+  │       → cv::dnn::blobFromImage(1/255, 640×640, RGB)
+  │
+  ├── ② ONNX Runtime 推理
+  │     Ort::Value::CreateTensor<float>(blob)
+  │     → s_Session->Run(inNames, &input, 1, outNames, 1)
+  │
+  ├── ③ 后处理
+  │     Postprocess(data, shape, conf, nms, roi)
+  │       → 解析 cx/cy/w/h + 类别置信度
+  │       → cv::dnn::NMSBoxes() 去重
+  │       → 坐标映射回原始图像
+  │
+  └── ④ 返回 std::vector<DetectedObject>
+```
+
+#### 3.9.3 DetectedObject 结构
+
+```cpp
+struct DetectedObject {
+    cv::Rect box;           // 检测框（图像坐标）
+    int   classId   = -1;   // 类别 ID
+    float confidence = 0.0f; // 置信度
+    std::string className;   // 类别名称（80类 COCO）
+};
+```
+
+#### 3.9.4 类别系统
+
+未提供类别文件时自动使用 COCO 80 类默认名称（person, bicycle, car, ... toothbrush）。
+
+#### 3.9.5 绘制
+
+`DrawDetections()` 使用 12 色调色板按类别着色，标签显示 `类别名 置信度 (cx,cy)`，字体大小和线宽随图像尺寸自适应缩放。
+
+---
 
 ```
 ┌─────────────┐    选择图片    ┌─────────────┐
@@ -740,7 +808,7 @@ t6 ── 完成          → gTimeTotal = t6 - t0
 | 开发工具 | Visual Studio 2022 |
 | C++ 标准 | C++20 |
 | 图形 API | DirectX 12 |
-| 第三方依赖 | 全部包含在项目中（OpenCV 头文件/库/DLL、ImGui、DX12 辅助头文件） |
+| 第三方依赖 | 全部包含在项目中（OpenCV / ONNX Runtime / ImGui / DX12 辅助头文件） |
 
 ### 5.2 构建步骤
 
@@ -757,9 +825,10 @@ t6 ── 完成          → gTimeTotal = t6 - t0
 
 以下文件自动与 exe 同目录（无需手动拷贝）：
 
-- `simhei.ttf` — 中文字体（PostBuild 自动复制）
-- `opencv_world4120.dll` — 运行时需放在 exe 同目录（从 `redist/` 拷贝）
-- `test.jpg` — 测试图片（PostBuild 自动复制）
+- `simsun.ttc` — 中文字体（PostBuild 自动复制）
+- `opencv_world4120*.dll` — OpenCV 运行时
+- `onnxruntime*.dll` — ONNX Runtime 运行时
+- `yolo11n.onnx` — YOLO11 模型（PostBuild 自动复制到 models/）
 
 ---
 
