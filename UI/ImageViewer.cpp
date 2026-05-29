@@ -4,6 +4,7 @@
 #include "../Core/OpenFileDialog.h"
 #include "../Core/DX12Context.h"
 #include "../Core/VideoCapture.h"
+#include "../Algorithm/YOLODetector.h"
 #include "../Log/LogSystem.h"
 
 extern std::string pendingPath;
@@ -21,6 +22,10 @@ int    g_GridStep      = 1;    // 坐标网格步长（图片像素）
 // 图片列表浏览状态
 std::vector<std::string> gImageList;
 int                      gCurrentImageIndex = -1;
+
+// YOLO 检测状态
+static std::vector<DetectedObject> s_YOLOResults;
+static bool s_YOLOShowResults = false;
 
 namespace UI
 {
@@ -71,7 +76,6 @@ namespace UI
 			VideoCapture::OpenCamera(0);
 		}
 		ImGui::SameLine();
-
 		// 像素网格开关（放大后显示像素格子）
 		if (gZoom >= 3.0f)
 		{
