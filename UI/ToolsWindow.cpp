@@ -39,215 +39,240 @@ void ShowToolsWindow()
 
     ImGui::Separator();
 
-    // ---- 全部执行 逐帧状态机（批量/单步共用） ----
-    static int  g_BatchRunIndex   = -1;   // 批量执行当前索引
-    static int  g_StepRunIndex    = -1;   // 单步执行索引（-1=空闲）
-    static int  g_StepCursor      = 0;    // 单步进度（持久，不随帧重置）
-    static bool g_LoopMode        = false; // 循环执行模式
-    static int  g_SwitchDelay     = 0;     // 切换图片/循环等待帧数
-    static float g_StepTime       = 0.0f;  // 上一步耗时
-    static auto g_BatchStartTime  = std::chrono::high_resolution_clock::now();
-    static float g_BatchTotalTime = 0.0f;
-    static cv::Mat g_BatchOriginalImage;  // 备份原始图，每实例恢复
-    static bool g_BatchImageDirty  = false; // 图片被修改标记（避免无效clone）
+    // =====================================================
+    // 执行状态机 — 枚举驱动，所有模式统一管理
+    // =====================================================
+    enum class ExecMode : int {
+        Idle,            // 空闲
+        BatchRunning,    // 全部执行进行中（每帧一个工具）
+        StepRunning,     // 单步执行中
+        DelayForResult,  // 等待结果展示（批量完成后短暂停留）
+        DelayForLoad,    // 等待图片加载（切换图片后）
+    };
 
-    // 每帧执行一个工具实例（渲染之前执行，确保本帧能看到高亮）
-    int execIdx = (g_BatchRunIndex >= 0) ? g_BatchRunIndex : g_StepRunIndex;
+    struct ExecState {
+        ExecMode     mode       = ExecMode::Idle;
+        int          execIndex  = -1;     // 当前执行的工具索引
+        int          stepCursor = 0;      // 单步进度 (0=空闲, 1..N=下一步)
+        int          delayRemain = 0;     // 延时剩余帧数
+        bool         loopMode   = false;
+        bool         imageDirty = false;
+        float        stepTimeMs = 0;
+        float        batchTotalMs = 0;
+        cv::Mat      originalImage;       // 批量/单步开始时的原始图备份
+        decltype(std::chrono::high_resolution_clock::now()) batchStart;
+    };
+    static ExecState st;
 
-    // 切换图片/循环前的等待延迟（让用户看清结果）
-    if (execIdx < 0 && g_SwitchDelay > 0)
+    // 辅助：恢复原始图到显示
+    auto RestoreOriginal = []() {
+        if (!st.originalImage.empty() && !gNeedUpload) {
+            gImage = st.originalImage.clone();
+            if (gImage.empty()) return;
+            cv::Mat rgba;
+            if (gImage.channels() == 1)      cv::cvtColor(gImage, rgba, cv::COLOR_GRAY2RGBA);
+            else if (gImage.channels() == 3) cv::cvtColor(gImage, rgba, cv::COLOR_BGR2RGBA);
+            else                              cv::cvtColor(gImage, rgba, cv::COLOR_BGRA2RGBA);
+            gPendingUpload = rgba;
+            gNeedUpload = true;
+        }
+    };
+
+    // ========== 状态机：每帧 tick ==========
+    if (st.mode == ExecMode::DelayForResult || st.mode == ExecMode::DelayForLoad)
     {
-        g_SwitchDelay--;
-        // 第一段延迟：显示结果停留
-        if (g_SwitchDelay <= 0 && g_BatchRunIndex != -2)
+        // --- 延时状态：倒计时 ---
+        if (--st.delayRemain > 0) {
+            // 还在等，什么也不做
+        }
+        else if (st.mode == ExecMode::DelayForResult)
         {
             bool hasNext = (!gImageList.empty() && gCurrentImageIndex >= 0 &&
                 gCurrentImageIndex < (int)gImageList.size() - 1);
             if (hasNext) {
                 NavigateNextImage();
                 FitImageToWindow();
-                g_SwitchDelay = 10;      // 第二段延迟：等图片加载
-                g_BatchRunIndex = -2;
-            } else if (g_LoopMode) {
-                g_BatchRunIndex = 0;
-                g_BatchStartTime = std::chrono::high_resolution_clock::now();
-                g_BatchOriginalImage = gImage.clone();
+                st.mode = ExecMode::DelayForLoad;
+                st.delayRemain = 10;
+            }
+            else if (st.loopMode) {
+                st.mode = ExecMode::BatchRunning;
+                st.execIndex = 0;
+                st.imageDirty = false;
+                st.originalImage = gImage.clone();
+                st.batchStart = std::chrono::high_resolution_clock::now();
+            }
+            else {
+                st.mode = ExecMode::Idle;
             }
         }
-        // 第二段延迟：图片加载完后启动批量
-        else if (g_BatchRunIndex == -2 && g_SwitchDelay <= 0 && !gImage.empty())
+        else // DelayForLoad
         {
-            g_BatchRunIndex = 0;
-            g_BatchStartTime = std::chrono::high_resolution_clock::now();
-            g_BatchOriginalImage = gImage.clone();
+            if (!gImage.empty()) {
+                st.mode = ExecMode::BatchRunning;
+                st.execIndex = 0;
+                st.imageDirty = false;
+                st.originalImage = gImage.clone();
+                st.batchStart = std::chrono::high_resolution_clock::now();
+            }
+            else {
+                // 图片还没加载好，再等
+                st.delayRemain = 5;
+            }
         }
-        execIdx = -2;
     }
-
-    if (execIdx >= 0 && execIdx < (int)g_ToolInstances.size())
+    else if (st.mode == ExecMode::BatchRunning || st.mode == ExecMode::StepRunning)
     {
-        auto stepT0 = std::chrono::high_resolution_clock::now();
-        // 仅在上一工具修改了图片时才恢复（避免无效 clone）
-        if (g_BatchImageDirty && !g_BatchOriginalImage.empty())
+        // --- 运行状态：执行当前工具 ---
+        if (st.execIndex < 0 || st.execIndex >= (int)g_ToolInstances.size()) {
+            st.mode = ExecMode::Idle;
+        }
+        else if (gImage.empty())
         {
-            g_BatchOriginalImage.copyTo(gImage);  // 复用内存
-            g_BatchImageDirty = false;
+            LogSystem::Add(LOG_WARN, "执行中止：未加载图片");
+            st.mode = ExecMode::Idle;
         }
-
-        int t = g_ToolInstances[execIdx].type;
-        auto& it = g_ToolInstances[execIdx];
-        const char* modeLabel = (g_BatchRunIndex >= 0) ? "[全部执行]" : "[单步执行]";
-        LogSystem::Add(LOG_INFO, color, "%s %d/%zu: %s",
-            modeLabel, execIdx + 1, g_ToolInstances.size(), kToolNames[t]);
-        if (t == 0) // 边缘检测：同步实例参数 → ApplyProcess
+        else
         {
-            gCannyLow = it.cannyLow; gCannyHigh = it.cannyHigh;
-            gUseGray = it.edgeUseGray;
-            gPipe.enableCanny = true; gPipe.enableThreshold = false;
-            gPipe.cannyLow = it.cannyLow; gPipe.cannyHigh = it.cannyHigh;
-            ThresholdTool::ApplyProcess();
-        }
-        else if (t == 1) { // 模板匹配：同步全部参数 + 图像预处理 + Run
-            g_TMEnableRotation = it.enableRotation;
-            g_TMRotationStart  = it.rotationStart;
-            g_TMRotationEnd    = it.rotationEnd;
-            g_TMRotationStep   = it.rotationStep;
-            g_TMMaxResults     = it.maxResults;
-            g_TMMatchThreshold = it.matchThreshold;
-            g_TMMaxImageDim    = it.maxImageDim;
-            g_NmsThreshold     = it.nmsThreshold;
-            g_TMSearchMode     = it.searchMode;
-            g_TplGray          = it.tplGray;
-            g_TplBinary        = it.tplBinary;
-            g_TplBinThresh     = it.tplBinThresh;
-            g_TplEdge          = it.tplEdge;
-            g_TplEdgeLow       = it.tplEdgeLow;
-            g_TplEdgeHigh      = it.tplEdgeHigh;
+            auto stepT0 = std::chrono::high_resolution_clock::now();
 
-            // 图像预处理：灰度/二值化 gImage（批量模式）
-            bool didPreprocess = false;
-            if (it.imgUseGray || it.imgEnableThreshold)
-            {
-                if (it.imgUseGray && gImage.channels() > 1)
-                {
-                    int code = (gImage.channels() == 4) ? cv::COLOR_BGRA2GRAY : cv::COLOR_BGR2GRAY;
-                    cv::cvtColor(gImage, gImage, code);
-                }
-                if (it.imgEnableThreshold)
-                {
-                    if (gImage.channels() > 1)
-                        cv::cvtColor(gImage, gImage, cv::COLOR_BGR2GRAY);
-                    cv::threshold(gImage, gImage, it.imgThreshold, 255, cv::THRESH_BINARY);
-                }
-                cv::Mat rgba;
-                if (gImage.channels() == 1) cv::cvtColor(gImage, rgba, cv::COLOR_GRAY2RGBA);
-                else if (gImage.channels() == 3) cv::cvtColor(gImage, rgba, cv::COLOR_BGR2RGBA);
-                else cv::cvtColor(gImage, rgba, cv::COLOR_BGRA2RGBA);
-                gPendingUpload = rgba;
-                gNeedUpload = true;
-                didPreprocess = true;
+            // 恢复原始图（如上一工具修改过）
+            if (st.imageDirty && !st.originalImage.empty()) {
+                st.originalImage.copyTo(gImage);
+                st.imageDirty = false;
             }
-            gUseGray           = didPreprocess ? false : it.imgUseGray;
-            gPipe.enableThreshold = didPreprocess ? false : it.imgEnableThreshold;
-            gPipe.threshold    = it.imgThreshold;
 
-            g_FrozenTemplate = it.templateImg;
-            if (!it.searchROIs.empty())
-                gROIs = it.searchROIs;
-            TemplateMatch::Run();
-            g_BatchImageDirty = didPreprocess;  // 记录图片是否被修改
-        }
-        else if (t == 2) { LogSystem::Add(LOG_INFO, color, "Blob分析: 执行完成"); } // Blob分析（占位）
-        else if (t == 3) { // 阈值调试：同步参数 → ApplyProcess
-            gUseGray = it.dbgUseGray;
-            gPipe.enableBlur = it.dbgEnableBlur; gPipe.blurSize = it.dbgBlurSize;
-            gPipe.enableThreshold = it.dbgEnableThresh; gPipe.threshold = it.dbgThreshold;
-            gPipe.enableCanny = it.dbgEnableCanny;
-            gPipe.cannyLow = it.dbgCannyLow; gPipe.cannyHigh = it.dbgCannyHigh;
-            ThresholdTool::ApplyProcess();
-        }
-        else if (t == 4) { // YOLO检测
-            if (!YOLODetector::IsLoaded() && !it.yoloModelPath.empty())
-                YOLODetector::LoadModel(it.yoloModelPath, it.yoloClassesPath);
-            if (YOLODetector::IsLoaded())
+            int t = g_ToolInstances[st.execIndex].type;
+            auto& it = g_ToolInstances[st.execIndex];
+            const char* modeLabel = (st.mode == ExecMode::BatchRunning) ? "[全部执行]" : "[单步执行]";
+            LogSystem::Add(LOG_INFO, color, "%s %d/%zu: %s",
+                modeLabel, st.execIndex + 1, g_ToolInstances.size(), kToolNames[t]);
+
+            // ===== 工具执行（与重构前完全相同）=====
+            if (t == 0) // 边缘检测
             {
-                cv::Rect roi;
-                if (it.yoloUseROI && !gROIs.empty())
-                {
-                    int ri = (gSelectedROI >= 0 && gSelectedROI < (int)gROIs.size()) ? gSelectedROI : 0;
-                    auto& fr = gROIs[ri];
-                    int x = (int)std::min(fr.start.x, fr.end.x);
-                    int y = (int)std::min(fr.start.y, fr.end.y);
-                    int w = (int)std::abs(fr.end.x - fr.start.x);
-                    int h = (int)std::abs(fr.end.y - fr.start.y);
-                    roi = cv::Rect(x, y, w, h);
-                }
-                auto objs = YOLODetector::Detect(gImage, it.yoloConfThreshold, it.yoloNmsThreshold, roi);
-                LogSystem::Add(LOG_INFO, color, "YOLO检测: 发现 %zu 个目标", objs.size());
-                for (const auto& o : objs)
-                {
-                    LogSystem::Add(LOG_INFO, ImVec4(0,1,0.5f,1),
-                        "  %s %.2f [%d,%d %dx%d]",
-                        o.className.c_str(), o.confidence,
-                        o.box.x, o.box.y, o.box.width, o.box.height);
-                }
-                // 绘制结果到图像
-                cv::Mat drawImg = gImage.clone();
-                YOLODetector::DrawDetections(drawImg, objs, true);
-                cv::Mat rgba;
-                if (drawImg.channels() == 1) cv::cvtColor(drawImg, rgba, cv::COLOR_GRAY2RGBA);
-                else if (drawImg.channels() == 3) cv::cvtColor(drawImg, rgba, cv::COLOR_BGR2RGBA);
-                else cv::cvtColor(drawImg, rgba, cv::COLOR_BGRA2RGBA);
-                gPendingUpload = rgba;
-                gNeedUpload = true;
-                g_BatchImageDirty = true;
+                gCannyLow = it.cannyLow; gCannyHigh = it.cannyHigh;
+                gUseGray = it.edgeUseGray;
+                gPipe.enableCanny = true; gPipe.enableThreshold = false;
+                gPipe.cannyLow = it.cannyLow; gPipe.cannyHigh = it.cannyHigh;
+                ThresholdTool::ApplyProcess();
             }
-            else
+            else if (t == 1) // 模板匹配
             {
-                LogSystem::Add(LOG_WARN, "YOLO: 模型未加载，请先设置模型路径");
-            }
-        }
-        // 推进索引：批量自动+1，单步由按钮控制
-        if (g_BatchRunIndex >= 0)
-        {
-            g_BatchRunIndex++;
-            if (g_BatchRunIndex >= (int)g_ToolInstances.size())
-            {
-                auto t1 = std::chrono::high_resolution_clock::now();
-                g_BatchTotalTime = std::chrono::duration<float, std::milli>(t1 - g_BatchStartTime).count();
-                // 多图/循环模式：先停留若干帧让用户看清结果，再切换
-                bool hasNextImage = (!gImageList.empty() && gCurrentImageIndex >= 0 &&
-                    gCurrentImageIndex < (int)gImageList.size() - 1);
-                if (hasNextImage || g_LoopMode)
+                g_TMEnableRotation = it.enableRotation;
+                g_TMRotationStart  = it.rotationStart;
+                g_TMRotationEnd    = it.rotationEnd;
+                g_TMRotationStep   = it.rotationStep;
+                g_TMMaxResults     = it.maxResults;
+                g_TMMatchThreshold = it.matchThreshold;
+                g_TMMaxImageDim    = it.maxImageDim;
+                g_NmsThreshold     = it.nmsThreshold;
+                g_TMSearchMode     = it.searchMode;
+                g_TplGray = it.tplGray; g_TplBinary = it.tplBinary;
+                g_TplBinThresh = it.tplBinThresh;
+                g_TplEdge = it.tplEdge; g_TplEdgeLow = it.tplEdgeLow; g_TplEdgeHigh = it.tplEdgeHigh;
+
+                bool didPreprocess = false;
+                if (it.imgUseGray || it.imgEnableThreshold)
                 {
-                    g_BatchRunIndex = -1;       // 暂停执行
-                    g_SwitchDelay = 60;          // 等待约1秒（60帧）再切换
-                }
-                else
-                {
-                    g_BatchRunIndex = -1;
-                }
-                // 恢复原始图到显示（仅当没有工具已绘制结果时）
-                if (!g_BatchOriginalImage.empty() && !gNeedUpload)
-                {
-                    gImage = g_BatchOriginalImage.clone();
+                    if (it.imgUseGray && gImage.channels() > 1) {
+                        int code = (gImage.channels() == 4) ? cv::COLOR_BGRA2GRAY : cv::COLOR_BGR2GRAY;
+                        cv::cvtColor(gImage, gImage, code);
+                    }
+                    if (it.imgEnableThreshold) {
+                        if (gImage.channels() > 1)
+                            cv::cvtColor(gImage, gImage, cv::COLOR_BGR2GRAY);
+                        cv::threshold(gImage, gImage, it.imgThreshold, 255, cv::THRESH_BINARY);
+                    }
                     cv::Mat rgba;
-                    if (gImage.channels() == 1) cv::cvtColor(gImage, rgba, cv::COLOR_GRAY2RGBA);
+                    if (gImage.channels() == 1)      cv::cvtColor(gImage, rgba, cv::COLOR_GRAY2RGBA);
                     else if (gImage.channels() == 3) cv::cvtColor(gImage, rgba, cv::COLOR_BGR2RGBA);
-                    else cv::cvtColor(gImage, rgba, cv::COLOR_BGRA2RGBA);
+                    else                              cv::cvtColor(gImage, rgba, cv::COLOR_BGRA2RGBA);
                     gPendingUpload = rgba;
                     gNeedUpload = true;
+                    didPreprocess = true;
                 }
-                LogSystem::Add(LOG_INFO, color, "[全部执行] 完成，共 %zu 个工具，耗时 %.1fms",
-                    g_ToolInstances.size(), g_BatchTotalTime);
+                gUseGray = didPreprocess ? false : it.imgUseGray;
+                gPipe.enableThreshold = didPreprocess ? false : it.imgEnableThreshold;
+                gPipe.threshold = it.imgThreshold;
+                g_FrozenTemplate = it.templateImg;
+                if (!it.searchROIs.empty()) gROIs = it.searchROIs;
+                TemplateMatch::Run();
+                st.imageDirty = didPreprocess;
             }
-        }
-        // 单步模式：执行完当前即停，防止循环
-        if (g_StepRunIndex >= 0)
-        {
-            auto stepT1 = std::chrono::high_resolution_clock::now();
-            g_StepTime = std::chrono::duration<float, std::milli>(stepT1 - stepT0).count();
-            g_StepRunIndex = -1;  // 标记已执行，等待下次按钮点击
+            else if (t == 2) // Blob分析（占位）
+            {
+                LogSystem::Add(LOG_INFO, color, "Blob分析: 执行完成");
+            }
+            else if (t == 3) // 阈值调试
+            {
+                gUseGray = it.dbgUseGray;
+                gPipe.enableBlur = it.dbgEnableBlur; gPipe.blurSize = it.dbgBlurSize;
+                gPipe.enableThreshold = it.dbgEnableThresh; gPipe.threshold = it.dbgThreshold;
+                gPipe.enableCanny = it.dbgEnableCanny;
+                gPipe.cannyLow = it.dbgCannyLow; gPipe.cannyHigh = it.dbgCannyHigh;
+                ThresholdTool::ApplyProcess();
+            }
+            else if (t == 4) // YOLO检测
+            {
+                if (!YOLODetector::IsLoaded() && !it.yoloModelPath.empty())
+                    YOLODetector::LoadModel(it.yoloModelPath, it.yoloClassesPath);
+                if (YOLODetector::IsLoaded())
+                {
+                    cv::Rect roi;
+                    if (it.yoloUseROI && !gROIs.empty()) {
+                        int ri = (gSelectedROI >= 0 && gSelectedROI < (int)gROIs.size()) ? gSelectedROI : 0;
+                        auto& fr = gROIs[ri];
+                        roi = cv::Rect(
+                            (int)std::min(fr.start.x, fr.end.x), (int)std::min(fr.start.y, fr.end.y),
+                            (int)std::abs(fr.end.x - fr.start.x), (int)std::abs(fr.end.y - fr.start.y));
+                    }
+                    auto objs = YOLODetector::Detect(gImage, it.yoloConfThreshold, it.yoloNmsThreshold, roi);
+                    LogSystem::Add(LOG_INFO, color, "YOLO检测: 发现 %zu 个目标", objs.size());
+                    for (const auto& o : objs)
+                        LogSystem::Add(LOG_INFO, ImVec4(0,1,0.5f,1), "  %s %.2f [%d,%d %dx%d]",
+                            o.className.c_str(), o.confidence, o.box.x, o.box.y, o.box.width, o.box.height);
+                    cv::Mat drawImg = gImage.clone();
+                    YOLODetector::DrawDetections(drawImg, objs, true);
+                    cv::Mat rgba;
+                    if (drawImg.channels() == 1)      cv::cvtColor(drawImg, rgba, cv::COLOR_GRAY2RGBA);
+                    else if (drawImg.channels() == 3) cv::cvtColor(drawImg, rgba, cv::COLOR_BGR2RGBA);
+                    else                               cv::cvtColor(drawImg, rgba, cv::COLOR_BGRA2RGBA);
+                    gPendingUpload = rgba;
+                    gNeedUpload = true;
+                    st.imageDirty = true;
+                }
+                else { LogSystem::Add(LOG_WARN, "YOLO: 模型未加载，请先设置模型路径"); }
+            }
+
+            // ===== 推进状态 =====
+            if (st.mode == ExecMode::BatchRunning)
+            {
+                st.execIndex++;
+                if (st.execIndex >= (int)g_ToolInstances.size())
+                {
+                    auto t1 = std::chrono::high_resolution_clock::now();
+                    st.batchTotalMs = std::chrono::duration<float, std::milli>(t1 - st.batchStart).count();
+
+                    bool hasNextImage = (!gImageList.empty() && gCurrentImageIndex >= 0 &&
+                        gCurrentImageIndex < (int)gImageList.size() - 1);
+                    if (hasNextImage || st.loopMode) {
+                        st.mode = ExecMode::DelayForResult;
+                        st.delayRemain = 60;
+                    } else {
+                        st.mode = ExecMode::Idle;
+                    }
+                    RestoreOriginal();
+                    LogSystem::Add(LOG_INFO, color, "[全部执行] 完成，共 %zu 个工具，耗时 %.1fms",
+                        g_ToolInstances.size(), st.batchTotalMs);
+                }
+            }
+            else // StepRunning
+            {
+                auto t1 = std::chrono::high_resolution_clock::now();
+                st.stepTimeMs = std::chrono::duration<float, std::milli>(t1 - stepT0).count();
+                st.mode = ExecMode::Idle;
+            }
         }
     }
 
@@ -274,7 +299,9 @@ void ShowToolsWindow()
                 kToolNames[type], inst + 1);
 
             // 全部执行/单步执行时高亮当前实例
-            bool isBatchActive = (inst == g_BatchRunIndex || inst == g_StepRunIndex || (g_StepCursor > 0 && inst == g_StepCursor - 1));
+            bool isBatchActive = (st.mode == ExecMode::BatchRunning && inst == st.execIndex)
+                || (st.mode == ExecMode::StepRunning && inst == st.execIndex)
+                || (st.stepCursor > 0 && inst == st.stepCursor - 1);  // 单步完成后保持高亮
             if (isBatchActive)
                 ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.2f, 0.5f, 0.9f, 1.0f));
 
@@ -292,6 +319,8 @@ void ShowToolsWindow()
                     ImGui::Checkbox("转为灰度", &it.edgeUseGray);
                     if (ImGui::Button("执行边缘检测", ImVec2(-1, 28)))
                     {
+                        if (gImage.empty()) { LogSystem::Add(LOG_WARN, "请先加载图片"); }
+                        else {
                         gCannyLow = it.cannyLow;
                         gCannyHigh = it.cannyHigh;
                         gUseGray = it.edgeUseGray;
@@ -301,6 +330,7 @@ void ShowToolsWindow()
                         gPipe.cannyHigh = it.cannyHigh;
                         ThresholdTool::ApplyProcess();
                         LogSystem::Add(LOG_INFO, color, "边缘检测: Canny(%d,%d)", it.cannyLow, it.cannyHigh);
+                        }
                     }
                 }
                 else if (type == 1) // 模板匹配
@@ -435,6 +465,8 @@ void ShowToolsWindow()
                         ImGui::SliderInt("阈值", &it.imgThreshold, 0, 255);
                     if (ImGui::Button("执行匹配", ImVec2(-1, 28)))
                     {
+                        if (gImage.empty()) { LogSystem::Add(LOG_WARN, "请先加载图片"); }
+                        else {
                         // 维护持久原图备份（首次或图片更换时更新）
                         if (g_PersistOriginal.empty() ||
                             g_PersistOriginal.size() != gImage.size())
@@ -497,6 +529,7 @@ void ShowToolsWindow()
                             cv::cvtColor(gImage, rgba, cv::COLOR_BGRA2RGBA);
                         gPendingUpload = rgba;
                         gNeedUpload = true;
+                        }  // else (gImage 非空)
                     }
                     if (!gMatchROIs.empty())
                     {
@@ -550,12 +583,15 @@ void ShowToolsWindow()
                     ImGui::Separator();
                     if (ImGui::Button("执行处理", ImVec2(-1, 28)))
                     {
+                        if (gImage.empty()) { LogSystem::Add(LOG_WARN, "请先加载图片"); }
+                        else {
                         gUseGray = it.dbgUseGray;
                         gPipe.enableBlur = it.dbgEnableBlur; gPipe.blurSize = it.dbgBlurSize;
                         gPipe.enableThreshold = it.dbgEnableThresh; gPipe.threshold = it.dbgThreshold;
                         gPipe.enableCanny = it.dbgEnableCanny;
                         gPipe.cannyLow = it.dbgCannyLow; gPipe.cannyHigh = it.dbgCannyHigh;
                         ThresholdTool::ApplyProcess();
+                        }
                     }
                     if (gTimeTotal > 0.0f) ImGui::TextDisabled("总耗时: %.1fms", gTimeTotal);
                 }
@@ -636,6 +672,8 @@ void ShowToolsWindow()
                             YOLODetector::LoadModel(it.yoloModelPath, it.yoloClassesPath)))
                         {
                             // 图片模式：单次检测
+                            if (gImage.empty()) { LogSystem::Add(LOG_WARN, "请先加载图片"); }
+                            else {
                             cv::Rect roi;
                             if (it.yoloUseROI && !gROIs.empty())
                             {
@@ -664,6 +702,7 @@ void ShowToolsWindow()
                             else cv::cvtColor(drawImg, rgba, cv::COLOR_BGRA2RGBA);
                             gPendingUpload = rgba;
                             gNeedUpload = true;
+                            }  // else (gImage 非空)
                         }
                         else
                             LogSystem::Add(LOG_WARN, "YOLO: 请先选择模型文件");
@@ -714,94 +753,83 @@ void ShowToolsWindow()
 
     ImGui::EndChild();
 
-    // ---- 底部：全部执行 / 单步执行 按钮 ----
+    // ---- 底部：全部执行 / 单步执行 / 循环 按钮 ----
     if (!g_ToolInstances.empty())
     {
         ImGui::Separator();
-        // 全部执行按钮：一键启动所有工具逐帧执行
+
+        // 全部执行
         if (ImGui::Button("全部执行"))
         {
-            g_BatchOriginalImage = gImage.clone();
-            g_BatchImageDirty = false;
-            g_BatchStartTime = std::chrono::high_resolution_clock::now();
-            g_BatchRunIndex = 0;
-            g_BatchTotalTime = 0.0f;
-            g_SwitchDelay = 0;       // 清除切换延迟
-            g_StepRunIndex = -1;   // 取消单步执行
-            g_StepCursor = 0;       // 重置单步进度
+            if (gImage.empty()) {
+                LogSystem::Add(LOG_WARN, "请先加载图片");
+            } else {
+                st.mode       = ExecMode::BatchRunning;
+                st.execIndex  = 0;
+                st.stepCursor = 0;
+                st.delayRemain = 0;
+                st.imageDirty = false;
+                st.originalImage = gImage.clone();
+                st.batchStart = std::chrono::high_resolution_clock::now();
+                st.batchTotalMs = 0;
+            }
         }
         ImGui::SameLine();
-        // 单步执行按钮：点一下执行一个，按钮变蓝"单步中..."
-        bool stepping = (g_StepCursor > 0 && g_StepCursor <= (int)g_ToolInstances.size());
+
+        // 单步执行
+        bool stepping = (st.stepCursor > 0 && st.stepCursor <= (int)g_ToolInstances.size());
         if (stepping) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.5f, 0.9f, 1.0f));
         if (ImGui::Button(stepping ? "单步中..." : "单步执行"))
         {
-            g_BatchRunIndex = -1;
-            g_BatchTotalTime = 0.0f;
-            if (g_StepCursor >= (int)g_ToolInstances.size())
+            st.mode = ExecMode::Idle;  // 取消任何进行中的批量
+            st.delayRemain = 0;
+            if (st.stepCursor >= (int)g_ToolInstances.size())
             {
-                // 上一轮已完成，重置且不执行（回到空闲）
-                g_StepCursor = 0;
-                g_StepRunIndex = -1;
-                g_StepTime = 0.0f;
-                if (!g_BatchOriginalImage.empty() && !gNeedUpload)
-                {
-                    gImage = g_BatchOriginalImage.clone();
-                    cv::Mat rgba;
-                    if (gImage.channels() == 1) cv::cvtColor(gImage, rgba, cv::COLOR_GRAY2RGBA);
-                    else if (gImage.channels() == 3) cv::cvtColor(gImage, rgba, cv::COLOR_BGR2RGBA);
-                    else cv::cvtColor(gImage, rgba, cv::COLOR_BGRA2RGBA);
-                    gPendingUpload = rgba;
-                    gNeedUpload = true;
-                }
+                // 上一轮已完成 → 重置
+                st.stepCursor = 0;
+                st.stepTimeMs = 0;
+                RestoreOriginal();
             }
             else
             {
-                if (g_StepCursor == 0)
-                    g_BatchOriginalImage = gImage.clone();  // 新轮：备份原图
-                g_StepRunIndex = g_StepCursor;  // 触发执行当前步骤
-                g_StepCursor++;
+                if (st.stepCursor == 0)
+                    st.originalImage = gImage.clone();
+                st.mode      = ExecMode::StepRunning;
+                st.execIndex = st.stepCursor;
+                st.stepCursor++;
             }
         }
         if (stepping) ImGui::PopStyleColor();
         ImGui::SameLine();
-        // 循环按钮：自动重复执行所有工具（先存状态，避免按钮内修改导致 Pop 丢失）
-        bool wasLooping = g_LoopMode;
+
+        // 循环
+        bool wasLooping = st.loopMode;
         if (wasLooping) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.8f, 0.3f, 1.0f));
         if (ImGui::Button(wasLooping ? "循环中" : "循环"))
         {
-            g_LoopMode = !g_LoopMode;
-            if (!g_LoopMode)
+            st.loopMode = !st.loopMode;
+            if (!st.loopMode)
             {
-                // 关闭循环：停止批量执行，恢复原图
-                g_BatchRunIndex = -1;
-                g_SwitchDelay = 0;
-                if (!g_BatchOriginalImage.empty())
-                {
-                    gImage = g_BatchOriginalImage.clone();
-                    cv::Mat rgba;
-                    if (gImage.channels() == 1) cv::cvtColor(gImage, rgba, cv::COLOR_GRAY2RGBA);
-                    else if (gImage.channels() == 3) cv::cvtColor(gImage, rgba, cv::COLOR_BGR2RGBA);
-                    else cv::cvtColor(gImage, rgba, cv::COLOR_BGRA2RGBA);
-                    gPendingUpload = rgba;
-                    gNeedUpload = true;
-                }
+                st.mode = ExecMode::Idle;
+                st.delayRemain = 0;
+                RestoreOriginal();
             }
         }
         if (wasLooping) ImGui::PopStyleColor();
-        if (g_StepTime > 0.0f)
+
+        if (st.stepTimeMs > 0.0f)
         {
             ImGui::SameLine();
             ImGui::TextDisabled("单步");
             ImGui::SameLine();
-            ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.3f, 1.0f), "%.1fms", g_StepTime);
+            ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.3f, 1.0f), "%.1fms", st.stepTimeMs);
         }
-        if (g_BatchTotalTime > 0.0f)
+        if (st.batchTotalMs > 0.0f)
         {
             ImGui::SameLine();
             ImGui::TextDisabled("总耗时");
             ImGui::SameLine();
-            ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.3f, 1.0f), "%.1fms", g_BatchTotalTime);
+            ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.3f, 1.0f), "%.1fms", st.batchTotalMs);
         }
     }
 

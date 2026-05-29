@@ -173,7 +173,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		ThresholdTool::ShowThresholdWindow();  // 阈值调试/图像处理窗口
 		TemplateMatch::ShowWindow();           // 模板匹配调试窗口
 		TemplateMatch::ShowTemplateEditor();   // 模板编辑弹窗
-		TemplateMatch::CheckAsyncResult();    // 收尾异步匹配结果（窗口关闭时也能完成）
+		TemplateMatch::CheckAsyncResult();    // 收尾异步匹配结果
 
 		// ----- 6.4 渲染 Dear ImGui 绘制数据 -----
 		ImGui::Render();
@@ -188,7 +188,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		// =========================
 		// ⭐ 视频/摄像头帧更新（在GPU上传之前）
 		// =========================
-		VideoCapture::Update();
+		try { VideoCapture::Update(); }
+		catch (const cv::Exception& e) {
+			LogSystem::Add(LOG_ERROR, "视频帧异常: %s", e.what());
+		}
+		catch (...) {
+			LogSystem::Add(LOG_ERROR, "视频帧未知异常");
+		}
 
 	// =========================
 	// ⭐ YOLO 实时检测（摄像头/视频模式下每N帧运行一次）
@@ -279,6 +285,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
 		// 检查异步加载完成，上传到 GPU
 		AsyncImageLoader::CheckAndProcess([](cv::Mat img) {
+			try {
 			// 释放旧纹理
 			FlushPendingRelease();
 			if (gTexture)
@@ -302,6 +309,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			UI::FitImageToWindow();
 			UI::ClearROIState();
 			TemplateMatch::Clear();
+			} catch (...) {
+				LogSystem::Add(LOG_ERROR, "异步图片加载后处理异常");
+			}
 		});
 
 		// =========================

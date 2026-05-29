@@ -10,10 +10,11 @@
 // =========================
 static std::mutex g_logMutex;
 
-std::vector<LogItem> LogSystem::s_logs;
+std::shared_ptr<std::vector<LogItem>> LogSystem::s_logs =
+    std::make_shared<std::vector<LogItem>>();
 
 // =========================
-// 获取当前时间字符串（格式：YYYY-MM-DD HH:mm:ss.SSS）
+// 获取当前时间字符串（格式：HH:MM:SS.mmm，更紧凑）
 // =========================
 static std::string GetTimeString()
 {
@@ -27,12 +28,9 @@ static std::string GetTimeString()
     std::tm tm{};
     localtime_s(&tm, &t);
 
-    char buffer[64];
+    char buffer[32];
     snprintf(buffer, sizeof(buffer),
-        "%04d-%02d-%02d %02d:%02d:%02d.%03d",
-        tm.tm_year + 1900,
-        tm.tm_mon + 1,
-        tm.tm_mday,
+        "%02d:%02d:%02d.%03d",
         tm.tm_hour,
         tm.tm_min,
         tm.tm_sec,
@@ -60,13 +58,20 @@ void LogSystem::Add(LogLevel level, const ImVec4& color, const char* fmt, ...)
     item.text = buffer;
     item.color = color;
     item.useCustomColor = true;
+    // ⭐ 预格式化显示字符串，避免渲染时每帧重复 snprintf
+    char disp[1024 + 32];
+    snprintf(disp, sizeof(disp), "[%s] %s", item.time.c_str(), item.text.c_str());
+    item.displayText = disp;
 
     std::lock_guard<std::mutex> lock(g_logMutex);
-    s_logs.push_back(std::move(item));
+    // ⭐ COW 写时复制：如果有读者持有旧副本，先拷贝再修改
+    if (s_logs.use_count() > 1)
+        s_logs = std::make_shared<std::vector<LogItem>>(*s_logs);
+    s_logs->push_back(std::move(item));
 
     // 防止日志无限增长（最多保留2000条）
-    if (s_logs.size() > 2000)
-        s_logs.erase(s_logs.begin());
+    if (s_logs->size() > 2000)
+        s_logs->erase(s_logs->begin());
 }
 
 // =========================
@@ -86,12 +91,19 @@ void LogSystem::Add(LogLevel level, const char* fmt, ...)
     item.time = GetTimeString();
     item.text = buffer;
     item.useCustomColor = false;
+    // ⭐ 预格式化显示字符串
+    char disp[1024 + 32];
+    snprintf(disp, sizeof(disp), "[%s] %s", item.time.c_str(), item.text.c_str());
+    item.displayText = disp;
 
     std::lock_guard<std::mutex> lock(g_logMutex);
-    s_logs.push_back(std::move(item));
+    // ⭐ COW 写时复制
+    if (s_logs.use_count() > 1)
+        s_logs = std::make_shared<std::vector<LogItem>>(*s_logs);
+    s_logs->push_back(std::move(item));
 
-    if (s_logs.size() > 2000)
-        s_logs.erase(s_logs.begin());
+    if (s_logs->size() > 2000)
+        s_logs->erase(s_logs->begin());
 }
 
 // =========================
@@ -100,16 +112,17 @@ void LogSystem::Add(LogLevel level, const char* fmt, ...)
 void LogSystem::Clear()
 {
     std::lock_guard<std::mutex> lock(g_logMutex);
-    s_logs.clear();
+    s_logs = std::make_shared<std::vector<LogItem>>();
 }
 
 // =========================
-// 获取日志列表（返回副本，保证线程安全）
+// 获取日志列表（shared_ptr COW，零拷贝，线程安全）
+// 调用方持有 shared_ptr 期间，写入方会自动 COW 复制
 // =========================
-std::vector<LogItem> LogSystem::GetLogs()
+std::shared_ptr<const std::vector<LogItem>> LogSystem::GetLogs()
 {
     std::lock_guard<std::mutex> lock(g_logMutex);
-    return s_logs;
+    return s_logs;  // 仅 bump 引用计数，不拷贝任何字符串
 }
 
 // =========================

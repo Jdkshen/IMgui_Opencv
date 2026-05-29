@@ -18,43 +18,52 @@ void ShowLogWindow()
 
     ImGui::BeginChild("滚动区域");
 
-    const auto& logs = LogSystem::GetLogs();
+    // ⭐ 优化：shared_ptr COW，零拷贝获取日志列表
+    auto logs = LogSystem::GetLogs();
+    if (!logs) { ImGui::EndChild(); ImGui::End(); return; }
 
-    for (auto& log : logs)
+    // ⭐ 优化：ImGuiListClipper 虚拟列表，只渲染可见行（~30条而非2000条）
+    ImGuiListClipper clipper;
+    clipper.Begin((int)logs->size());
+
+    while (clipper.Step())
     {
-        ImVec4 color;
-
-        if (log.useCustomColor) { color = log.color; }
-        else
+        for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
         {
-            switch (log.level)
+            const auto& log = (*logs)[i];
+
+            ImVec4 color;
+            if (log.useCustomColor) { color = log.color; }
+            else
             {
-            case LOG_INFO:  color = ImVec4(0.8f, 0.8f, 0.8f, 1); break;
-            case LOG_WARN:  color = ImVec4(1.0f, 0.8f, 0.2f, 1); break;
-            case LOG_ERROR: color = ImVec4(1.0f, 0.3f, 0.3f, 1); break;
+                switch (log.level)
+                {
+                case LOG_INFO:  color = ImVec4(0.8f, 0.8f, 0.8f, 1); break;
+                case LOG_WARN:  color = ImVec4(1.0f, 0.8f, 0.2f, 1); break;
+                case LOG_ERROR: color = ImVec4(1.0f, 0.3f, 0.3f, 1); break;
+                }
             }
+
+            ImGui::PushStyleColor(ImGuiCol_Text, color);
+
+            // ⭐ 优化：使用预格式化的 displayText，无需每帧 snprintf
+            if (ImGui::Selectable(log.displayText.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick)) {}
+
+            if (ImGui::BeginPopupContextItem())
+            {
+                if (ImGui::MenuItem("复制"))
+                    ImGui::SetClipboardText(log.displayText.c_str());
+                ImGui::EndPopup();
+            }
+
+            if (ImGui::IsItemHovered() && ImGui::IsKeyPressed(ImGuiKey_C) && ImGui::GetIO().KeyCtrl)
+                ImGui::SetClipboardText(log.displayText.c_str());
+
+            ImGui::PopStyleColor();
         }
-
-        char buf[1024];
-        snprintf(buf, sizeof(buf), "[%s] %s", log.time.c_str(), log.text.c_str());
-
-        ImGui::PushStyleColor(ImGuiCol_Text, color);
-
-        if (ImGui::Selectable(buf, false, ImGuiSelectableFlags_AllowDoubleClick)) {}
-
-        if (ImGui::BeginPopupContextItem())
-        {
-            if (ImGui::MenuItem("复制"))
-                ImGui::SetClipboardText(buf);
-            ImGui::EndPopup();
-        }
-
-        if (ImGui::IsItemHovered() && ImGui::IsKeyPressed(ImGuiKey_C) && ImGui::GetIO().KeyCtrl)
-            ImGui::SetClipboardText(buf);
-
-        ImGui::PopStyleColor();
     }
 
+    // 自动滚到底部（新日志到达时）
     if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
         ImGui::SetScrollHereY(1.0f);
 

@@ -17,46 +17,54 @@ IMgui_Opencv/
 │   ├── OpenCVTest.cpp/h        ←   图片读取 + GPU 纹理上传
 │   ├── AsyncImageLoader.cpp/h  ←   异步图片加载（后台线程 + 回调）
 │   ├── OpenFileDialog.cpp/h    ←   文件/文件夹选择对话框
-│   ├── VideoCapture.cpp/h      ←   视频/摄像头播放
+│   ├── VideoCapture.cpp/h      ←   视频/摄像头播放（cv::VideoCapture）
 │   ├── AudioPlayer.cpp/h       ←   XAudio2 + Media Foundation 音频播放
-│   ├── ThemeManager.cpp/h      ←   主题切换（夜间/白天）
+│   ├── ThemeManager.cpp/h      ←   主题切换（夜间/白天）+ theme.cfg 持久化
 │   └── RecipeManager.cpp/h     ←   配方保存/加载（JSON，支持工具实例序列化）
 │
 ├── UI/                         ← 界面模块
-│   ├── DockSpaceHost.cpp/h     ←   主停靠空间 + 菜单栏 + 功能窗口 + 工具实例
+│   ├── DockSpaceHost.cpp/h     ←   主停靠空间 + 菜单栏
 │   ├── ImageViewer.cpp/h       ←   图片预览 + 缩放平移 + 文件夹浏览 + 视频控制
-│   ├── LogWindow.cpp/h         ←   日志窗口
-│   ├── Sidebar.cpp/h           ←   侧边栏
-│   ├── StatsWindow.cpp/h       ←   状态窗口
-│   ├── ToolsWindow.cpp/h       ←   工具窗口
+│   ├── LogWindow.cpp/h         ←   日志窗口（ImGuiListClipper 虚拟滚动）
+│   ├── Sidebar.cpp/h           ←   侧边栏控制面板
+│   ├── StatsWindow.cpp/h       ←   性能统计窗口
+│   ├── ToolsWindow.cpp/h       ←   工具窗口（枚举状态机：全部执行/单步/循环）
 │   └── ROIManager.cpp/h        ←   ROI 数据结构 + 交互 + 坐标转换
 │
 ├── Algorithm/                  ← 图像算法
-│   ├── YOLODetector.cpp/h       ←   YOLO 目标检测（OpenCV DNN）
+│   ├── YOLODetector.cpp/h      ←   YOLO 目标检测（ONNX Runtime 推理）
 │   ├── TemplateMatch.cpp/h     ←   模板匹配（多方法/旋转/NMS）
 │   └── ThresholdTool.cpp/h     ←   图像处理管线（灰度/模糊/Canny/二值化）
 │
 ├── Renderer/                   ← 渲染模块
-│   └── FontManager.cpp/h       ←   中文字体加载（自动定位 exe 目录）
+│   └── FontManager.cpp/h       ←   中文字体加载
 │
 ├── Log/                        ← 日志系统
-│   └── LogSystem.cpp/h         ←   线程安全日志（颜色/时间戳/2000条上限）
+│   └── LogSystem.cpp/h         ←   线程安全日志（shared_ptr COW + displayText 预格式化）
 │
-├── imgui/                      ← 第三方：Dear ImGui 1.92.8
-├── DirectX-Headers-main/       ← 第三方：DX12 辅助头文件（d3dx12.h）
-├── include/opencv/             ← 第三方：OpenCV 头文件
-├── redist/                     ← 第三方：OpenCV + VC++ 库与 DLL
+├── include/                    ← 第三方库
+│   ├── imgui/                  ←   Dear ImGui 1.92.8（含 .cpp 源文件）
+│   ├── directx/                ←   DX12 辅助头文件（d3dx12.h 等）
+│   ├── opencv/                 ←   OpenCV 头文件
+│   ├── onnxruntime/            ←   ONNX Runtime C++ API
+│   ├── nlohmann/               ←   JSON 库
+│   └── dxguids/                ←   DX GUID 定义
 │
-├── Windows_imgui.cpp           ← 程序入口 + 主循环 + 窗口消息处理
+├── docs/                       ← 项目文档
+│   ├── ALGORITHMS.md           ←   OpenCV 算法详解 + 添加新算法指南
+│   ├── BUILD.md                ←   编译构建说明
+│   ├── CODE_ANALYSIS.md        ←   代码架构分析
+│   └── VIDEO_AUDIO.md          ←   视频/音频模块说明
+│
+├── redist/                     ← 运行时 DLL
+├── models/                     ← 预训练模型
+│   └── yolo11n.onnx            ←   YOLO11 Nano ONNX 模型
+│
+├── Windows_imgui.cpp           ← 程序入口 + 主循环
 ├── Windows_imgui.h             ← 公共头文件汇总
-├── framework.h                 ← 系统头文件（Win32/DX12/OpenCV）
+├── framework.h                 ← 系统头文件
 ├── README.md                   ← 本文件
-└── Windows_imgui.slnx          ← VS2022 解决方案（全部相对路径）
-
-输出目录（x64/Debug/）：
-├── recipes/                    ← 配方文件（.recipe + 模板PNG）
-├── imgui.ini                   ← ImGui 布局持久化
-└── theme.cfg                   ← 主题配置
+└── Windows_imgui.slnx          ← VS2022 解决方案
 ```
 
 ## 🏗️ 主流程
@@ -94,9 +102,9 @@ wWinMain()
 | 图像处理 | 灰度化、高斯模糊、二值化、Canny 边缘检测 |
 | ROI 管理 | 交互式创建/选中/拖动/缩放/删除感兴趣区域，多类型颜色区分 |
 | 模板匹配 | 多实例模板匹配，旋转/NMS/阈值，结果可视化 |
-| YOLO 检测 | OpenCV DNN 推理 YOLOv8 ONNX，支持 ROI 限定区域，NMS 后处理 |
+| YOLO 检测 | ONNX Runtime 推理 YOLO11 ONNX 模型，支持 ROI 限定区域，NMS 后处理 |
 | 工具实例 | 手风琴式工具面板，每实例独立参数（模板/ROI/角度/预处理） |
-| 批量执行 | 全部执行（逐帧高亮当前实例）+ 单步执行（点击推进） |
+| 批量执行 | 全部执行（逐帧高亮）+ 单步执行（点击推进）+ 循环模式 |
 | 配方系统 | 保存/加载全部工具实例参数、模板图片、搜索ROI（JSON） |
 | 主题切换 | 夜间/白天模式，自动持久化 |
 | 日志系统 | 三级日志（INFO/WARN/ERROR），颜色分级，2000 条上限 |
@@ -105,7 +113,7 @@ wWinMain()
 
 ## 🔧 工具实例系统
 
-功能窗口（手风琴布局）支持 4 种工具类型：
+功能窗口（手风琴布局）支持 5 种工具类型：
 
 | 类型 | 功能 | 独立参数 |
 |------|------|---------|
@@ -113,13 +121,19 @@ wWinMain()
 | 模板匹配 | 多实例模板匹配 | 模板图、搜索ROI、旋转角度、匹配阈值/NMS、模板预处理、图像预处理 |
 | Blob分析 | 斑点分析 | 面积范围 |
 | 阈值调试 | 图像处理管线 | 灰度/模糊/二值化/Canny 全套 |
+| YOLO检测 | ONNX 目标检测 | 模型文件、类别文件、置信度/NMS阈值、ROI限定 |
 
 每个实例的参数完全独立，互不影响。模板图像和搜索 ROI 按实例保存。
 
-### 执行模式
+### 执行模式（枚举状态机）
 
-- **全部执行**：逐帧自动执行所有工具，当前执行的实例 CollapsingHeader 蓝色高亮，完成后显示总耗时
-- **单步执行**：点一次执行一个工具，按钮变蓝"单步中..."，支持手动推进，显示单步耗时
+```cpp
+enum class ExecMode { Idle, BatchRunning, StepRunning, DelayForResult, DelayForLoad };
+```
+
+- **全部执行**：逐帧自动执行所有工具，当前实例蓝色高亮，完成后显示总耗时。支持多图片切换 + 循环模式
+- **单步执行**：点一次执行一个工具，按钮变蓝"单步中..."，执行完保持高亮，显示单步耗时
+- **循环**：自动重复"全部执行"，按钮变绿"循环中"
 
 ### 图像预处理（模板匹配）
 

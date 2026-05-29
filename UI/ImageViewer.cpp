@@ -429,6 +429,16 @@ namespace UI
 
 	void ClearImage()
 	{
+		// ⭐ 先停掉所有依赖图像的运行时
+		UI::g_YoloLiveDetect = false;
+		VideoCapture::Close();
+
+		// ⭐ 清除图像数据（否则 !gImage.empty() 仍为 true，检测继续跑）
+		gImage = cv::Mat();
+		gOriginalImage = cv::Mat();
+		gPendingUpload = cv::Mat();
+		gNeedUpload = false;
+
 		gImageWidth = 0;
 		gImageHeight = 0;
 		ClearROIState();

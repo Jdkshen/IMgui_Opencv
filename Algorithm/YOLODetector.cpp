@@ -186,11 +186,18 @@ bool IsLoaded() { return s_Loaded && s_Session != nullptr; }
 // =====================================================
 static cv::Mat Preprocess(const cv::Mat& image, cv::Rect roi)
 {
+    // 严格守卫：空图直接返回
+    if (image.empty() || image.data == nullptr)
+        return {};
+
     cv::Mat crop;
     if (roi.width > 0 && roi.height > 0)
         crop = image(roi).clone();
     else
         crop = image.clone();
+
+    if (crop.empty())
+        return {};
 
     // YOLO 输入: (1, 3, H, W), RGB, 归一化到 [0,1]
     cv::Mat blob = cv::dnn::blobFromImage(crop, 1.0 / 255.0,
@@ -355,6 +362,10 @@ std::vector<DetectedObject> Detect(const cv::Mat& image,
 void DrawDetections(cv::Mat& image,
     const std::vector<DetectedObject>& objects, bool drawLabel)
 {
+    // 严格守卫：空图或无目标直接返回
+    if (image.empty() || objects.empty())
+        return;
+
     static const cv::Scalar s_Colors[] = {
         {  0, 255,   0},   // 亮绿
         {  0, 165, 255},   // 橙
