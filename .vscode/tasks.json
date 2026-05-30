@@ -49,12 +49,12 @@
         {
             "label": "快速提交",
             "type": "shell",
-            "command": "git add -A; git commit -m '${input:commitMsg}'",
+            "command": "git add -A; git commit -m '${input:commitMsg}'; git push",
             "options": {
                 "cwd": "${workspaceFolder}"
             },
             "problemMatcher": [],
-            "detail": "终端提交（比 VS Code GUI 快）"
+            "detail": "add + commit + push 一键完成"
         }
     ],
     "inputs": [

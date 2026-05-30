@@ -1,0 +1,7 @@
+[
+    {
+        "key": "ctrl+shift+g",
+        "command": "workbench.action.tasks.runTask",
+        "args": "快速提交"
+    }
+]
