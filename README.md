@@ -170,3 +170,25 @@ enum class ExecMode { Idle, BatchRunning, StepRunning, DelayForResult, DelayForL
 
 **不需要额外安装 OpenCV 或配置任何路径**，所有第三方依赖已包含在项目中。
 
+---
+
+## ⚠️ 免责声明
+
+本项目仅供**学习、研究和教育**目的使用。
+
+- 不得用于任何违法用途
+- 使用本软件产生的任何后果由使用者自行承担
+- YOLO 模型检测结果仅供参考，不构成任何形式的判断依据
+
+## 📄 开源协议
+
+本项目采用 [MIT License](LICENSE)。
+
+第三方依赖协议：
+| 依赖 | 协议 |
+|------|------|
+| Dear ImGui | MIT |
+| OpenCV | Apache 2.0 |
+| ONNX Runtime | MIT |
+| nlohmann/json | MIT |
+

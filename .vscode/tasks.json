@@ -49,12 +49,12 @@
         {
             "label": "快速提交",
             "type": "shell",
-            "command": "git add -A; git commit -m '${input:commitMsg}'; Start-Job { git push } | Out-Null; Write-Host '已提交，后台推送中...'",
+            "command": "git add -A; git commit -m '${input:commitMsg}'; git pull --rebase origin master; Start-Job { git push } | Out-Null; Write-Host '已提交，后台推送中...'",
             "options": {
                 "cwd": "${workspaceFolder}"
             },
             "problemMatcher": [],
-            "detail": "add + commit + 后台push"
+            "detail": "add + commit + rebase + 后台push"
         }
     ],
     "inputs": [
