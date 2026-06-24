@@ -1,0 +1,206 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="Resource Files">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
+      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+    <Filter Include="include">
+      <UniqueIdentifier>{b9c062ba-d71c-4134-a102-1a66f1a24011}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="include\imgui">
+      <UniqueIdentifier>{c1d2e3f4-a5b6-7890-cdef-0123456789ab}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Core">
+      <UniqueIdentifier>{73e07b14-0eea-45dd-b4d0-02007dec7d4b}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="UI">
+      <UniqueIdentifier>{cbed99e8-cdaf-449d-9308-84deb361c1fc}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Algorithm">
+      <UniqueIdentifier>{530a4ef7-c72a-4bc4-aca5-d1dfc50a82c2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Renderer">
+      <UniqueIdentifier>{dd555055-7fd8-4a3b-ae5a-9026d3b8fd1d}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Log">
+      <UniqueIdentifier>{fcca3ca8-daa8-4eba-ac7c-6bf7943151a9}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="framework.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="resource.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Windows_imgui.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\imgui\imconfig.h">
+      <Filter>include\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="include\imgui\imgui.h">
+      <Filter>include\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="include\imgui\imgui_impl_dx11.h">
+      <Filter>include\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="include\imgui\imgui_impl_dx12.h">
+      <Filter>include\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="include\imgui\imgui_impl_win32.h">
+      <Filter>include\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="include\imgui\imgui_internal.h">
+      <Filter>include\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="include\imgui\imstb_rectpack.h">
+      <Filter>include\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="include\imgui\imstb_textedit.h">
+      <Filter>include\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="include\imgui\imstb_truetype.h">
+      <Filter>include\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="Core\AsyncImageLoader.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\AudioPlayer.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\VideoCapture.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\RecipeManager.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\FrameNavigation.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\FrameSourceState.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\FrameRenderer.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\ImageLoadController.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\ImageUtils.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\LegacyAppState.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\LiveYoloRunner.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\ROIState.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\ROI.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\ToolInstance.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\ToolTypes.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\VisionContext.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\ToolExecutor.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\ToolController.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\ToolChainState.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\ThemeManager.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\UIStateBridge.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\DX12Context.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\OpenCVTest.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\OpenFileDialog.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="UI\DockSpaceHost.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="UI\ImageViewer.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="UI\LogWindow.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="UI\ROIManager.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="UI\Sidebar.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="UI\StatsWindow.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="UI\ToolsWindow.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="Algorithm\TemplateMatch.h"><Filter>Algorithm</Filter></ClInclude>
+    <ClInclude Include="Algorithm\OpenCVYoloDetector.h"><Filter>Algorithm</Filter></ClInclude>
+    <ClInclude Include="Algorithm\YOLODetector.h"><Filter>Algorithm</Filter></ClInclude>
+    <ClInclude Include="Algorithm\YOLOTool.h"><Filter>Algorithm</Filter></ClInclude>
+    <ClInclude Include="Algorithm\ShapeTools.h"><Filter>Algorithm</Filter></ClInclude>
+    <ClInclude Include="Algorithm\ITool.h"><Filter>Algorithm</Filter></ClInclude>
+    <ClInclude Include="Algorithm\ToolImageUtils.h"><Filter>Algorithm</Filter></ClInclude>
+    <ClInclude Include="Algorithm\ThresholdTool.h"><Filter>Algorithm</Filter></ClInclude>
+    <ClInclude Include="Algorithm\ContourDetector.h"><Filter>Algorithm</Filter></ClInclude>
+    <ClInclude Include="Algorithm\EdgeTool.h"><Filter>Algorithm</Filter></ClInclude>
+    <ClInclude Include="Algorithm\ShapeMatcher.h"><Filter>Algorithm</Filter></ClInclude>
+    <ClInclude Include="Algorithm\BlobTool.h"><Filter>Algorithm</Filter></ClInclude>
+    <ClInclude Include="Algorithm\MorphologyTool.h">
+      <Filter>Algorithm</Filter>
+    </ClInclude>
+    <ClInclude Include="Algorithm\MultiColorFinder.h">
+      <Filter>Algorithm</Filter>
+    </ClInclude>
+    <ClInclude Include="Algorithm\ColorAnalyzer.h">
+      <Filter>Algorithm</Filter>
+    </ClInclude>
+    <ClInclude Include="Algorithm\LineDetector.h"><Filter>Algorithm</Filter></ClInclude>
+    <ClInclude Include="Renderer\FontManager.h"><Filter>Renderer</Filter></ClInclude>
+    <ClInclude Include="Log\LogSystem.h"><Filter>Log</Filter></ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="Windows_imgui.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="include\imgui\imgui.cpp"><Filter>include\imgui</Filter></ClCompile>
+    <ClCompile Include="include\imgui\imgui_demo.cpp"><Filter>include\imgui</Filter></ClCompile>
+    <ClCompile Include="include\imgui\imgui_draw.cpp"><Filter>include\imgui</Filter></ClCompile>
+    <ClCompile Include="include\imgui\imgui_impl_dx11.cpp"><Filter>include\imgui</Filter></ClCompile>
+    <ClCompile Include="include\imgui\imgui_impl_dx12.cpp"><Filter>include\imgui</Filter></ClCompile>
+    <ClCompile Include="include\imgui\imgui_impl_win32.cpp"><Filter>include\imgui</Filter></ClCompile>
+    <ClCompile Include="include\imgui\imgui_tables.cpp"><Filter>include\imgui</Filter></ClCompile>
+    <ClCompile Include="include\imgui\imgui_widgets.cpp"><Filter>include\imgui</Filter></ClCompile>
+    <ClCompile Include="Core\AsyncImageLoader.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\AudioPlayer.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\VideoCapture.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\RecipeManager.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\FrameNavigation.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\FrameSourceState.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\FrameRenderer.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\ImageLoadController.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\LiveYoloRunner.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\ROIState.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\VisionContext.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\ToolExecutor.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\ToolController.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\ToolChainState.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\ThemeManager.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\DX12Context.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\OpenCVTest.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\OpenFileDialog.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="UI\DockSpaceHost.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="UI\ImageViewer.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="UI\LogWindow.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="UI\ROIManager.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="UI\Sidebar.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="UI\StatsWindow.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="UI\ToolsWindow.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="Algorithm\TemplateMatch.cpp"><Filter>Algorithm</Filter></ClCompile>
+    <ClCompile Include="Algorithm\OpenCVYoloDetector.cpp"><Filter>Algorithm</Filter></ClCompile>
+    <ClCompile Include="Algorithm\YOLODetector.cpp"><Filter>Algorithm</Filter></ClCompile>
+    <ClCompile Include="Algorithm\YOLOTool.cpp"><Filter>Algorithm</Filter></ClCompile>
+    <ClCompile Include="Algorithm\ShapeTools.cpp"><Filter>Algorithm</Filter></ClCompile>
+    <ClCompile Include="Algorithm\ITool.cpp"><Filter>Algorithm</Filter></ClCompile>
+    <ClCompile Include="Algorithm\ToolImageUtils.cpp"><Filter>Algorithm</Filter></ClCompile>
+    <ClCompile Include="Algorithm\ThresholdITool.cpp"><Filter>Algorithm</Filter></ClCompile>
+    <ClCompile Include="Algorithm\ThresholdTool.cpp"><Filter>Algorithm</Filter></ClCompile>
+    <ClCompile Include="Algorithm\ContourDetector.cpp"><Filter>Algorithm</Filter></ClCompile>
+    <ClCompile Include="Algorithm\EdgeTool.cpp"><Filter>Algorithm</Filter></ClCompile>
+    <ClCompile Include="Algorithm\ShapeMatcher.cpp"><Filter>Algorithm</Filter></ClCompile>
+    <ClCompile Include="Algorithm\BlobTool.cpp"><Filter>Algorithm</Filter></ClCompile>
+    <ClCompile Include="Algorithm\MorphologyTool.cpp">
+      <Filter>Algorithm</Filter>
+    </ClCompile>
+    <ClCompile Include="Algorithm\MultiColorFinder.cpp">
+      <Filter>Algorithm</Filter>
+    </ClCompile>
+    <ClCompile Include="Algorithm\ColorAnalyzer.cpp">
+      <Filter>Algorithm</Filter>
+    </ClCompile>
+    <ClCompile Include="Algorithm\LineDetector.cpp"><Filter>Algorithm</Filter></ClCompile>
+    <ClCompile Include="Renderer\FontManager.cpp"><Filter>Renderer</Filter></ClCompile>
+    <ClCompile Include="Log\LogSystem.cpp"><Filter>Log</Filter></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="Windows_imgui.rc">
+      <Filter>Resource Files</Filter>
+    </ResourceCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="assets\icons\app.ico">
+      <Filter>Resource Files</Filter>
+    </Image>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" />
+    <None Include="LICENSE" />
+  </ItemGroup>
+</Project>

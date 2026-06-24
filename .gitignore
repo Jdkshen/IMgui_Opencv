@@ -1,0 +1,52 @@
+# Build outputs
+x64/
+Win32/
+Debug/
+Release/
+.vs/
+*.exe
+*.dll
+*.ilk
+*.ipch
+*.iobj
+*.ipdb
+*.obj
+*.pdb
+*.tlog
+*.lastbuildstate
+*.log
+*.binlog
+
+# Repository runtime dependencies are intentionally kept under redist/.
+!redist/
+!redist/*.dll
+!redist/*.lib
+
+# Visual Studio user state
+*.vcxproj.user
+*.suo
+*.user
+
+# Local app state
+imgui.ini
+imgui_log.txt
+theme.cfg
+Log/
+recipes/
+.codegraph/
+.continue/
+.claude/
+.vscode/
+
+# Large local assets: keep these in Git LFS or fetch them with scripts.
+*.pt
+*.onnx
+*.mp4
+*.avi
+*.mov
+*.mkv
+models/
+Test/__pycache__/
+
+# Third-party runtime binaries should come from repository redist packages,
+# Git LFS, or download scripts. Headers under include/ are intentionally kept.
