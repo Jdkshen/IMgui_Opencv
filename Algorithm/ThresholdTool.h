@@ -29,13 +29,13 @@ extern int gCannyLow;                   // Canny低阈值
 extern int gCannyHigh;                  // Canny高阈值
 extern bool gUseGray;                   // 是否转为灰度处理
 
-extern cv::Mat gImage;                  // 当前处理图像
+extern cv::Mat& gImage;                 // 当前处理图像
 extern cv::Mat gThresholdMat;           // 阈值处理结果
 
-extern bool gNeedUpload;                // 是否需要上传到GPU
+extern bool& gNeedUpload;               // 是否需要上传到GPU
 
-extern cv::Mat gPendingUpload;          // 待上传的RGBA图像
-extern cv::Mat gOriginalImage;          // 原始图像（彩色）
+extern cv::Mat& gPendingUpload;         // 待上传的RGBA图像
+extern cv::Mat& gOriginalImage;         // 原始图像（彩色）
 
 extern float gTimeTotal;                // 处理总耗时(ms)
 extern PipelineState gPipe;             // 管线状态配置

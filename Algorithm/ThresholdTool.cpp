@@ -1,5 +1,6 @@
 #include "ThresholdTool.h"
 #include "../Core/DX12Context.h"
+#include "../Core/ImageState.h"
 #include "../Core/ImageUtils.h"
 
 #include "imgui/imgui.h"
@@ -13,12 +14,12 @@
 
 bool g_ShowThresholdWindow = false;         // 窗口显示标志
 
-bool gNeedUpload = false;                   // 是否需要上传处理结果到GPU
+bool& gNeedUpload = ImageState::NeedUploadRef(); // 是否需要上传处理结果到GPU
 
-cv::Mat gOriginalImage;                     // 原始图像（彩色，永久保留）
-cv::Mat gImage;                             // 当前处理的输入图像
+cv::Mat& gOriginalImage = ImageState::OriginalRef(); // 原始图像（彩色，永久保留）
+cv::Mat& gImage = ImageState::CurrentRef();          // 当前处理的输入图像
 cv::Mat gThresholdMat;                      // 阈值处理结果
-cv::Mat gPendingUpload;                     // 待上传到GPU的RGBA图像
+cv::Mat& gPendingUpload = ImageState::PendingUploadRef(); // 待上传到GPU的RGBA图像
 
 bool gUseGray = false;                      // 是否先转为灰度处理
 

@@ -79,7 +79,7 @@ int    g_TplEdgeHigh     = 150;     // Canny 高阈值
 extern bool gUseGray;                     // ThresholdTool.cpp
 extern PipelineState gPipe;                // ThresholdTool.cpp
 
-extern cv::Mat gImage;                    // 当前处理图像（ThresholdTool.cpp）
+extern cv::Mat& gImage;                   // 当前处理图像（ThresholdTool.cpp）
 extern ImVec4 color;                      // 日志颜色（DockSpaceHost.cpp）
 extern D3D12_GPU_DESCRIPTOR_HANDLE gSrvGpuHandle;  // GPU纹理句柄（DX12Context.cpp）
 extern int gImageWidth;                   // 图片宽度（DX12Context.cpp）

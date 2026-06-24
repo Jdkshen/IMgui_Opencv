@@ -5,10 +5,6 @@
 
 #include <algorithm>
 
-extern cv::Mat gImage;
-extern cv::Mat gOriginalImage;
-extern cv::Mat gPendingUpload;
-extern bool gNeedUpload;
 extern int gImageWidth;
 extern int gImageHeight;
 extern int g_ImageVersion;
@@ -17,14 +13,14 @@ namespace
 {
 cv::Mat s_current;
 cv::Mat s_original;
+cv::Mat s_pendingUpload;
+bool s_needUpload = false;
 int s_width = 0;
 int s_height = 0;
 int s_version = 0;
 
 void SyncLegacyAndContext()
 {
-    gImage = s_current.clone();
-    gOriginalImage = s_original.clone();
     gImageWidth = s_width;
     gImageHeight = s_height;
     g_ImageVersion = s_version;
@@ -42,6 +38,26 @@ namespace ImageState
     bool HasImage()
     {
         return !s_current.empty();
+    }
+
+    cv::Mat& CurrentRef()
+    {
+        return s_current;
+    }
+
+    cv::Mat& OriginalRef()
+    {
+        return s_original;
+    }
+
+    cv::Mat& PendingUploadRef()
+    {
+        return s_pendingUpload;
+    }
+
+    bool& NeedUploadRef()
+    {
+        return s_needUpload;
     }
 
     const cv::Mat& Current()
@@ -92,7 +108,6 @@ namespace ImageState
         s_height = image.rows;
         s_version = std::max(s_version, g_ImageVersion) + 1;
 
-        gImage = s_current.clone();
         gImageWidth = s_width;
         gImageHeight = s_height;
         g_ImageVersion = s_version;
@@ -105,8 +120,8 @@ namespace ImageState
         SafeConvertToRGBA(s_current, rgba);
         if (!rgba.empty())
         {
-            gPendingUpload = rgba;
-            gNeedUpload = true;
+            s_pendingUpload = rgba;
+            s_needUpload = true;
         }
     }
 
@@ -118,10 +133,8 @@ namespace ImageState
         s_height = 0;
         s_version = 0;
 
-        gImage.release();
-        gOriginalImage.release();
-        gPendingUpload.release();
-        gNeedUpload = false;
+        s_pendingUpload.release();
+        s_needUpload = false;
         gImageWidth = 0;
         gImageHeight = 0;
         g_ImageVersion = 0;

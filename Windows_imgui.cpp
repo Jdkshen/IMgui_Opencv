@@ -34,7 +34,7 @@ static ImVec4 clear_color = ImVec4(
 
 // 前向声明
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
-extern cv::Mat gOriginalImage;
+extern cv::Mat& gOriginalImage;
 
 // =========================
 // 程序入口点

@@ -9,11 +9,11 @@
 #include "imgui/imgui.h"
 #include "../Algorithm/YOLODetector.h"
 
-extern cv::Mat gImage;
-extern cv::Mat gOriginalImage;
-extern cv::Mat gPendingUpload;
+extern cv::Mat& gImage;
+extern cv::Mat& gOriginalImage;
+extern cv::Mat& gPendingUpload;
 extern cv::Mat gThresholdMat;
-extern bool gNeedUpload;
+extern bool& gNeedUpload;
 extern int gImageWidth;
 extern int gImageHeight;
 extern int g_ImageVersion;

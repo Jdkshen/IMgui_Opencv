@@ -5,6 +5,10 @@
 namespace ImageState
 {
     bool HasImage();
+    cv::Mat& CurrentRef();
+    cv::Mat& OriginalRef();
+    cv::Mat& PendingUploadRef();
+    bool& NeedUploadRef();
     const cv::Mat& Current();
     const cv::Mat& Original();
     int Width();

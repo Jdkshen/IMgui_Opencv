@@ -26,8 +26,8 @@
 #include <stdexcept>
 #include <string>
 
-extern cv::Mat gImage;
-extern cv::Mat gOriginalImage;
+extern cv::Mat& gImage;
+extern cv::Mat& gOriginalImage;
 extern int gImageWidth;
 extern int gImageHeight;
 extern int g_ImageVersion;
@@ -470,10 +470,15 @@ void TestImageStateOwnsCurrentImageSnapshot()
     Require(!ImageState::Original().empty(), "image state original image empty");
     Require(gImageWidth == 14 && gImageHeight == 10, "image state did not sync legacy dimensions");
     Require(g_ImageVersion == 1 && gContext.imageVersion == 1, "image state did not sync legacy version");
+    Require(gImage.data == ImageState::Current().data, "legacy gImage should reference ImageState current image");
+    Require(gOriginalImage.data == ImageState::Original().data, "legacy gOriginalImage should reference ImageState original image");
     Require(gContext.image.data != ImageState::Current().data, "image state shared VisionContext current image buffer");
 
+    gImage.setTo(cv::Scalar(11, 12, 13));
+    Require(ImageState::Current().at<cv::Vec3b>(0, 0)[0] == 11, "legacy gImage write did not update ImageState current image");
+
     image.setTo(cv::Scalar(200, 200, 200));
-    Require(ImageState::Current().at<cv::Vec3b>(0, 0)[0] == 7, "image state kept shallow current copy");
+    Require(ImageState::Current().at<cv::Vec3b>(0, 0)[0] == 11, "image state current buffer was unexpectedly replaced");
     Require(gOriginalImage.at<cv::Vec3b>(0, 0)[0] == 7, "image state kept shallow legacy original copy");
 
     ImageState::Clear();

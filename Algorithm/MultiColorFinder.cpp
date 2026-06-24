@@ -13,9 +13,9 @@ float g_McfLastTimeMs = 0;
 int   g_McfLastCount  = 0;
 
 // ---- 实时预处理预览 ----
-extern cv::Mat gImage;
-extern cv::Mat gPendingUpload;
-extern bool gNeedUpload;
+extern cv::Mat& gImage;
+extern cv::Mat& gPendingUpload;
+extern bool& gNeedUpload;
 
 void McfApplyPreview(bool useGray, bool useBinary, int binThresh, const cv::Mat& src)
 {

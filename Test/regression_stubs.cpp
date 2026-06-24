@@ -4,6 +4,7 @@
 #include "../Algorithm/YOLODetector.h"
 #include "../Algorithm/ITool.h"
 #include "../Core/RecipeManager.h"
+#include "../Core/ImageState.h"
 #include "../Core/ROIState.h"
 #include "../Core/ToolChainState.h"
 #include "../Log/LogSystem.h"
@@ -42,10 +43,10 @@ std::vector<ROI> gMatchROIs;
 std::vector<double> gMatchScores;
 // g_McfLastTimeMs/g_McfLastCount are defined by the real MultiColorFinder.cpp,
 // which is part of RegressionTests.vcxproj. Do not duplicate them here.
-cv::Mat gImage;
-cv::Mat gOriginalImage;
-cv::Mat gPendingUpload;
-bool gNeedUpload = false;
+cv::Mat& gImage = ImageState::CurrentRef();
+cv::Mat& gOriginalImage = ImageState::OriginalRef();
+cv::Mat& gPendingUpload = ImageState::PendingUploadRef();
+bool& gNeedUpload = ImageState::NeedUploadRef();
 int gImageWidth = 0;
 int gImageHeight = 0;
 int g_ImageVersion = 0;
