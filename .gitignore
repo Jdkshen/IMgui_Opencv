@@ -33,9 +33,11 @@ imgui_log.txt
 theme.cfg
 Log/
 recipes/
-.codegraph/
+.codegraph/*
+!.codegraph/.gitignore
 .continue/
-.claude/
+.claude/*
+!.claude/README.md
 
 # Large local assets: keep these in Git LFS or fetch them with scripts.
 *.pt
