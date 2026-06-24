@@ -9,6 +9,9 @@ namespace ImageState
     cv::Mat& OriginalRef();
     cv::Mat& PendingUploadRef();
     bool& NeedUploadRef();
+    int& WidthRef();
+    int& HeightRef();
+    int& VersionRef();
     const cv::Mat& Current();
     const cv::Mat& Original();
     int Width();

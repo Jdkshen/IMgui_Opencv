@@ -58,4 +58,4 @@ extern float g_YoloDetailPreMs;
 extern float g_YoloDetailInfMs;
 extern float g_YoloDetailPostMs;
 extern float g_YoloDetailTotalMs;
-extern int g_ImageVersion;
+extern int& g_ImageVersion;

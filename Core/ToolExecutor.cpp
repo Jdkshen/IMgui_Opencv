@@ -15,6 +15,7 @@
 #include "../Algorithm/ThresholdTool.h"
 #include "../Algorithm/YOLODetector.h"
 #include "../Algorithm/YOLOTool.h"
+#include "ImageState.h"
 #include "ImageUtils.h"
 #include "LegacyAppState.h"
 #include "ROIState.h"
@@ -29,7 +30,6 @@
 namespace
 {
 bool ConvertForCopyTo(const cv::Mat& src, int targetChannels, cv::Mat& dst);
-void UploadImage(const cv::Mat& img);
 
 const std::vector<ROI>& SelectSearchROIs(const ToolInstance& it)
 {
@@ -143,17 +143,6 @@ cv::Mat ApplyPipelineToContextImage(const VisionContext& ctx, bool useGray, cons
     return out;
 }
 
-void UploadImage(const cv::Mat& img)
-{
-    cv::Mat rgba;
-    SafeConvertToRGBA(img, rgba);
-    if (!rgba.empty())
-    {
-        gPendingUpload = rgba;
-        gNeedUpload = true;
-    }
-}
-
 std::string PrefixDisplayLabel(const std::string& toolLabel, const std::string& itemLabel)
 {
     if (toolLabel.empty())
@@ -243,7 +232,8 @@ public:
             return result;
         }
 
-        ctx.image.copyTo(gImage);
+        auto& currentImage = ImageState::CurrentRef();
+        ctx.image.copyTo(currentImage);
         g_TMEnableRotation = enableRotation;
         g_TMRotationStart = rotationStart; g_TMRotationEnd = rotationEnd;
         g_TMRotationStep = rotationStep;
@@ -255,13 +245,13 @@ public:
 
         bool didPreprocess = false;
         if (imgUseGray || imgEnableThreshold) {
-            if (imgUseGray && gImage.channels() > 1) {
-                int code = (gImage.channels() == 4) ? cv::COLOR_BGRA2GRAY : cv::COLOR_BGR2GRAY;
-                cv::cvtColor(gImage, gImage, code);
+            if (imgUseGray && currentImage.channels() > 1) {
+                int code = (currentImage.channels() == 4) ? cv::COLOR_BGRA2GRAY : cv::COLOR_BGR2GRAY;
+                cv::cvtColor(currentImage, currentImage, code);
             }
             if (imgEnableThreshold) {
-                if (gImage.channels() > 1) cv::cvtColor(gImage, gImage, cv::COLOR_BGR2GRAY);
-                cv::threshold(gImage, gImage, imgThreshold, 255, cv::THRESH_BINARY);
+                if (currentImage.channels() > 1) cv::cvtColor(currentImage, currentImage, cv::COLOR_BGR2GRAY);
+                cv::threshold(currentImage, currentImage, imgThreshold, 255, cv::THRESH_BINARY);
             }
             didPreprocess = true;
         }
@@ -300,7 +290,7 @@ public:
             result.regions.push_back(region);
         }
         if (didPreprocess)
-            result.debugImage = gImage.clone();
+            result.debugImage = currentImage.clone();
         return result;
     }
 };
@@ -586,10 +576,9 @@ bool RunViaITool(ToolInstance& it, VisionContext& ctx)
 
     const bool dirty = !result.debugImage.empty();
     if (dirty) {
-        gImage = result.debugImage.clone();
-        gThresholdMat = gImage;
+        ImageState::SetDebugImage(result.debugImage);
+        gThresholdMat = ImageState::Current().clone();
         gTimeTotal = ms;
-        UploadImage(gImage);
         result.debugImage.release();
     }
 
@@ -599,11 +588,11 @@ bool RunViaITool(ToolInstance& it, VisionContext& ctx)
 
 bool RunViaITool(ToolInstance& it)
 {
-    gContext.image = gImage.clone();
-    gContext.originalImage = !gOriginalImage.empty() ? gOriginalImage.clone() : gImage.clone();
-    gContext.width = gImageWidth;
-    gContext.height = gImageHeight;
-    gContext.imageVersion = g_ImageVersion;
+    gContext.image = ImageState::Current().clone();
+    gContext.originalImage = !ImageState::Original().empty() ? ImageState::Original().clone() : ImageState::Current().clone();
+    gContext.width = ImageState::Width();
+    gContext.height = ImageState::Height();
+    gContext.imageVersion = ImageState::Version();
     gContext.frame.original = gContext.originalImage.clone();
     gContext.rois = SelectSearchROIs(it);
     gContext.selectedROI = SelectROIIndex(gContext.rois);

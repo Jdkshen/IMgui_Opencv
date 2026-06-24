@@ -1,6 +1,7 @@
 #include "ToolController.h"
 #include "ToolExecutor.h"
 #include "FrameNavigation.h"
+#include "ImageState.h"
 #include "ImageUtils.h"
 #include "LegacyAppState.h"
 #include "ToolChainState.h"
@@ -33,10 +34,10 @@ namespace ToolController
 
     static bool RestoreBatchOriginal()
     {
-        if ((s_originalImage.empty() || s_originalVersion != g_ImageVersion) && !gOriginalImage.empty())
+        if ((s_originalImage.empty() || s_originalVersion != ImageState::Version()) && !ImageState::Original().empty())
         {
-            s_originalImage = gOriginalImage.clone();
-            s_originalVersion = g_ImageVersion;
+            s_originalImage = ImageState::Original().clone();
+            s_originalVersion = ImageState::Version();
         }
 
         if (s_originalImage.empty())
@@ -45,13 +46,14 @@ namespace ToolController
             return false;
         }
 
-        s_originalImage.copyTo(gImage);
+        auto& currentImage = ImageState::CurrentRef();
+        s_originalImage.copyTo(currentImage);
         cv::Mat rgba;
-        SafeConvertToRGBA(gImage, rgba);
+        SafeConvertToRGBA(currentImage, rgba);
         if (!rgba.empty())
         {
-            gPendingUpload = rgba;
-            gNeedUpload = true;
+            ImageState::PendingUploadRef() = rgba;
+            ImageState::NeedUploadRef() = true;
         }
         s_lastInputImage = s_originalImage.clone();
         s_lastOutputImage = s_originalImage.clone();
@@ -96,8 +98,8 @@ namespace ToolController
         s_toolTimesMs.assign(ToolChainState::ReadOnlyTools().size(), 0.0f);
         s_imageDirty = false;
         s_batchTimerStarted = false;
-        s_originalImage = !gOriginalImage.empty() ? gOriginalImage.clone() : gImage.clone();
-        s_originalVersion = g_ImageVersion;
+        s_originalImage = !ImageState::Original().empty() ? ImageState::Original().clone() : ImageState::Current().clone();
+        s_originalVersion = ImageState::Version();
         s_lastInputImage = s_originalImage.clone();
         s_lastOutputImage = s_originalImage.clone();
         s_originalToolOutputImage = s_originalImage.clone();
@@ -107,7 +109,7 @@ namespace ToolController
 
     void RequestStepNext() {
         if (s_stepCursor >= (int)ToolChainState::ReadOnlyTools().size()) { s_stepCursor = 0; s_stepTimeMs = 0; }
-        if (s_stepCursor == 0) { s_originalImage = !gOriginalImage.empty() ? gOriginalImage.clone() : gImage.clone(); s_originalVersion = g_ImageVersion; s_lastInputImage = s_originalImage.clone(); s_lastOutputImage = s_originalImage.clone(); s_originalToolOutputImage = s_originalImage.clone(); s_imageDirty = false; }
+        if (s_stepCursor == 0) { s_originalImage = !ImageState::Original().empty() ? ImageState::Original().clone() : ImageState::Current().clone(); s_originalVersion = ImageState::Version(); s_lastInputImage = s_originalImage.clone(); s_lastOutputImage = s_originalImage.clone(); s_originalToolOutputImage = s_originalImage.clone(); s_imageDirty = false; }
         s_isStep = true;
         s_currentIndex = s_stepCursor;
         s_mode = Mode::Running;
@@ -128,7 +130,7 @@ namespace ToolController
         if (s_mode != Mode::Running) return;
         auto& tools = ToolChainState::Tools();
         if (s_currentIndex < 0 || s_currentIndex >= (int)tools.size()) { s_mode = Mode::Idle; return; }
-        if (gImage.empty()) { LogSystem::Add(LOG_WARN, "执行中止：未加载图片"); s_mode = Mode::Idle; return; }
+        if (ImageState::Current().empty()) { LogSystem::Add(LOG_WARN, "执行中止：未加载图片"); s_mode = Mode::Idle; return; }
 
         auto& it = tools[s_currentIndex];
         const bool usePreviousOutput = (it.inputSourceMode == 1 && !s_lastOutputImage.empty());
@@ -138,16 +140,17 @@ namespace ToolController
                                      : s_lastInputImage;
         if (!selectedInput.empty())
         {
-            selectedInput.copyTo(gImage);
+            auto& currentImage = ImageState::CurrentRef();
+            selectedInput.copyTo(currentImage);
             s_lastInputImage = selectedInput.clone();
             if (s_isStep)
             {
                 cv::Mat rgba;
-                SafeConvertToRGBA(gImage, rgba);
+                SafeConvertToRGBA(currentImage, rgba);
                 if (!rgba.empty())
                 {
-                    gPendingUpload = rgba;
-                    gNeedUpload = true;
+                    ImageState::PendingUploadRef() = rgba;
+                    ImageState::NeedUploadRef() = true;
                 }
             }
         }
@@ -168,8 +171,8 @@ namespace ToolController
         s_imageDirty = ExecuteToolAt(s_currentIndex);
         if (!s_isStep)
             s_batchTotalMs += s_stepTimeMs;
-        if (!gImage.empty())
-            s_lastOutputImage = gImage.clone();
+        if (!ImageState::Current().empty())
+            s_lastOutputImage = ImageState::Current().clone();
 
         if (s_isStep) {
             s_stepCursor++;
@@ -185,8 +188,8 @@ namespace ToolController
                     s_mode = Mode::Idle;  // 简化：循环等下一帧手动触发
                 } else if (s_loop) {
                     s_currentIndex = 0; s_imageDirty = false;
-                    s_originalImage = !gOriginalImage.empty() ? gOriginalImage.clone() : gImage.clone();
-                    s_originalVersion = g_ImageVersion;
+                    s_originalImage = !ImageState::Original().empty() ? ImageState::Original().clone() : ImageState::Current().clone();
+                    s_originalVersion = ImageState::Version();
                     s_lastInputImage = s_originalImage.clone();
                     s_lastOutputImage = s_originalImage.clone();
                     s_originalToolOutputImage = s_originalImage.clone();

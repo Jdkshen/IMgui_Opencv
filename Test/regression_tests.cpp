@@ -28,9 +28,9 @@
 
 extern cv::Mat& gImage;
 extern cv::Mat& gOriginalImage;
-extern int gImageWidth;
-extern int gImageHeight;
-extern int g_ImageVersion;
+extern int& gImageWidth;
+extern int& gImageHeight;
+extern int& g_ImageVersion;
 
 namespace
 {
@@ -470,6 +470,12 @@ void TestImageStateOwnsCurrentImageSnapshot()
     Require(!ImageState::Original().empty(), "image state original image empty");
     Require(gImageWidth == 14 && gImageHeight == 10, "image state did not sync legacy dimensions");
     Require(g_ImageVersion == 1 && gContext.imageVersion == 1, "image state did not sync legacy version");
+    gImageWidth = 99;
+    gImageHeight = 88;
+    g_ImageVersion = 77;
+    Require(ImageState::Width() == 99 && ImageState::Height() == 88,
+        "legacy image dimensions should reference ImageState dimensions");
+    Require(ImageState::Version() == 77, "legacy image version should reference ImageState version");
     Require(gImage.data == ImageState::Current().data, "legacy gImage should reference ImageState current image");
     Require(gOriginalImage.data == ImageState::Original().data, "legacy gOriginalImage should reference ImageState original image");
     Require(gContext.image.data != ImageState::Current().data, "image state shared VisionContext current image buffer");

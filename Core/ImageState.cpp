@@ -3,12 +3,6 @@
 #include "ImageUtils.h"
 #include "VisionContext.h"
 
-#include <algorithm>
-
-extern int gImageWidth;
-extern int gImageHeight;
-extern int g_ImageVersion;
-
 namespace
 {
 cv::Mat s_current;
@@ -21,10 +15,6 @@ int s_version = 0;
 
 void SyncLegacyAndContext()
 {
-    gImageWidth = s_width;
-    gImageHeight = s_height;
-    g_ImageVersion = s_version;
-
     gContext.image = s_current.clone();
     gContext.originalImage = s_original.clone();
     gContext.width = s_width;
@@ -58,6 +48,21 @@ namespace ImageState
     bool& NeedUploadRef()
     {
         return s_needUpload;
+    }
+
+    int& WidthRef()
+    {
+        return s_width;
+    }
+
+    int& HeightRef()
+    {
+        return s_height;
+    }
+
+    int& VersionRef()
+    {
+        return s_version;
     }
 
     const cv::Mat& Current()
@@ -94,7 +99,7 @@ namespace ImageState
         s_original = image.clone();
         s_width = image.cols;
         s_height = image.rows;
-        s_version = std::max(s_version, g_ImageVersion) + 1;
+        ++s_version;
         SyncLegacyAndContext();
     }
 
@@ -106,11 +111,7 @@ namespace ImageState
         s_current = image.clone();
         s_width = image.cols;
         s_height = image.rows;
-        s_version = std::max(s_version, g_ImageVersion) + 1;
-
-        gImageWidth = s_width;
-        gImageHeight = s_height;
-        g_ImageVersion = s_version;
+        ++s_version;
         gContext.image = s_current.clone();
         gContext.width = s_width;
         gContext.height = s_height;
@@ -135,10 +136,6 @@ namespace ImageState
 
         s_pendingUpload.release();
         s_needUpload = false;
-        gImageWidth = 0;
-        gImageHeight = 0;
-        g_ImageVersion = 0;
-
         gContext.image.release();
         gContext.originalImage.release();
         gContext.width = 0;

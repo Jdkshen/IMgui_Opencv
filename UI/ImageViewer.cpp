@@ -4,6 +4,7 @@
 #include "../Core/OpenFileDialog.h"
 #include "../Core/DX12Context.h"
 #include "../Core/FrameSourceState.h"
+#include "../Core/ImageState.h"
 #include "../Core/VideoCapture.h"
 #include "../Core/VisionContext.h"
 #include "../Algorithm/YOLODetector.h"
@@ -31,7 +32,7 @@ std::vector<DetectedObject> g_YoloOverlays;
 bool g_YoloShowOverlay = false;
 float g_YoloOverlayOffsetX = 0.0f;
 
-int g_ImageVersion = 0;
+int& g_ImageVersion = ImageState::VersionRef();
 
 // ---- 统一结果叠加层（唯一结果源） ----
 static void DrawUnifiedResults(ImDrawList* dl)

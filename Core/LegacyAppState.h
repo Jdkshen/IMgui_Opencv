@@ -14,9 +14,9 @@ extern cv::Mat& gOriginalImage;
 extern cv::Mat& gPendingUpload;
 extern cv::Mat gThresholdMat;
 extern bool& gNeedUpload;
-extern int gImageWidth;
-extern int gImageHeight;
-extern int g_ImageVersion;
+extern int& gImageWidth;
+extern int& gImageHeight;
+extern int& g_ImageVersion;
 
 extern cv::Mat g_FrozenTemplate;
 extern float gTimeTotal;

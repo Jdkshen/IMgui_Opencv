@@ -108,8 +108,8 @@ extern D3D12_GPU_DESCRIPTOR_HANDLE gSrvGpuHandle;
 
 extern std::string pendingPath;
 
-extern int gImageWidth;
-extern int gImageHeight;
+extern int& gImageWidth;
+extern int& gImageHeight;
 
 // =========================
 // 函数声明

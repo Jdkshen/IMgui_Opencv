@@ -1,4 +1,5 @@
 #include "DX12Context.h"
+#include "ImageState.h"
 #include <d3d12.h>
 #include <dxgi1_4.h>
 #include <dxgi1_5.h>
@@ -39,8 +40,8 @@ D3D12_GPU_DESCRIPTOR_HANDLE gSrvGpuHandle = {};
 
 std::string pendingPath;
 
-int gImageWidth = 0;
-int gImageHeight = 0;
+int& gImageWidth = ImageState::WidthRef();
+int& gImageHeight = ImageState::HeightRef();
 
 // =========================
 // 初始化辅助DX12上下文
