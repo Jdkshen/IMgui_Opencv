@@ -1,71 +1,107 @@
 #include "ToolChainState.h"
 
-#include "UIStateBridge.h"
+#include <algorithm>
 
 namespace ToolChainState
 {
+namespace
+{
+    std::vector<ToolInstance> s_tools;
+    int s_activeToolIndex = -1;
+    bool s_yoloLiveDetect = false;
+    int s_yoloLiveInstanceIndex = -1;
+    float s_yoloLastTimeMs = 0.0f;
+    float s_yoloLiveFrameMs = 0.0f;
+}
+
 std::vector<ToolInstance>& Tools()
 {
-    return UI::g_ToolInstances;
+    return s_tools;
 }
 
 const std::vector<ToolInstance>& ReadOnlyTools()
 {
-    return UI::g_ToolInstances;
+    return s_tools;
+}
+
+int& ActiveIndexRef()
+{
+    return s_activeToolIndex;
 }
 
 int ActiveIndex()
 {
-    return UI::g_ActiveToolIndex;
+    return s_activeToolIndex;
 }
 
 void SetActiveIndex(int index)
 {
-    UI::g_ActiveToolIndex = index;
+    s_activeToolIndex = index;
 }
 
 bool YoloLiveDetect()
 {
-    return UI::g_YoloLiveDetect;
+    return s_yoloLiveDetect;
+}
+
+bool& YoloLiveDetectRef()
+{
+    return s_yoloLiveDetect;
 }
 
 void SetYoloLiveDetect(bool enabled)
 {
-    UI::g_YoloLiveDetect = enabled;
+    s_yoloLiveDetect = enabled;
+}
+
+int& YoloLiveInstanceIndexRef()
+{
+    return s_yoloLiveInstanceIndex;
 }
 
 int YoloLiveInstanceIndex()
 {
-    return UI::g_YoloLiveInstanceIdx;
+    return s_yoloLiveInstanceIndex;
 }
 
 void SetYoloLiveInstanceIndex(int index)
 {
-    UI::g_YoloLiveInstanceIdx = index;
+    s_yoloLiveInstanceIndex = index;
 }
 
 float YoloLastTimeMs()
 {
-    return UI::g_YoloLastTimeMs;
+    return s_yoloLastTimeMs;
+}
+
+float& YoloLastTimeMsRef()
+{
+    return s_yoloLastTimeMs;
 }
 
 void SetYoloLastTimeMs(float ms)
 {
-    UI::g_YoloLastTimeMs = ms;
+    s_yoloLastTimeMs = ms;
+}
+
+float& YoloLiveFrameMsRef()
+{
+    return s_yoloLiveFrameMs;
 }
 
 float YoloLiveFrameMs()
 {
-    return UI::g_YoloLiveFrameMs;
+    return s_yoloLiveFrameMs;
 }
 
 void SetYoloLiveFrameMs(float ms)
 {
-    UI::g_YoloLiveFrameMs = ms;
+    s_yoloLiveFrameMs = ms;
 }
 
 void MoveOriginalToolToFront()
 {
-    UI::MoveOriginalToolToFront();
+    std::stable_partition(s_tools.begin(), s_tools.end(),
+        [](const ToolInstance& it) { return it.type == 12; });
 }
 }

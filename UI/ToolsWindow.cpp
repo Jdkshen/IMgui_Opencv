@@ -6,6 +6,7 @@
 #include "../Core/VisionContext.h"
 #include "../Core/ToolExecutor.h"
 #include "../Core/ToolController.h"
+#include "../Core/ToolChainState.h"
 #include "../Log/LogSystem.h"
 #include "../Algorithm/YOLODetector.h"
 #include "../Algorithm/OpenCVYoloDetector.h"
@@ -404,17 +405,16 @@ namespace UI
 
     std::unordered_map<int, ToolUIFn> g_ToolUIMap;
 
-    int g_ActiveToolIndex = -1;
-    bool g_YoloLiveDetect = false;
-    int g_YoloLiveInstanceIdx = -1; // 哪个 YOLO 实例触发了实时检测
-    float g_YoloLastTimeMs = 0.0f;  // 上次 YOLO 推理耗时
-    float g_YoloLiveFrameMs = 0.0f; // 实时检测每帧耗时
-    std::vector<ToolInstance> g_ToolInstances;
+    int& g_ActiveToolIndex = ToolChainState::ActiveIndexRef();
+    bool& g_YoloLiveDetect = ToolChainState::YoloLiveDetectRef();
+    int& g_YoloLiveInstanceIdx = ToolChainState::YoloLiveInstanceIndexRef(); // 哪个 YOLO 实例触发了实时检测
+    float& g_YoloLastTimeMs = ToolChainState::YoloLastTimeMsRef();  // 上次 YOLO 推理耗时
+    float& g_YoloLiveFrameMs = ToolChainState::YoloLiveFrameMsRef(); // 实时检测每帧耗时
+    std::vector<ToolInstance>& g_ToolInstances = ToolChainState::Tools();
 
     void MoveOriginalToolToFront()
     {
-        std::stable_partition(g_ToolInstances.begin(), g_ToolInstances.end(),
-            [](const ToolInstance& it) { return it.type == 12; });
+        ToolChainState::MoveOriginalToolToFront();
     }
 
     void ShowToolsWindow()

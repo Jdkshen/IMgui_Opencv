@@ -8,6 +8,7 @@ namespace ROIState
 {
     std::vector<ROI>& Items();
     const std::vector<ROI>& ReadOnlyItems();
+    int& SelectedIndexRef();
     int SelectedIndex();
     void SetSelectedIndex(int index);
     int SelectIndexFor(const std::vector<ROI>& rois);

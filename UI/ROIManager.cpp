@@ -1,6 +1,7 @@
 #include "../Windows_imgui.h"
 #include "ROIManager.h"
 #include "../Core/DX12Context.h"
+#include "../Core/ROIState.h"
 #include "../Core/VisionContext.h"
 #include "../Log/LogSystem.h"
 #include "../Algorithm/TemplateMatch.h"
@@ -16,10 +17,10 @@ namespace UI
     // =====================================================
     // ROI 全局变量定义
     // =====================================================
-    std::vector<ROI> gROIs;
+    std::vector<ROI>& gROIs = ROIState::Items();
     bool gDrawingROI = false;
     ImVec2 gROIStart;
-    int gSelectedROI = -1;
+    int& gSelectedROI = ROIState::SelectedIndexRef();
     bool gDraggingROI = false;
     ImVec2 gLastMousePos;
     HandleType gActiveHandle = HANDLE_NONE;

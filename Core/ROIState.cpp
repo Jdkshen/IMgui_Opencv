@@ -1,27 +1,36 @@
 #include "ROIState.h"
 
-#include "UIStateBridge.h"
-
 namespace ROIState
 {
+namespace
+{
+    std::vector<ROI> s_rois;
+    int s_selectedROI = -1;
+}
+
 std::vector<ROI>& Items()
 {
-    return UI::gROIs;
+    return s_rois;
 }
 
 const std::vector<ROI>& ReadOnlyItems()
 {
-    return UI::gROIs;
+    return s_rois;
+}
+
+int& SelectedIndexRef()
+{
+    return s_selectedROI;
 }
 
 int SelectedIndex()
 {
-    return UI::gSelectedROI;
+    return s_selectedROI;
 }
 
 void SetSelectedIndex(int index)
 {
-    UI::gSelectedROI = index;
+    s_selectedROI = index;
 }
 
 int SelectIndexFor(const std::vector<ROI>& rois)
@@ -36,6 +45,7 @@ int SelectIndexFor(const std::vector<ROI>& rois)
 
 void ClearInteraction()
 {
-    UI::ClearROIState();
+    s_rois.clear();
+    s_selectedROI = -1;
 }
 }

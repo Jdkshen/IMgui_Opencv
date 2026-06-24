@@ -10,8 +10,11 @@
 #include "../Core/RecipeManager.h"
 #include "../Core/FrameSourceState.h"
 #include "../Core/ImageState.h"
+#include "../Core/ROIState.h"
+#include "../Core/ToolChainState.h"
 #include "../Core/ToolExecutor.h"
 #include "../Core/VisionContext.h"
+#include "../UI/ROIManager.h"
 #include "../UI/ToolsWindow.h"
 
 #include <opencv2/imgproc.hpp>
@@ -562,6 +565,53 @@ void TestToolInstanceLabelDefaultIsEmpty()
     Require(instance.label.empty(), "tool instance label should default to empty");
 }
 
+void TestCoreStateOwnsRoiAndToolChain()
+{
+    UI::gROIs.clear();
+    UI::gSelectedROI = -1;
+    UI::g_ToolInstances.clear();
+    UI::g_ActiveToolIndex = -1;
+    UI::g_YoloLiveDetect = false;
+    UI::g_YoloLiveInstanceIdx = -1;
+    UI::g_YoloLastTimeMs = 0.0f;
+    UI::g_YoloLiveFrameMs = 0.0f;
+
+    ROIState::Items().clear();
+    ROI roi;
+    roi.start = ImVec2(1.0f, 2.0f);
+    roi.end = ImVec2(3.0f, 4.0f);
+    ROIState::Items().push_back(roi);
+    ROIState::SetSelectedIndex(0);
+
+    Require(ROIState::ReadOnlyItems().size() == 1, "core ROI state did not store ROI");
+    Require(ROIState::SelectedIndex() == 0, "core ROI selected index regressed");
+    Require(UI::gROIs.size() == 1, "UI ROI compatibility view did not use core state");
+    Require(UI::gSelectedROI == 0, "UI ROI selected compatibility view did not use core state");
+
+    ToolChainState::Tools().clear();
+    ToolInstance tool;
+    tool.type = 7;
+    tool.label = "core";
+    ToolChainState::Tools().push_back(tool);
+    ToolChainState::SetActiveIndex(0);
+    ToolChainState::SetYoloLiveDetect(true);
+    ToolChainState::SetYoloLiveInstanceIndex(0);
+    ToolChainState::SetYoloLastTimeMs(12.5f);
+    ToolChainState::SetYoloLiveFrameMs(16.0f);
+
+    Require(ToolChainState::ReadOnlyTools().size() == 1, "core tool chain did not store tool");
+    Require(ToolChainState::ActiveIndex() == 0, "core tool active index regressed");
+    Require(ToolChainState::YoloLiveDetect(), "core YOLO live flag regressed");
+    Require(ToolChainState::YoloLiveInstanceIndex() == 0, "core YOLO live index regressed");
+    Require(std::abs(ToolChainState::YoloLastTimeMs() - 12.5f) < 0.001f, "core YOLO last time regressed");
+    Require(std::abs(ToolChainState::YoloLiveFrameMs() - 16.0f) < 0.001f, "core YOLO frame time regressed");
+
+    Require(UI::g_ToolInstances.size() == 1, "UI tool compatibility view did not use core state");
+    Require(UI::g_ActiveToolIndex == 0, "UI active tool compatibility view did not use core state");
+    Require(UI::g_YoloLiveDetect, "UI YOLO live compatibility view did not use core state");
+    Require(UI::g_YoloLiveInstanceIdx == 0, "UI YOLO live index compatibility view did not use core state");
+}
+
 void TestShapeMatcherTemplateLargerThanSearchImage()
 {
     cv::Mat image(20, 60, CV_8UC3, cv::Scalar(0, 0, 0));
@@ -600,6 +650,7 @@ int main()
         TestToolChainEditActions();
         TestShapeMaxResultsDefaultIsOne();
         TestToolInstanceLabelDefaultIsEmpty();
+        TestCoreStateOwnsRoiAndToolChain();
         TestShapeMatcherTemplateLargerThanSearchImage();
         std::cout << "regression_tests: all tests passed\n";
         return 0;

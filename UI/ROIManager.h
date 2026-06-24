@@ -16,10 +16,10 @@ namespace UI
     // =====================================================
     // ROI 数据与交互状态（extern 声明）
     // =====================================================
-    extern std::vector<ROI> gROIs;
+    extern std::vector<ROI>& gROIs;
     extern bool gDrawingROI;
     extern ImVec2 gROIStart;
-    extern int gSelectedROI;
+    extern int& gSelectedROI;
     extern bool gDraggingROI;
     extern ImVec2 gLastMousePos;
     extern HandleType gActiveHandle;

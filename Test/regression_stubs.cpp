@@ -4,6 +4,8 @@
 #include "../Algorithm/YOLODetector.h"
 #include "../Algorithm/ITool.h"
 #include "../Core/RecipeManager.h"
+#include "../Core/ROIState.h"
+#include "../Core/ToolChainState.h"
 #include "../Log/LogSystem.h"
 #include "../UI/ROIManager.h"
 #include "../UI/ToolsWindow.h"
@@ -64,14 +66,14 @@ float g_TMMatchThreshold = 0.75f;
 
 namespace UI
 {
-std::vector<ROI> gROIs;
-int gSelectedROI = -1;
-std::vector<ToolInstance> g_ToolInstances;
-int g_ActiveToolIndex = -1;
-bool g_YoloLiveDetect = false;
-int g_YoloLiveInstanceIdx = -1;
-float g_YoloLastTimeMs = 0.0f;
-float g_YoloLiveFrameMs = 0.0f;
+std::vector<ROI>& gROIs = ROIState::Items();
+int& gSelectedROI = ROIState::SelectedIndexRef();
+std::vector<ToolInstance>& g_ToolInstances = ToolChainState::Tools();
+int& g_ActiveToolIndex = ToolChainState::ActiveIndexRef();
+bool& g_YoloLiveDetect = ToolChainState::YoloLiveDetectRef();
+int& g_YoloLiveInstanceIdx = ToolChainState::YoloLiveInstanceIndexRef();
+float& g_YoloLastTimeMs = ToolChainState::YoloLastTimeMsRef();
+float& g_YoloLiveFrameMs = ToolChainState::YoloLiveFrameMsRef();
 
 void MoveOriginalToolToFront()
 {

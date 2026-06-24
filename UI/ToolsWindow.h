@@ -16,10 +16,10 @@ extern std::unordered_map<int, ToolUIFn> g_ToolUIMap;
 // =====================================================
 namespace UI
 {
-    extern bool g_YoloLiveDetect; // YOLO 实时检测开关
-    extern int  g_YoloLiveInstanceIdx; // 触发实时检测的 YOLO 实例索引
-    extern float g_YoloLastTimeMs;    // 上次 YOLO 推理耗时
-    extern float g_YoloLiveFrameMs;   // 实时检测每帧耗时
+    extern bool& g_YoloLiveDetect; // YOLO 实时检测开关
+    extern int&  g_YoloLiveInstanceIdx; // 触发实时检测的 YOLO 实例索引
+    extern float& g_YoloLastTimeMs;    // 上次 YOLO 推理耗时
+    extern float& g_YoloLiveFrameMs;   // 实时检测每帧耗时
     void ShowToolsWindow();
     void MoveOriginalToolToFront();
 
@@ -82,6 +82,6 @@ namespace UI
         return true;
     }
 
-    extern int g_ActiveToolIndex;
-    extern std::vector<ToolInstance> g_ToolInstances;
+    extern int& g_ActiveToolIndex;
+    extern std::vector<ToolInstance>& g_ToolInstances;
 }
