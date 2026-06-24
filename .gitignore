@@ -36,7 +36,6 @@ recipes/
 .codegraph/
 .continue/
 .claude/
-.vscode/
 
 # Large local assets: keep these in Git LFS or fetch them with scripts.
 *.pt

@@ -1,0 +1,68 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "生成 (Debug)",
+            "type": "process",
+            "command": "D:\\VisualStudio\\Community\\MSBuild\\Current\\Bin\\MSBuild.exe",
+            "args": [
+                "${workspaceFolder}\\Windows_imgui.slnx",
+                "/p:Configuration=Debug",
+                "/p:Platform=x64",
+                "/m",
+                "/bl:${workspaceFolder}\\x64\\Debug\\msbuild.binlog"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": "$msCompile",
+            "detail": "MSBuild Debug x64"
+        },
+        {
+            "label": "生成 (Release)",
+            "type": "process",
+            "command": "D:\\VisualStudio\\Community\\MSBuild\\Current\\Bin\\MSBuild.exe",
+            "args": [
+                "${workspaceFolder}\\Windows_imgui.slnx",
+                "/p:Configuration=Release",
+                "/p:Platform=x64",
+                "/m",
+                "/bl:${workspaceFolder}\\x64\\Release\\msbuild.binlog"
+            ],
+            "problemMatcher": "$msCompile",
+            "detail": "MSBuild Release x64"
+        },
+        {
+            "label": "清理",
+            "type": "process",
+            "command": "D:\\VisualStudio\\Community\\MSBuild\\Current\\Bin\\MSBuild.exe",
+            "args": [
+                "${workspaceFolder}\\Windows_imgui.slnx",
+                "/t:Clean",
+                "/p:Configuration=Debug",
+                "/p:Platform=x64"
+            ],
+            "problemMatcher": [],
+            "detail": "清理 Debug 产物"
+        },
+        {
+            "label": "快速提交",
+            "type": "shell",
+            "command": "git add -A; git commit -m '${input:commitMsg}'; git pull --rebase origin master; Start-Job { git push } | Out-Null; Write-Host '已提交，后台推送中...'",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "detail": "add + commit + rebase + 后台push"
+        }
+    ],
+    "inputs": [
+        {
+            "id": "commitMsg",
+            "type": "promptString",
+            "description": "提交信息",
+            "default": "更新"
+        }
+    ]
+}
