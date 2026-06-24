@@ -54,6 +54,20 @@ namespace ShapeMatcher
         return cv::matchShapes(c1, c2, cv::CONTOURS_MATCH_I2, 0);
     }
     static const char *kMethodNames[] = {"Hu矩", "ShapeContext", "Hausdorff"};
+    static constexpr int kMaxSearchDim = 800;
+    static constexpr int kMaxCandidateMultiplier = 12;
+    static constexpr int kMaxCandidatesHardLimit = 40;
+
+    static void SuppressAround(cv::Mat& scores, const cv::Point& center, const cv::Size& tplSize)
+    {
+        const int rx = std::max(4, tplSize.width / 3);
+        const int ry = std::max(4, tplSize.height / 3);
+        cv::Rect suppress(center.x - rx, center.y - ry, rx * 2 + 1, ry * 2 + 1);
+        suppress &= cv::Rect(0, 0, scores.cols, scores.rows);
+        if (!suppress.empty())
+            scores(suppress).setTo(-1.0f);
+    }
+
     cv::Mat Preprocess(const cv::Mat &s, const Params &p)
     {
         if (s.empty())
@@ -144,9 +158,9 @@ namespace ShapeMatcher
         int md = std::max(img.cols, img.rows);
         float sc = 1;
         cv::Mat s = sg, t = tg;
-        if (md > 1000)
+        if (md > kMaxSearchDim)
         {
-            sc = 1000.f / md;
+            sc = static_cast<float>(kMaxSearchDim) / md;
             cv::resize(sg, s, cv::Size(), sc, sc, cv::INTER_AREA);
             int tw = (int)(tg.cols * sc), th = (int)(tg.rows * sc);
             if (tw < 5 || th < 5)
@@ -162,21 +176,22 @@ namespace ShapeMatcher
         cv::matchTemplate(s, t, res, cv::TM_CCOEFF_NORMED);
         if (res.empty())
             return {};
-        const int mc = p.maxResults * 50;
+        const int requestedResults = std::max(1, p.maxResults);
+        const int mc = std::clamp(requestedResults * kMaxCandidateMultiplier, requestedResults, kMaxCandidatesHardLimit);
         std::vector<std::pair<cv::Point, double>> cand;
-        std::mutex mx;
-        int nt = std::clamp((int)std::thread::hardware_concurrency(), 2, 8);
-        std::vector<std::thread> ths;
-        for (int ti = 0; ti < nt; ti++)
-            ths.emplace_back([&, ti]()
-                             {int r0=res.rows*ti/nt,r1=res.rows*(ti+1)/nt;
-        for(int r=r0;r<r1;r++){const float*row=res.ptr<float>(r);for(int c=0;c<res.cols;c++){if(row[c]>=p.minScore){std::lock_guard<std::mutex>lk(mx);if((int)cand.size()>=mc)return;cand.push_back({cv::Point(c,r),row[c]});}}} });
-        for (auto &th : ths)
-            th.join();
-        std::sort(cand.begin(), cand.end(), [](auto &a, auto &b)
-                  { return a.second > b.second; });
-        if ((int)cand.size() > mc)
-            cand.resize(mc);
+        cand.reserve(mc);
+        cv::Mat scoreMap = res.clone();
+        for (int i = 0; i < mc; ++i)
+        {
+            double minVal = 0.0, maxVal = 0.0;
+            cv::Point minLoc, maxLoc;
+            cv::minMaxLoc(scoreMap, &minVal, &maxVal, &minLoc, &maxLoc);
+            if (maxVal < p.minScore)
+                break;
+
+            cand.push_back({maxLoc, maxVal});
+            SuppressAround(scoreMap, maxLoc, t.size());
+        }
 
         // NMS（基于模板面积的30%作为去重半径）
         float isc = 1.f / sc;
@@ -209,7 +224,7 @@ namespace ShapeMatcher
                 continue;
 
             // 候选区提取轮廓并比对
-            cv::Mat roi = img(b).clone();
+            cv::Mat roi = img(b);
             cv::Mat roiGray;
             if (roi.channels() >= 3)
                 cv::cvtColor(roi, roiGray, cv::COLOR_BGR2GRAY);
@@ -250,7 +265,7 @@ namespace ShapeMatcher
             sm.isGreen = isGreen;
             if (foundContour)
             {
-                sm.points = roiContours[bestContourIdx];
+                cv::approxPolyDP(roiContours[bestContourIdx], sm.points, 1.5, true);
                 sm.area = cv::contourArea(sm.points);
             }
             fn.push_back(sm);
@@ -270,15 +285,7 @@ namespace ShapeMatcher
             else
                 nr++;
         }
-        LogSystem::Add(LOG_INFO, color, "ShapeMatcher[%s]:%d个(绿%d红%d)|%.3fms|tpl=%dx%d|minScore=%.2f shapeThres=%.3f", kMethodNames[p.shapeMethod], g_MatchCount, ng, nr, g_MatchTimeMs, tg.cols, tg.rows, p.minScore, p.minShapeScore);
-        for (int i = 0; i < (int)fn.size() && i < 20; i++)
-        {
-            auto &m = fn[i];
-            LogSystem::Add(LOG_INFO, m.isGreen ? ImVec4(0.3f, 0.9f, 0.3f, 1) : ImVec4(1, 0.3f, 0.3f, 1),
-                           "  #%d:tpl=%.4f shape=%.4f %s[%d,%d %dx%d]", i + 1, m.score, m.shapeScore, m.isGreen ? "GREEN" : "RED", m.bbox.x, m.bbox.y, m.bbox.width, m.bbox.height);
-        }
-        if ((int)fn.size() > 20)
-            LogSystem::Add(LOG_INFO, color, "  ...还有%d个", (int)fn.size() - 20);
+        LogSystem::Add(LOG_INFO, color, "ShapeMatcher[%s]:%d个(绿%d红%d)|%.3fms|tpl=%dx%d|minScore=%.2f shapeThres=%.3f candidates=%d", kMethodNames[p.shapeMethod], g_MatchCount, ng, nr, g_MatchTimeMs, tg.cols, tg.rows, p.minScore, p.minShapeScore, (int)cand.size());
         return fn;
     }
     cv::Mat DrawMatches(cv::Mat &img, const std::vector<ShapeMatch> &ms, const Params &p)
