@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{55a6c99f-82f8-4ff7-88f2-0f1303f6d70e}</ProjectGuid>
+    <RootNamespace>RegressionTests</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Label="Configuration" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\include\opencv;$(ProjectDir)..\include;$(ProjectDir)..;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+      <PreprocessorDefinitions>_CONSOLE;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>$(ProjectDir)..\redist;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>opencv_world500d.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <PostBuildEvent>
+      <Command>xcopy /Y "$(ProjectDir)..\redist\opencv_world500d.dll" "$(OutDir)"</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\include\opencv;$(ProjectDir)..\include;$(ProjectDir)..;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <PreprocessorDefinitions>_CONSOLE;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>$(ProjectDir)..\redist;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>opencv_world500.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <PostBuildEvent>
+      <Command>xcopy /Y "$(ProjectDir)..\redist\opencv_world500.dll" "$(OutDir)"</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="regression_tests.cpp" />
+    <ClCompile Include="regression_stubs.cpp" />
+    <ClCompile Include="..\Algorithm\BlobTool.cpp" />
+    <ClCompile Include="..\Algorithm\ColorAnalyzer.cpp" />
+    <ClCompile Include="..\Algorithm\ContourDetector.cpp" />
+    <ClCompile Include="..\Algorithm\EdgeTool.cpp" />
+    <ClCompile Include="..\Algorithm\ITool.cpp" />
+    <ClCompile Include="..\Algorithm\LineDetector.cpp" />
+    <ClCompile Include="..\Algorithm\MorphologyTool.cpp" />
+    <ClCompile Include="..\Algorithm\MultiColorFinder.cpp" />
+    <ClCompile Include="..\Algorithm\ShapeMatcher.cpp" />
+    <ClCompile Include="..\Algorithm\ShapeTools.cpp" />
+    <ClCompile Include="..\Algorithm\ThresholdITool.cpp" />
+    <ClCompile Include="..\Algorithm\ToolImageUtils.cpp" />
+    <ClCompile Include="..\Algorithm\YOLOTool.cpp" />
+    <ClCompile Include="..\Core\FrameNavigation.cpp" />
+    <ClCompile Include="..\Core\FrameSourceState.cpp" />
+    <ClCompile Include="..\Core\ImageState.cpp" />
+    <ClCompile Include="..\Core\RecipeManager.cpp" />
+    <ClCompile Include="..\Core\ROIState.cpp" />
+    <ClCompile Include="..\Core\ToolChainState.cpp" />
+    <ClCompile Include="..\Core\ToolExecutor.cpp" />
+    <ClCompile Include="..\Core\VisionContext.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\Algorithm\BlobTool.h" />
+    <ClInclude Include="..\Algorithm\ColorAnalyzer.h" />
+    <ClInclude Include="..\Algorithm\ContourDetector.h" />
+    <ClInclude Include="..\Algorithm\EdgeTool.h" />
+    <ClInclude Include="..\Algorithm\ITool.h" />
+    <ClInclude Include="..\Algorithm\LineDetector.h" />
+    <ClInclude Include="..\Algorithm\MorphologyTool.h" />
+    <ClInclude Include="..\Algorithm\MultiColorFinder.h" />
+    <ClInclude Include="..\Algorithm\ShapeMatcher.h" />
+    <ClInclude Include="..\Algorithm\ShapeTools.h" />
+    <ClInclude Include="..\Algorithm\ThresholdTool.h" />
+    <ClInclude Include="..\Algorithm\ToolImageUtils.h" />
+    <ClInclude Include="..\Algorithm\ToolResult.h" />
+    <ClInclude Include="..\Algorithm\YOLOTool.h" />
+    <ClInclude Include="..\Core\FrameNavigation.h" />
+    <ClInclude Include="..\Core\FrameSourceState.h" />
+    <ClInclude Include="..\Core\ImageState.h" />
+    <ClInclude Include="..\Core\RecipeManager.h" />
+    <ClInclude Include="..\Core\ROIState.h" />
+    <ClInclude Include="..\Core\ResultPublisher.h" />
+    <ClInclude Include="..\Core\ToolChainState.h" />
+    <ClInclude Include="..\Core\ToolExecutor.h" />
+    <ClInclude Include="..\Core\VisionContext.h" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

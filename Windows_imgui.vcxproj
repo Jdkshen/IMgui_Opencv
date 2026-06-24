@@ -1,0 +1,293 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{dd3f0b96-f621-407c-821f-3e50c89808ef}</ProjectGuid>
+    <RootNamespace>Windowsimgui</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="Shared">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <IncludePath>$(ProjectDir)include\opencv;$(ProjectDir)include;$(IncludePath)</IncludePath>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <IncludePath>$(ProjectDir)include\opencv;$(ProjectDir)include;$(IncludePath)</IncludePath>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>
+      </PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(ProjectDir)include\directx;$(ProjectDir)include\opencv;$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>opencv_world500d.lib;d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;Comdlg32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)redist;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+    </Link>
+    <PostBuildEvent>
+      <Command>del /Q "$(OutDir)opencv_world4*.dll" 2&gt;nul &amp; del /Q "$(OutDir)opencv_videoio_ffmpeg4*_64.dll" 2&gt;nul &amp; xcopy /Y /D "$(ProjectDir)assets\fonts\*" "$(OutDir)" &amp; if exist "$(ProjectDir)theme.cfg" xcopy /Y /D "$(ProjectDir)theme.cfg" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\onnxruntime*.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_world500d.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_ffmpeg500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_msmf500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\DirectML.dll" "$(OutDir)" &amp; xcopy /Y /D "$(ProjectDir)models\*.onnx" "$(OutDir)models\" &amp; xcopy /Y /D "$(ProjectDir)models\*.txt" "$(OutDir)models\"</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(ProjectDir)include\directx;$(ProjectDir)include\opencv;$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>$(ProjectDir)redist;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>opencv_world500.lib;d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;Comdlg32.lib</AdditionalDependencies>
+    </Link>
+    <PostBuildEvent>
+      <Command>del /Q "$(OutDir)opencv_world4*.dll" 2&gt;nul &amp; del /Q "$(OutDir)opencv_videoio_ffmpeg4*_64.dll" 2&gt;nul &amp; xcopy /Y /D "$(ProjectDir)assets\fonts\*" "$(OutDir)" &amp; if exist "$(ProjectDir)theme.cfg" xcopy /Y /D "$(ProjectDir)theme.cfg" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\onnxruntime*.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_world500.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_ffmpeg500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_msmf500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\DirectML.dll" "$(OutDir)" &amp; xcopy /Y /D "$(ProjectDir)models\*.onnx" "$(OutDir)models\" &amp; xcopy /Y /D "$(ProjectDir)models\*.txt" "$(OutDir)models\"</Command>
+    </PostBuildEvent>
+    <PreLinkEvent>
+      <Command>
+      </Command>
+    </PreLinkEvent>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClInclude Include="Core\AsyncImageLoader.h" />
+    <ClInclude Include="Core\AudioPlayer.h" />
+    <ClInclude Include="Core\VideoCapture.h" />
+    <ClInclude Include="Core\RecipeManager.h" />
+    <ClInclude Include="Core\FrameNavigation.h" />
+    <ClInclude Include="Core\FrameSourceState.h" />
+    <ClInclude Include="Core\ImageState.h" />
+    <ClInclude Include="Core\FrameRenderer.h" />
+    <ClInclude Include="Core\ImageLoadController.h" />
+    <ClInclude Include="Core\ImageUtils.h" />
+    <ClInclude Include="Core\LegacyAppState.h" />
+    <ClInclude Include="Core\LiveYoloRunner.h" />
+    <ClInclude Include="Core\ROIState.h" />
+    <ClInclude Include="Core\ROI.h" />
+    <ClInclude Include="Core\ToolInstance.h" />
+    <ClInclude Include="Core\ToolTypes.h" />
+    <ClInclude Include="Core\VisionContext.h" />
+    <ClInclude Include="Core\ToolExecutor.h" />
+    <ClInclude Include="Core\ToolController.h" />
+    <ClInclude Include="Core\ToolChainState.h" />
+    <ClInclude Include="Core\ThemeManager.h" />
+    <ClInclude Include="Core\UIStateBridge.h" />
+    <ClInclude Include="Core\DX12Context.h" />
+    <ClInclude Include="Core\OpenCVTest.h" />
+    <ClInclude Include="Core\ResultPublisher.h" />
+    <ClInclude Include="Core\OpenFileDialog.h" />
+    <ClInclude Include="framework.h" />
+    <ClInclude Include="resource.h" />
+    <ClInclude Include="include\imgui\imconfig.h" />
+    <ClInclude Include="include\imgui\imgui.h" />
+    <ClInclude Include="include\imgui\imgui_impl_dx11.h" />
+    <ClInclude Include="include\imgui\imgui_impl_dx12.h" />
+    <ClInclude Include="include\imgui\imgui_impl_win32.h" />
+    <ClInclude Include="include\imgui\imgui_internal.h" />
+    <ClInclude Include="include\imgui\imstb_rectpack.h" />
+    <ClInclude Include="include\imgui\imstb_textedit.h" />
+    <ClInclude Include="include\imgui\imstb_truetype.h" />
+    <ClInclude Include="Log\LogSystem.h" />
+    <ClInclude Include="Algorithm\TemplateMatch.h" />
+    <ClInclude Include="Algorithm\OpenCVYoloDetector.h" />
+    <ClInclude Include="Algorithm\YOLODetector.h" />
+    <ClInclude Include="Algorithm\YOLOTool.h" />
+    <ClInclude Include="Algorithm\ShapeTools.h" />
+    <ClInclude Include="Algorithm\ITool.h" />
+    <ClInclude Include="Algorithm\ToolImageUtils.h" />
+    <ClInclude Include="Algorithm\ThresholdTool.h" />
+    <ClInclude Include="Algorithm\ContourDetector.h" />
+    <ClInclude Include="Algorithm\EdgeTool.h" />
+    <ClInclude Include="Algorithm\ShapeMatcher.h" />
+    <ClInclude Include="Algorithm\LineDetector.h" />
+    <ClInclude Include="Algorithm\BlobTool.h" />
+    <ClInclude Include="Algorithm\MorphologyTool.h" />
+    <ClInclude Include="Algorithm\ColorAnalyzer.h" />
+    <ClInclude Include="Algorithm\MultiColorFinder.h" />
+    <ClInclude Include="Renderer\FontManager.h" />
+    <ClInclude Include="UI\DockSpaceHost.h" />
+    <ClInclude Include="UI\ImageViewer.h" />
+    <ClInclude Include="UI\LogWindow.h" />
+    <ClInclude Include="UI\ROIManager.h" />
+    <ClInclude Include="UI\Sidebar.h" />
+    <ClInclude Include="UI\StatsWindow.h" />
+    <ClInclude Include="UI\ToolsWindow.h" />
+    <ClInclude Include="Windows_imgui.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="Core\AsyncImageLoader.cpp" />
+    <ClCompile Include="Core\AudioPlayer.cpp" />
+    <ClCompile Include="Core\VideoCapture.cpp" />
+    <ClCompile Include="Core\RecipeManager.cpp" />
+    <ClCompile Include="Core\FrameNavigation.cpp" />
+    <ClCompile Include="Core\FrameSourceState.cpp" />
+    <ClCompile Include="Core\ImageState.cpp" />
+    <ClCompile Include="Core\FrameRenderer.cpp" />
+    <ClCompile Include="Core\ImageLoadController.cpp" />
+    <ClCompile Include="Core\LiveYoloRunner.cpp" />
+    <ClCompile Include="Core\ROIState.cpp" />
+    <ClCompile Include="Core\VisionContext.cpp" />
+    <ClCompile Include="Core\ToolExecutor.cpp" />
+    <ClCompile Include="Core\ToolController.cpp" />
+    <ClCompile Include="Core\ToolChainState.cpp" />
+    <ClCompile Include="Core\ThemeManager.cpp" />
+    <ClCompile Include="Core\DX12Context.cpp" />
+    <ClCompile Include="Core\OpenCVTest.cpp" />
+    <ClCompile Include="Core\OpenFileDialog.cpp" />
+    <ClCompile Include="include\imgui\imgui.cpp" />
+    <ClCompile Include="include\imgui\imgui_demo.cpp" />
+    <ClCompile Include="include\imgui\imgui_draw.cpp" />
+    <ClCompile Include="include\imgui\imgui_impl_dx11.cpp" />
+    <ClCompile Include="include\imgui\imgui_impl_dx12.cpp" />
+    <ClCompile Include="include\imgui\imgui_impl_win32.cpp" />
+    <ClCompile Include="include\imgui\imgui_tables.cpp" />
+    <ClCompile Include="include\imgui\imgui_widgets.cpp" />
+    <ClCompile Include="Log\LogSystem.cpp" />
+    <ClCompile Include="Algorithm\TemplateMatch.cpp" />
+    <ClCompile Include="Algorithm\OpenCVYoloDetector.cpp" />
+    <ClCompile Include="Algorithm\YOLODetector.cpp" />
+    <ClCompile Include="Algorithm\YOLOTool.cpp" />
+    <ClCompile Include="Algorithm\ShapeTools.cpp" />
+    <ClCompile Include="Algorithm\ITool.cpp" />
+    <ClCompile Include="Algorithm\ToolImageUtils.cpp" />
+    <ClCompile Include="Algorithm\ThresholdITool.cpp" />
+    <ClCompile Include="Algorithm\ThresholdTool.cpp" />
+    <ClCompile Include="Algorithm\ContourDetector.cpp" />
+    <ClCompile Include="Algorithm\EdgeTool.cpp" />
+    <ClCompile Include="Algorithm\ShapeMatcher.cpp" />
+    <ClCompile Include="Algorithm\LineDetector.cpp" />
+    <ClCompile Include="Algorithm\BlobTool.cpp" />
+    <ClCompile Include="Algorithm\MorphologyTool.cpp" />
+    <ClCompile Include="Algorithm\ColorAnalyzer.cpp" />
+    <ClCompile Include="Algorithm\MultiColorFinder.cpp" />
+    <ClCompile Include="Renderer\FontManager.cpp" />
+    <ClCompile Include="UI\DockSpaceHost.cpp" />
+    <ClCompile Include="UI\ImageViewer.cpp" />
+    <ClCompile Include="UI\LogWindow.cpp" />
+    <ClCompile Include="UI\ROIManager.cpp" />
+    <ClCompile Include="UI\Sidebar.cpp" />
+    <ClCompile Include="UI\StatsWindow.cpp" />
+    <ClCompile Include="UI\ToolsWindow.cpp" />
+    <ClCompile Include="Windows_imgui.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="Windows_imgui.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="assets\icons\app.ico" />
+    <None Include="assets\fonts\simhei.ttf" />
+    <None Include="assets\fonts\simsun.ttc" />
+    <None Include="imgui.ini" />
+    <None Include="README.md" />
+    <None Include="theme.cfg" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>
+
+
