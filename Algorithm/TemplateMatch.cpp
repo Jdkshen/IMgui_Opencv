@@ -1,7 +1,9 @@
 ﻿#include "../include/imgui/imgui.h"       // 必须在 TemplateMatch.h 之前，确保 ImVec2 已定义
 #include "TemplateMatch.h"
+#include "ThresholdTool.h"
 #include "../Core/DX12Context.h"
 #include "../Log/LogSystem.h"
+#include "../UI/ROIManager.h"
 
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -9,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <chrono>
+#include <future>
 
 extern float g_DPIScale;  // Windows_imgui.cpp
 #include <thread>

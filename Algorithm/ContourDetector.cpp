@@ -1,5 +1,6 @@
 #define NOMINMAX
 #include "ContourDetector.h"
+#include "../Core/ROIState.h"
 #include "../Log/LogSystem.h"
 #include <opencv2/geometry.hpp>
 #include <chrono>
@@ -99,13 +100,16 @@ namespace ContourDetector
         if (p.matchROI)
         {
             // ROI模式: 先从ROI找模板, 再全图匹配
-            if (UI::gROIs.empty())
+            const auto& rois = ROIState::ReadOnlyItems();
+            if (rois.empty())
             {
                 LogSystem::Add(LOG_WARN, color, "Contour:请先框选ROI");
                 return {};
             }
-            int ri = UI::gSelectedROI >= 0 ? UI::gSelectedROI : 0;
-            auto &r = UI::gROIs[ri];
+            int ri = ROIState::SelectedIndex() >= 0 ? ROIState::SelectedIndex() : 0;
+            if (ri >= (int)rois.size())
+                ri = 0;
+            const auto &r = rois[ri];
             cv::Rect roi((int)std::min(r.start.x, r.end.x), (int)std::min(r.start.y, r.end.y), (int)std::abs(r.end.x - r.start.x), (int)std::abs(r.end.y - r.start.y));
             roi &= cv::Rect(0, 0, img.cols, img.rows);
             cv::Mat crop = img(roi);

@@ -1,7 +1,7 @@
 ﻿#pragma once
 #include "framework.h"
 
-extern float g_DPIScale;          // DPI 缂╂斁姣斾緥
+extern float g_DPIScale;          // DPI 缩放比例
 
 extern HWND g_hWnd;
 
@@ -14,7 +14,7 @@ extern HWND g_hWnd;
 #include "imgui/imstb_textedit.h"
 #include "imgui/imstb_truetype.h"
 
-// 鏍稿績妯″潡
+// 核心模块
 #include "Core/DX12Context.h"
 #include "Core/OpenCVTest.h"
 #include "Core/OpenFileDialog.h"
@@ -27,11 +27,11 @@ extern HWND g_hWnd;
 #include "Core/ToolExecutor.h"
 #include "Core/ToolController.h"
 
-// 娓叉煋涓庢棩蹇?
+// 渲染与日志
 #include "Renderer/FontManager.h"
 #include "Log/LogSystem.h"
 
-// UI 妯″潡
+// UI 模块
 #include "UI/DockSpaceHost.h"
 #include "UI/ImageViewer.h"
 #include "UI/ROIManager.h"
@@ -40,7 +40,7 @@ extern HWND g_hWnd;
 #include "UI/StatsWindow.h"
 #include "UI/ToolsWindow.h"
 
-// 绠楁硶妯″潡
+// 算法模块
 #include "Algorithm/ThresholdTool.h"
 #include "Algorithm/TemplateMatch.h"
 

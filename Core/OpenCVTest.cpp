@@ -61,7 +61,7 @@ void UploadToDX12(
 			IID_PPV_ARGS(texture));
 		if (FAILED(hr))
 		{
-			LogSystem::Add(LOG_ERROR, color, "创建纹理资源失败 hr=0x%08X", hr);
+				LogSystem::Add(LOG_ERROR, "创建纹理资源失败 hr=0x%08X", hr);
 			return;
 		}
 
@@ -104,7 +104,7 @@ void UploadToDX12(
 			uploadCapacity = uploadSize;
 		else
 		{
-			LogSystem::Add(LOG_ERROR, color, "创建上传缓冲区失败 hr=0x%08X", hr);
+				LogSystem::Add(LOG_ERROR, "创建上传缓冲区失败 hr=0x%08X", hr);
 			return;
 		}
 	}

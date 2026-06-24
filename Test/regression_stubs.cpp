@@ -94,9 +94,6 @@ void NavigateNextImage()
 }
 }
 
-std::shared_ptr<std::vector<LogItem>> LogSystem::s_logs =
-    std::make_shared<std::vector<LogItem>>();
-
 void LogSystem::Add(LogLevel, const char*, ...)
 {
 }
@@ -107,17 +104,11 @@ void LogSystem::Add(LogLevel, const ImVec4&, const char*, ...)
 
 void LogSystem::Clear()
 {
-    s_logs = std::make_shared<std::vector<LogItem>>();
 }
 
-std::shared_ptr<const std::vector<LogItem>> LogSystem::GetLogs()
+std::shared_ptr<std::vector<LogEntry>> LogSystem::GetLogs()
 {
-    return s_logs;
-}
-
-ImVec4 LogSystem::GetThreadColor()
-{
-    return ImVec4(1, 1, 1, 1);
+    return std::make_shared<std::vector<LogEntry>>();
 }
 
 namespace TemplateMatch

@@ -412,7 +412,7 @@ namespace RecipeManager
             return false;
         }
 
-        LogSystem::Add(LOG_INFO, color, "[Save] tools: %zu", data.tools.size());
+        LogSystem::Add(LOG_INFO, "[Save] tools: %zu", data.tools.size());
 
         // Save the legacy template image next to the recipe.
         if (!data.templateImage.empty())
@@ -731,8 +731,8 @@ namespace RecipeManager
             }
         }
 
-        LogSystem::Add(LOG_INFO, color, "[Load] tools: %zu", data.tools.size());
-        LogSystem::Add(LOG_INFO, color, "Recipe loaded: %s (ROI: %zu, tools: %zu)", data.name.c_str(), data.rois.size(), data.tools.size());
+        LogSystem::Add(LOG_INFO, "[Load] tools: %zu", data.tools.size());
+        LogSystem::Add(LOG_INFO, "Recipe loaded: %s (ROI: %zu, tools: %zu)", data.name.c_str(), data.rois.size(), data.tools.size());
         return true;
     }
 
@@ -819,7 +819,7 @@ namespace RecipeManager
 
         // 工具实例
         d.tools.clear();
-        LogSystem::Add(LOG_INFO, color, "[Capture] g_ToolInstances: %zu",
+        LogSystem::Add(LOG_INFO, "[Capture] g_ToolInstances: %zu",
                        ToolChainState::ReadOnlyTools().size());
         for (size_t ti = 0; ti < ToolChainState::ReadOnlyTools().size(); ti++)
         {
@@ -1040,7 +1040,7 @@ namespace RecipeManager
 
         // 工具实例
         ToolChainState::Tools().clear();
-        LogSystem::Add(LOG_INFO, color, "[Apply] restoring tools: %zu", data.tools.size());
+        LogSystem::Add(LOG_INFO, "[Apply] restoring tools: %zu", data.tools.size());
         for (size_t ti = 0; ti < data.tools.size(); ti++)
         {
             const auto &t = data.tools[ti];
@@ -1216,7 +1216,7 @@ namespace RecipeManager
                 {
                     LogSystem::Add(LOG_INFO, "Tool template loaded: %s (%dx%d)", tplPath.c_str(),
                                    it.templateImg.cols, it.templateImg.rows);
-                    // 褰㈢姸鍖归厤鐢?shpTplImage锛堟繁鎷疯礉锛?
+                    // 形状匹配使用 shpTplImage（深拷贝）
                     if (it.type == 6)
                     {
                         it.shpTplImage = it.templateImg.clone();
@@ -1230,7 +1230,7 @@ namespace RecipeManager
 
         ToolChainState::MoveOriginalToolToFront();
 
-        LogSystem::Add(LOG_INFO, color, "[Apply] recipe applied: %s (tools: %zu)", data.name.c_str(), data.tools.size());
+        LogSystem::Add(LOG_INFO, "[Apply] recipe applied: %s (tools: %zu)", data.name.c_str(), data.tools.size());
     }
 
 } // namespace RecipeManager

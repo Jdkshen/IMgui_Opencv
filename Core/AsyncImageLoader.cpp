@@ -1,5 +1,7 @@
 #include "AsyncImageLoader.h"
 #include "../Log/LogSystem.h"
+#define NOMINMAX
+#include <windows.h>
 #include <vector>
 
 // =========================

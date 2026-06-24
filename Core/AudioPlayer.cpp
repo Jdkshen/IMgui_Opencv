@@ -8,6 +8,7 @@
 #include <mfidl.h>
 #include <mfreadwrite.h>
 #include <mferror.h>
+#include <algorithm>
 #include <atomic>
 #include <vector>
 #include <thread>
