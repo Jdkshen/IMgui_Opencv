@@ -31,6 +31,8 @@ namespace ToolController
     static bool s_batchTimerStarted = false;
     static bool s_runtimeMode = false;
     static std::chrono::high_resolution_clock::time_point s_batchStart;
+    static std::chrono::high_resolution_clock::time_point s_nextRuntimeLoopAt;
+    static constexpr float kRuntimeLoopMinIntervalMs = 150.0f;
 
     static bool RestoreBatchOriginal()
     {
@@ -98,6 +100,7 @@ namespace ToolController
         s_toolTimesMs.assign(ToolChainState::ReadOnlyTools().size(), 0.0f);
         s_imageDirty = false;
         s_batchTimerStarted = false;
+        s_nextRuntimeLoopAt = std::chrono::high_resolution_clock::now();
         s_originalImage = !ImageState::Original().empty() ? ImageState::Original().clone() : ImageState::Current().clone();
         s_originalVersion = ImageState::Version();
         s_lastInputImage = s_originalImage.clone();
@@ -131,6 +134,10 @@ namespace ToolController
         auto& tools = ToolChainState::Tools();
         if (s_currentIndex < 0 || s_currentIndex >= (int)tools.size()) { s_mode = Mode::Idle; return; }
         if (ImageState::Current().empty()) { LogSystem::Add(LOG_WARN, "执行中止：未加载图片"); s_mode = Mode::Idle; return; }
+
+        const auto now = std::chrono::high_resolution_clock::now();
+        if (s_runtimeMode && s_loop && s_currentIndex == 0 && now < s_nextRuntimeLoopAt)
+            return;
 
         auto& it = tools[s_currentIndex];
         const bool usePreviousOutput = (it.inputSourceMode == 1 && !s_lastOutputImage.empty());
@@ -194,6 +201,12 @@ namespace ToolController
                     s_lastOutputImage = s_originalImage.clone();
                     s_originalToolOutputImage = s_originalImage.clone();
                     s_batchTimerStarted = false;
+                    if (s_runtimeMode)
+                    {
+                        s_nextRuntimeLoopAt = std::chrono::high_resolution_clock::now()
+                            + std::chrono::duration_cast<std::chrono::high_resolution_clock::duration>(
+                                std::chrono::duration<float, std::milli>(kRuntimeLoopMinIntervalMs));
+                    }
                 } else {
                     s_mode = Mode::Idle;
                     s_batchTimerStarted = false;
@@ -224,5 +237,5 @@ namespace ToolController
     void SetRuntimeMode(bool enabled) { s_runtimeMode = enabled; }
     bool IsRuntimeMode() { return s_runtimeMode; }
 
-    void Reset() { s_mode = Mode::Idle; s_currentIndex = -1; s_stepCursor = 0; s_isStep = false; s_queue = {}; s_loop = false; s_batchTimerStarted = false; s_toolTimesMs.clear(); s_stepTimeMs = 0; s_batchTotalMs = 0; }
+    void Reset() { s_mode = Mode::Idle; s_currentIndex = -1; s_stepCursor = 0; s_isStep = false; s_queue = {}; s_loop = false; s_batchTimerStarted = false; s_nextRuntimeLoopAt = std::chrono::high_resolution_clock::now(); s_toolTimesMs.clear(); s_stepTimeMs = 0; s_batchTotalMs = 0; }
 }

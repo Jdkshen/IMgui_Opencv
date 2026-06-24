@@ -1,5 +1,6 @@
 #pragma once
 #include "ITool.h"
+#include "ShapeMatcher.h"
 
 class ContourTool : public ITool
 {
@@ -63,4 +64,23 @@ public:
     bool tplBlur = false;
     int tplBlurK = 5;
     bool tplInvert = false;
+
+private:
+    bool IsTemplateCacheValid(const cv::Mat& tpl, const ShapeMatcher::Params& params) const;
+    void UpdateTemplateCache(const cv::Mat& tpl, const ShapeMatcher::Params& params);
+
+    bool cachedTplReady = false;
+    cv::Mat cachedTplImage;
+    int cachedTplType = -1;
+    cv::Size cachedTplSize;
+    int cachedBlurSize = -1;
+    int cachedTplRetr = -1;
+    double cachedTplMinArea = -1.0;
+    bool cachedTplGray = false;
+    bool cachedTplBinary = false;
+    int cachedTplBinThresh = -1;
+    bool cachedTplBlur = false;
+    int cachedTplBlurK = -1;
+    bool cachedTplInvert = false;
+    std::vector<std::vector<cv::Point>> cachedTplContours;
 };

@@ -160,6 +160,50 @@ void LineTool::Load(const nlohmann::json &j)
 }
 
 // ==================== ShapeTool ====================
+bool ShapeTool::IsTemplateCacheValid(const cv::Mat& tpl, const ShapeMatcher::Params& params) const
+{
+    if (!cachedTplReady || tpl.empty() || cachedTplImage.empty())
+        return false;
+
+    if (tpl.size() != cachedTplSize || tpl.type() != cachedTplType)
+        return false;
+
+    if (params.blurSize != cachedBlurSize ||
+        params.tplRetrMode != cachedTplRetr ||
+        params.tplMinArea != cachedTplMinArea ||
+        params.tplGray != cachedTplGray ||
+        params.tplBinary != cachedTplBinary ||
+        params.tplBinThresh != cachedTplBinThresh ||
+        params.tplBlur != cachedTplBlur ||
+        params.tplBlurK != cachedTplBlurK ||
+        params.tplInvert != cachedTplInvert)
+    {
+        return false;
+    }
+
+    cv::Mat diff;
+    cv::compare(tpl, cachedTplImage, diff, cv::CMP_NE);
+    return cv::countNonZero(diff.reshape(1)) == 0;
+}
+
+void ShapeTool::UpdateTemplateCache(const cv::Mat& tpl, const ShapeMatcher::Params& params)
+{
+    cachedTplContours = ShapeMatcher::ExtractTemplates(tpl, params);
+    cachedTplImage = tpl.clone();
+    cachedTplType = tpl.type();
+    cachedTplSize = tpl.size();
+    cachedBlurSize = params.blurSize;
+    cachedTplRetr = params.tplRetrMode;
+    cachedTplMinArea = params.tplMinArea;
+    cachedTplGray = params.tplGray;
+    cachedTplBinary = params.tplBinary;
+    cachedTplBinThresh = params.tplBinThresh;
+    cachedTplBlur = params.tplBlur;
+    cachedTplBlurK = params.tplBlurK;
+    cachedTplInvert = params.tplInvert;
+    cachedTplReady = true;
+}
+
 ToolResult ShapeTool::Execute(VisionContext& ctx)
 {
     ToolResult r;
@@ -189,10 +233,12 @@ ToolResult ShapeTool::Execute(VisionContext& ctx)
     sp.tplBlurK = tplBlurK;
     sp.tplInvert = tplInvert;
 
-    auto tplContours = ShapeMatcher::ExtractTemplates(tpl, sp);
+    if (!IsTemplateCacheValid(tpl, sp))
+        UpdateTemplateCache(tpl, sp);
+
     cv::Rect roi = ActiveSearchRect(ctx);
     const cv::Mat input = roi.empty() ? ctx.image : ctx.image(roi);
-    auto ms = ShapeMatcher::Search(input, tpl, sp, tplContours);
+    auto ms = ShapeMatcher::Search(input, tpl, sp, cachedTplContours);
     for (const auto &m : ms)
     {
         ToolResult::Region reg;
