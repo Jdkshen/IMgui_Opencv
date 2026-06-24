@@ -31,8 +31,8 @@ namespace ToolController
     static bool s_batchTimerStarted = false;
     static bool s_runtimeMode = false;
     static std::chrono::high_resolution_clock::time_point s_batchStart;
-    static std::chrono::high_resolution_clock::time_point s_nextRuntimeLoopAt;
-    static constexpr float kRuntimeLoopMinIntervalMs = 150.0f;
+    static std::chrono::high_resolution_clock::time_point s_nextLoopRunAt;
+    static constexpr float kLoopMinIntervalMs = 150.0f;
 
     static bool RestoreBatchOriginal()
     {
@@ -100,7 +100,7 @@ namespace ToolController
         s_toolTimesMs.assign(ToolChainState::ReadOnlyTools().size(), 0.0f);
         s_imageDirty = false;
         s_batchTimerStarted = false;
-        s_nextRuntimeLoopAt = std::chrono::high_resolution_clock::now();
+        s_nextLoopRunAt = std::chrono::high_resolution_clock::now();
         s_originalImage = !ImageState::Original().empty() ? ImageState::Original().clone() : ImageState::Current().clone();
         s_originalVersion = ImageState::Version();
         s_lastInputImage = s_originalImage.clone();
@@ -136,7 +136,7 @@ namespace ToolController
         if (ImageState::Current().empty()) { LogSystem::Add(LOG_WARN, "执行中止：未加载图片"); s_mode = Mode::Idle; return; }
 
         const auto now = std::chrono::high_resolution_clock::now();
-        if (s_runtimeMode && s_loop && s_currentIndex == 0 && now < s_nextRuntimeLoopAt)
+        if (s_loop && s_currentIndex == 0 && now < s_nextLoopRunAt)
             return;
 
         auto& it = tools[s_currentIndex];
@@ -167,7 +167,8 @@ namespace ToolController
             s_batchTimerStarted = true;
         }
 
-        if (s_isStep || !s_runtimeMode)
+        const bool quietLoop = s_loop && !s_isStep;
+        if (!quietLoop && (s_isStep || !s_runtimeMode))
         {
             const char* baseName = (it.type == 12) ? "原图" : ToolRegistry::GetName(it.type);
             const std::string displayName = ToolInstanceLogName(baseName, it.label);
@@ -187,8 +188,11 @@ namespace ToolController
         } else {
             s_currentIndex++;
             if (s_currentIndex >= (int)tools.size()) {
-                LogSystem::Add(LOG_INFO, ImVec4(0,1,0.5f,1), "[全部执行%s] 完成 %.1fms",
-                    s_runtimeMode ? "/运行模式" : "", s_batchTotalMs);
+                if (!s_loop)
+                {
+                    LogSystem::Add(LOG_INFO, ImVec4(0,1,0.5f,1), "[全部执行%s] 完成 %.1fms",
+                        s_runtimeMode ? "/运行模式" : "", s_batchTotalMs);
+                }
                 if (s_loop && FrameNavigation::HasNextImage()) {
                     FrameNavigation::NavigateNextImage();
                     FrameNavigation::FitImageToWindow();
@@ -201,12 +205,9 @@ namespace ToolController
                     s_lastOutputImage = s_originalImage.clone();
                     s_originalToolOutputImage = s_originalImage.clone();
                     s_batchTimerStarted = false;
-                    if (s_runtimeMode)
-                    {
-                        s_nextRuntimeLoopAt = std::chrono::high_resolution_clock::now()
-                            + std::chrono::duration_cast<std::chrono::high_resolution_clock::duration>(
-                                std::chrono::duration<float, std::milli>(kRuntimeLoopMinIntervalMs));
-                    }
+                    s_nextLoopRunAt = std::chrono::high_resolution_clock::now()
+                        + std::chrono::duration_cast<std::chrono::high_resolution_clock::duration>(
+                            std::chrono::duration<float, std::milli>(kLoopMinIntervalMs));
                 } else {
                     s_mode = Mode::Idle;
                     s_batchTimerStarted = false;
@@ -237,5 +238,5 @@ namespace ToolController
     void SetRuntimeMode(bool enabled) { s_runtimeMode = enabled; }
     bool IsRuntimeMode() { return s_runtimeMode; }
 
-    void Reset() { s_mode = Mode::Idle; s_currentIndex = -1; s_stepCursor = 0; s_isStep = false; s_queue = {}; s_loop = false; s_batchTimerStarted = false; s_nextRuntimeLoopAt = std::chrono::high_resolution_clock::now(); s_toolTimesMs.clear(); s_stepTimeMs = 0; s_batchTotalMs = 0; }
+    void Reset() { s_mode = Mode::Idle; s_currentIndex = -1; s_stepCursor = 0; s_isStep = false; s_queue = {}; s_loop = false; s_batchTimerStarted = false; s_nextLoopRunAt = std::chrono::high_resolution_clock::now(); s_toolTimesMs.clear(); s_stepTimeMs = 0; s_batchTotalMs = 0; }
 }
