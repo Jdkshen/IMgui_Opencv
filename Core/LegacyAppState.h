@@ -18,7 +18,6 @@ extern int& gImageWidth;
 extern int& gImageHeight;
 extern int& g_ImageVersion;
 
-extern cv::Mat g_FrozenTemplate;
 extern float gTimeTotal;
 extern float g_McfLastTimeMs;
 extern int g_McfLastCount;

@@ -19,6 +19,7 @@
 #include "ImageUtils.h"
 #include "LegacyAppState.h"
 #include "ROIState.h"
+#include "TemplateState.h"
 #include "ToolChainState.h"
 #include "UIStateBridge.h"
 #include "../Log/LogSystem.h"
@@ -256,7 +257,7 @@ public:
             didPreprocess = true;
         }
 
-        g_FrozenTemplate = templateImg;
+        TemplateState::FrozenTemplate() = templateImg;
         auto& globalROIs = ROIState::Items();
         const auto oldROIs = globalROIs;
         const int oldSelectedROI = ROIState::SelectedIndex();
@@ -563,7 +564,7 @@ bool RunViaITool(ToolInstance& it, VisionContext& ctx)
 
     SyncIToolParams(it);
     if (t == 6) {
-        ctx.frozenTemplate = g_FrozenTemplate;
+        ctx.frozenTemplate = TemplateState::FrozenTemplate();
     }
 
     auto t0 = std::chrono::steady_clock::now();

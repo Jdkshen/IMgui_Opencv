@@ -2,6 +2,7 @@
 #include "TemplateMatch.h"
 #include "ThresholdTool.h"
 #include "../Core/DX12Context.h"
+#include "../Core/TemplateState.h"
 #include "../Log/LogSystem.h"
 #include "../UI/ROIManager.h"
 
@@ -37,43 +38,43 @@ static std::mutex        s_MatchMutex;
 // =========================
 // 全局变量定义
 // =========================
-std::vector<ROI> gMatchROIs;             // 模板匹配结果
-std::vector<double> gMatchScores;        // 对应匹配分数
-std::vector<float>  gMatchAngles;        // 对应匹配角度（度）
+std::vector<ROI>& gMatchROIs = TemplateState::MatchROIs();          // 模板匹配结果
+std::vector<double>& gMatchScores = TemplateState::MatchScores();   // 对应匹配分数
+std::vector<float>&  gMatchAngles = TemplateState::MatchAngles();   // 对应匹配角度（度）
 bool g_ShowTemplateMatch = false;        // 调试窗口显示标志
-bool g_PendingMatch = false;             // 待执行匹配标志（下一帧执行）
+bool& g_PendingMatch = TemplateState::PendingMatch(); // 待执行匹配标志（下一帧执行）
 
 // =========================
 // 模板匹配参数（extern，可被配方系统读写）
 // =========================
-float  g_TMMatchThreshold  = 0.75f;   // 匹配分数阈值
-float  g_NmsThreshold    = 0.30f;   // NMS 重叠阈值
-int    g_TMMaxImageDim     = 1000;    // 匹配前自动缩放到此尺寸以内（越小越快）
-float  g_TMLastMatchTime   = 0.0f;    // 上次匹配耗时 (ms)
-double g_TMLastBestScore   = 0.0;     // 上次最佳分数
-int    g_TMSearchMode      = 0;       // 0=全图 1=区域（只在ROI内搜索）
-int    g_TMMaxResults      = 10;      // 最多显示匹配结果数
-bool   g_TMEnableRotation  = false;   // 启用旋转模板匹配
-int    g_TMRotationStart   = -5;      // 起始角度（度）
-int    g_TMRotationEnd     = 5;       // 结束角度（度）
-int    g_TMRotationStep    = 5;       // 步长（度，越大越快）
+float&  g_TMMatchThreshold = TemplateState::MatchThreshold(); // 匹配分数阈值
+float&  g_NmsThreshold = TemplateState::NmsThreshold();       // NMS 重叠阈值
+int&    g_TMMaxImageDim = TemplateState::MaxImageDim();       // 匹配前自动缩放到此尺寸以内（越小越快）
+float&  g_TMLastMatchTime = TemplateState::LastMatchTime();   // 上次匹配耗时 (ms)
+double& g_TMLastBestScore = TemplateState::LastBestScore();   // 上次最佳分数
+int&    g_TMSearchMode = TemplateState::SearchMode();         // 0=全图 1=区域（只在ROI内搜索）
+int&    g_TMMaxResults = TemplateState::MaxResults();         // 最多显示匹配结果数
+bool&   g_TMEnableRotation = TemplateState::EnableRotation(); // 启用旋转模板匹配
+int&    g_TMRotationStart = TemplateState::RotationStart();   // 起始角度（度）
+int&    g_TMRotationEnd = TemplateState::RotationEnd();       // 结束角度（度）
+int&    g_TMRotationStep = TemplateState::RotationStep();     // 步长（度，越大越快）
 
 // 预览冻结（独立存储，不依赖 ROI）
 static int    g_FrozenTplIdx    = -1;
 static ImVec2 g_FrozenTplStart, g_FrozenTplEnd;
-cv::Mat g_FrozenTemplate;           // 模板图像数据（独立拷贝）
+cv::Mat& g_FrozenTemplate = TemplateState::FrozenTemplate(); // 模板图像数据（独立拷贝）
 static int    g_FrozenImgW      = 0;       // 抓取时的图片宽度
 static int    g_FrozenImgH      = 0;       // 抓取时的图片高度
-bool   g_ShowPreview     = false;
-bool   g_ShowTplEditor   = false;   // 模板编辑弹窗
+bool&  g_ShowPreview = TemplateState::ShowPreview();
+bool&  g_ShowTplEditor = TemplateState::ShowTemplateEditor(); // 模板编辑弹窗
 
 // 模板独立处理参数（不影响源图）
-bool   g_TplGray         = false;   // 模板灰度
-bool   g_TplBinary       = false;   // 模板二值化
-int    g_TplBinThresh    = 128;     // 模板二值化阈值
-bool   g_TplEdge         = false;   // 模板边缘检测
-int    g_TplEdgeLow      = 50;      // Canny 低阈值
-int    g_TplEdgeHigh     = 150;     // Canny 高阈值
+bool&  g_TplGray = TemplateState::TemplateGray();                 // 模板灰度
+bool&  g_TplBinary = TemplateState::TemplateBinary();             // 模板二值化
+int&   g_TplBinThresh = TemplateState::TemplateBinaryThreshold(); // 模板二值化阈值
+bool&  g_TplEdge = TemplateState::TemplateEdge();                 // 模板边缘检测
+int&   g_TplEdgeLow = TemplateState::TemplateEdgeLow();           // Canny 低阈值
+int&   g_TplEdgeHigh = TemplateState::TemplateEdgeHigh();         // Canny 高阈值
 
 // 预处理参数复用 ThresholdTool 的 gUseGray 和 gPipe
 extern bool gUseGray;                     // ThresholdTool.cpp

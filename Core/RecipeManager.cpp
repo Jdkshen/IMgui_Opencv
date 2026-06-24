@@ -29,8 +29,8 @@ extern int gCannyLow, gCannyHigh;
 extern float gBrightness, gContrast;
 extern int gProcessMode;
 extern PipelineState gPipe;
-extern cv::Mat g_FrozenTemplate;
-extern bool g_ShowPreview;
+extern cv::Mat& g_FrozenTemplate;
+extern bool& g_ShowPreview;
 
 namespace RecipeManager
 {

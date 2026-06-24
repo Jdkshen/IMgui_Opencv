@@ -6,6 +6,7 @@
 #include "../Core/RecipeManager.h"
 #include "../Core/ImageState.h"
 #include "../Core/ROIState.h"
+#include "../Core/TemplateState.h"
 #include "../Core/ToolChainState.h"
 #include "../Log/LogSystem.h"
 #include "../UI/ROIManager.h"
@@ -29,18 +30,18 @@ float gContrast = 1.0f;
 int gProcessMode = 0;
 PipelineState gPipe;
 ImVec4 color = ImVec4(0, 1, 0.5f, 1);
-cv::Mat g_FrozenTemplate;
+cv::Mat& g_FrozenTemplate = TemplateState::FrozenTemplate();
 cv::Mat gThresholdMat;
 float gTimeTotal = 0.0f;
-float g_NmsThreshold = 0.3f;
-bool g_TplGray = false;
-bool g_TplBinary = false;
-int g_TplBinThresh = 128;
-bool g_TplEdge = false;
-int g_TplEdgeLow = 50;
-int g_TplEdgeHigh = 150;
-std::vector<ROI> gMatchROIs;
-std::vector<double> gMatchScores;
+float& g_NmsThreshold = TemplateState::NmsThreshold();
+bool& g_TplGray = TemplateState::TemplateGray();
+bool& g_TplBinary = TemplateState::TemplateBinary();
+int& g_TplBinThresh = TemplateState::TemplateBinaryThreshold();
+bool& g_TplEdge = TemplateState::TemplateEdge();
+int& g_TplEdgeLow = TemplateState::TemplateEdgeLow();
+int& g_TplEdgeHigh = TemplateState::TemplateEdgeHigh();
+std::vector<ROI>& gMatchROIs = TemplateState::MatchROIs();
+std::vector<double>& gMatchScores = TemplateState::MatchScores();
 // g_McfLastTimeMs/g_McfLastCount are defined by the real MultiColorFinder.cpp,
 // which is part of RegressionTests.vcxproj. Do not duplicate them here.
 cv::Mat& gImage = ImageState::CurrentRef();
@@ -52,15 +53,15 @@ int& gImageHeight = ImageState::HeightRef();
 int& g_ImageVersion = ImageState::VersionRef();
 std::vector<std::string> gImageList;
 int gCurrentImageIndex = -1;
-bool g_ShowPreview = false;
-bool g_TMEnableRotation = false;
-int g_TMRotationStart = -5;
-int g_TMRotationEnd = 5;
-int g_TMRotationStep = 5;
-int g_TMMaxResults = 10;
-int g_TMMaxImageDim = 1000;
-int g_TMSearchMode = 0;
-float g_TMMatchThreshold = 0.75f;
+bool& g_ShowPreview = TemplateState::ShowPreview();
+bool& g_TMEnableRotation = TemplateState::EnableRotation();
+int& g_TMRotationStart = TemplateState::RotationStart();
+int& g_TMRotationEnd = TemplateState::RotationEnd();
+int& g_TMRotationStep = TemplateState::RotationStep();
+int& g_TMMaxResults = TemplateState::MaxResults();
+int& g_TMMaxImageDim = TemplateState::MaxImageDim();
+int& g_TMSearchMode = TemplateState::SearchMode();
+float& g_TMMatchThreshold = TemplateState::MatchThreshold();
 
 // g_McfLastTimeMs / g_McfLastCount 仅在 ToolExecutor::PublishResult 中使用，
 // 测试项目不编译 ToolExecutor.cpp，故不在此定义。

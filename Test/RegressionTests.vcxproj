@@ -110,6 +110,7 @@
     <ClCompile Include="..\Core\FrameNavigation.cpp" />
     <ClCompile Include="..\Core\FrameSourceState.cpp" />
     <ClCompile Include="..\Core\ImageState.cpp" />
+    <ClCompile Include="..\Core\TemplateState.cpp" />
     <ClCompile Include="..\Core\RecipeManager.cpp" />
     <ClCompile Include="..\Core\ROIState.cpp" />
     <ClCompile Include="..\Core\ToolChainState.cpp" />
@@ -134,6 +135,7 @@
     <ClInclude Include="..\Core\FrameNavigation.h" />
     <ClInclude Include="..\Core\FrameSourceState.h" />
     <ClInclude Include="..\Core\ImageState.h" />
+    <ClInclude Include="..\Core\TemplateState.h" />
     <ClInclude Include="..\Core\RecipeManager.h" />
     <ClInclude Include="..\Core\ROIState.h" />
     <ClInclude Include="..\Core\ResultPublisher.h" />

@@ -24,8 +24,8 @@
 #include <sstream>
 #include <vector>
 
-extern cv::Mat g_FrozenTemplate; // 定义在 TemplateMatch.cpp
-extern bool g_ShowTplEditor;     // 定义在 TemplateMatch.cpp
+extern cv::Mat& g_FrozenTemplate; // 定义在 TemplateMatch.cpp
+extern bool& g_ShowTplEditor;    // 定义在 TemplateMatch.cpp
 
 static std::string QuoteCommandArg(const std::string& value)
 {
