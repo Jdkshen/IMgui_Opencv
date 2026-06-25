@@ -30,6 +30,13 @@
 
 namespace
 {
+struct ToolRunTimings
+{
+    float prepareMs = 0.0f;
+    float executeMs = 0.0f;
+    float publishMs = 0.0f;
+};
+
 bool ConvertForCopyTo(const cv::Mat& src, int targetChannels, cv::Mat& dst);
 
 const std::vector<ROI>& SelectSearchROIs(const ToolInstance& it)
@@ -42,6 +49,25 @@ const std::vector<ROI>& SelectSearchROIs(const ToolInstance& it)
 bool HasSearchROI(const ToolInstance& it)
 {
     return !SelectSearchROIs(it).empty();
+}
+
+bool ToolCanUseSharedInput(const ToolInstance& it)
+{
+    switch (it.type)
+    {
+    case 2:  // Blob
+    case 4:  // YOLO
+    case 5:  // Contour
+    case 6:  // Shape match
+    case 7:  // Line
+    case 9:  // Color analyzer
+    case 11: // OpenCV YOLO
+        return true;
+    case 10: // Multi-color finder preprocesses in-place only when gray/binary is enabled.
+        return !it.mcfImgGray && !it.mcfImgBinary;
+    default:
+        return false;
+    }
 }
 
 int SelectROIIndex(const std::vector<ROI>& rois)
@@ -542,12 +568,24 @@ void PublishResult(int type, ToolResult result, float ms)
 
     PublishUnifiedResult(std::move(result));
 }
+
+void LogToolTimings(const ToolInstance& it, const ToolRunTimings& timings)
+{
+    const float total = timings.prepareMs + timings.executeMs + timings.publishMs;
+    if (total < 2.0f)
+        return;
+
+    LogSystem::Add(LOG_INFO, ImVec4(0.55f, 0.8f, 1.0f, 1.0f),
+        "%s timing: prepare %.3f ms | execute %.3f ms | publish %.3f ms | total %.3f ms",
+        ToolInstanceLogName(ToolRegistry::GetName(it.type), it.label).c_str(),
+        timings.prepareMs, timings.executeMs, timings.publishMs, total);
+}
 }
 
 namespace ToolExecutor
 {
 
-bool RunViaITool(ToolInstance& it, VisionContext& ctx)
+bool RunViaITool(ToolInstance& it, VisionContext& ctx, ToolRunTimings* timings = nullptr)
 {
     if (ctx.image.empty()) {
         LogSystem::Add(LOG_WARN, "Please load an image first");
@@ -562,15 +600,23 @@ bool RunViaITool(ToolInstance& it, VisionContext& ctx)
         return false;
     }
 
+    auto tPrepare0 = std::chrono::steady_clock::now();
     SyncIToolParams(it);
     if (t == 6) {
         ctx.frozenTemplate = TemplateState::FrozenTemplate();
     }
+    auto tPrepare1 = std::chrono::steady_clock::now();
+    if (timings)
+        timings->prepareMs += std::chrono::duration<float, std::milli>(tPrepare1 - tPrepare0).count();
 
     auto t0 = std::chrono::steady_clock::now();
     auto result = it.toolImpl->Execute(ctx);
     auto t1 = std::chrono::steady_clock::now();
     const float ms = std::chrono::duration<float, std::milli>(t1 - t0).count();
+    if (timings)
+        timings->executeMs += ms;
+
+    auto tPublish0 = std::chrono::steady_clock::now();
     const std::string baseName = result.toolName.empty() ? it.toolImpl->GetName() : result.toolName;
     result.toolName = ToolInstanceLogName(baseName.c_str(), it.label);
     ApplyToolLabelToOverlayItems(result, it.label);
@@ -584,12 +630,17 @@ bool RunViaITool(ToolInstance& it, VisionContext& ctx)
     }
 
     PublishResult(t, std::move(result), ms);
+    auto tPublish1 = std::chrono::steady_clock::now();
+    if (timings)
+        timings->publishMs += std::chrono::duration<float, std::milli>(tPublish1 - tPublish0).count();
     return dirty;
 }
 
 bool RunViaITool(ToolInstance& it)
 {
-    const bool canUseSharedImage = (it.type == 10 && !it.mcfImgGray && !it.mcfImgBinary);
+    ToolRunTimings timings;
+    auto tPrepare0 = std::chrono::steady_clock::now();
+    const bool canUseSharedImage = ToolCanUseSharedInput(it);
     if (canUseSharedImage)
     {
         gContext.image = ImageState::Current();
@@ -613,7 +664,12 @@ bool RunViaITool(ToolInstance& it)
         it.mcfRoiX = r.x; it.mcfRoiY = r.y; it.mcfRoiW = r.width; it.mcfRoiH = r.height;
     }
 
-    return RunViaITool(it, gContext);
+    auto tPrepare1 = std::chrono::steady_clock::now();
+    timings.prepareMs += std::chrono::duration<float, std::milli>(tPrepare1 - tPrepare0).count();
+
+    const bool dirty = RunViaITool(it, gContext, &timings);
+    LogToolTimings(it, timings);
+    return dirty;
 }
 
 bool Execute(int type, ToolInstance& it)

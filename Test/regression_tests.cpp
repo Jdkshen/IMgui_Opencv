@@ -521,9 +521,17 @@ void TestToolExecutorInjectsImageSnapshot()
     it.blobMaxArea = 200;
 
     ToolExecutor::Execute(it.type, it);
-    Require(gContext.image.data != gImage.data, "tool executor injected shared gImage buffer");
+    Require(gContext.image.data == gImage.data, "tool executor did not share read-only blob input");
     Require(!gContext.unifiedResults.empty(), "tool executor did not publish result");
     Require(gContext.unifiedResults[0].regions.size() == 1, "tool executor blob result regressed");
+
+    ToolInstance threshold;
+    threshold.type = 3;
+    threshold.dbgUseGray = false;
+    threshold.dbgEnableThresh = true;
+    threshold.dbgThreshold = 100;
+    ToolExecutor::Execute(threshold.type, threshold);
+    Require(gContext.image.data != gImage.data, "tool executor shared mutable threshold input");
 }
 
 void TestToolChainEditActions()
