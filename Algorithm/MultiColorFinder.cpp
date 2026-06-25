@@ -42,6 +42,25 @@ static bool IsColorMatch(const uint8_t* pixel, int channels, const ColorPoint& p
     return db >= -t && db <= t && dg >= -t && dg <= t && dr >= -t && dr <= t;
 }
 
+struct PreparedColorPoint
+{
+    int x = 0;
+    int y = 0;
+    int b = 0;
+    int g = 0;
+    int r = 0;
+    int tolerance = 0;
+};
+
+static bool IsColorMatchFast(const uint8_t* pixel, const PreparedColorPoint& pt)
+{
+    const int db = static_cast<int>(pixel[0]) - pt.b;
+    const int dg = static_cast<int>(pixel[1]) - pt.g;
+    const int dr = static_cast<int>(pixel[2]) - pt.r;
+    const int t = pt.tolerance;
+    return db >= -t && db <= t && dg >= -t && dg <= t && dr >= -t && dr <= t;
+}
+
 ToolResult MultiColorFinder::Execute(VisionContext& ctx)
 {
     ToolResult result;
@@ -134,6 +153,11 @@ ToolResult MultiColorFinder::Execute(VisionContext& ctx)
     int nc = src.channels();
     std::vector<cv::Point> matches;
     const int nPts = (int)ptsProc.size();
+    const int maxKeep = std::max(1, maxResults);
+    std::vector<PreparedColorPoint> prepared;
+    prepared.reserve(ptsProc.size());
+    for (const auto& pt : ptsProc)
+        prepared.push_back({pt.x, pt.y, pt.b, pt.g, pt.r, pt.tolerance});
 
     // 遍历搜索区域
     int startY = std::max(searchRect.y, searchRect.y - minY);
@@ -145,21 +169,21 @@ ToolResult MultiColorFinder::Execute(VisionContext& ctx)
     cv::Point bestPartial(-1, -1);
     int bestPartialCount = 0;
 
-    for (int y = startY; y < endY; y++)
+    bool stopScan = false;
+    for (int y = startY; y < endY && !stopScan; y++)
     {
-        const uint8_t* row = src.ptr<uint8_t>(y);
         for (int x = startX; x < endX; x++)
         {
             // 快速路径：逐点检测，遇不匹配立即跳出
             int matched = 0;
             for (int pi = 0; pi < nPts; pi++)
             {
-                const auto& pt = ptsProc[pi];
+                const auto& pt = prepared[pi];
                 int px = x + pt.x, py = y + pt.y;
                 if ((unsigned)px >= (unsigned)src.cols || (unsigned)py >= (unsigned)src.rows)
                     break;
-                const uint8_t* pixel = src.ptr<uint8_t>(py) + px * nc;
-                if (IsColorMatch(pixel, nc, pt))
+                const uint8_t* pixel = src.ptr<uint8_t>(py) + (size_t)px * nc;
+                if (nc >= 3 ? IsColorMatchFast(pixel, pt) : std::abs((int)pixel[0] - pt.b) <= pt.tolerance)
                     matched++;
                 else
                     break;
@@ -167,6 +191,11 @@ ToolResult MultiColorFinder::Execute(VisionContext& ctx)
             if (matched == nPts)
             {
                 matches.push_back(cv::Point(x, y));
+                if ((int)matches.size() >= maxKeep && minDist <= 0)
+                {
+                    stopScan = true;
+                    break;
+                }
             }
             else if (matched > bestPartialCount)
             {
@@ -174,11 +203,11 @@ ToolResult MultiColorFinder::Execute(VisionContext& ctx)
                 int exact = 0;
                 for (int pi = 0; pi < nPts; pi++)
                 {
-                    const auto& pt = ptsProc[pi];
+                    const auto& pt = prepared[pi];
                     int px = x + pt.x, py = y + pt.y;
                     if ((unsigned)px >= (unsigned)src.cols || (unsigned)py >= (unsigned)src.rows) continue;
-                    const uint8_t* pixel = src.ptr<uint8_t>(py) + px * nc;
-                    if (IsColorMatch(pixel, nc, pt)) exact++;
+                    const uint8_t* pixel = src.ptr<uint8_t>(py) + (size_t)px * nc;
+                    if (nc >= 3 ? IsColorMatchFast(pixel, pt) : std::abs((int)pixel[0] - pt.b) <= pt.tolerance) exact++;
                 }
                 if (exact > bestPartialCount)
                 {
@@ -210,13 +239,18 @@ ToolResult MultiColorFinder::Execute(VisionContext& ctx)
                 float dx = (float)(m.x - f.x), dy = (float)(m.y - f.y);
                 if (dx * dx + dy * dy < d2) { keep = false; break; }
             }
-            if (keep) filtered.push_back(m);
+            if (keep)
+            {
+                filtered.push_back(m);
+                if ((int)filtered.size() >= maxKeep)
+                    break;
+            }
         }
         matches.swap(filtered);
     }
 
-    if ((int)matches.size() > maxResults)
-        matches.resize(maxResults);
+    if ((int)matches.size() > maxKeep)
+        matches.resize(maxKeep);
 
     // 填充结果
     int refW = refImage.empty() ? 0 : refImage.cols;

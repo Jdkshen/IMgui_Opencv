@@ -589,12 +589,21 @@ bool RunViaITool(ToolInstance& it, VisionContext& ctx)
 
 bool RunViaITool(ToolInstance& it)
 {
-    gContext.image = ImageState::Current().clone();
-    gContext.originalImage = !ImageState::Original().empty() ? ImageState::Original().clone() : ImageState::Current().clone();
+    const bool canUseSharedImage = (it.type == 10 && !it.mcfImgGray && !it.mcfImgBinary);
+    if (canUseSharedImage)
+    {
+        gContext.image = ImageState::Current();
+        gContext.originalImage = !ImageState::Original().empty() ? ImageState::Original() : ImageState::Current();
+    }
+    else
+    {
+        gContext.image = ImageState::Current().clone();
+        gContext.originalImage = !ImageState::Original().empty() ? ImageState::Original().clone() : ImageState::Current().clone();
+    }
     gContext.width = ImageState::Width();
     gContext.height = ImageState::Height();
     gContext.imageVersion = ImageState::Version();
-    gContext.frame.original = gContext.originalImage.clone();
+    gContext.frame.original = canUseSharedImage ? gContext.originalImage : gContext.originalImage.clone();
     gContext.rois = SelectSearchROIs(it);
     gContext.selectedROI = SelectROIIndex(gContext.rois);
 
