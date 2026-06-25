@@ -91,6 +91,15 @@ namespace ToolController
         return dirty;
     }
 
+    static void ResetBatchImagesFromSource(const cv::Mat& source)
+    {
+        s_originalImage = source;
+        s_originalVersion = ImageState::Version();
+        s_lastInputImage = s_originalImage;
+        s_lastOutputImage = s_originalImage;
+        s_originalToolOutputImage = s_originalImage;
+    }
+
     void RequestRun(int toolIndex) { s_queue.push(toolIndex); }
 
     void RequestRunAll(bool loop) {
@@ -101,18 +110,14 @@ namespace ToolController
         s_imageDirty = false;
         s_batchTimerStarted = false;
         s_nextLoopRunAt = std::chrono::high_resolution_clock::now();
-        s_originalImage = !ImageState::Original().empty() ? ImageState::Original().clone() : ImageState::Current().clone();
-        s_originalVersion = ImageState::Version();
-        s_lastInputImage = s_originalImage.clone();
-        s_lastOutputImage = s_originalImage.clone();
-        s_originalToolOutputImage = s_originalImage.clone();
+        ResetBatchImagesFromSource(!ImageState::Original().empty() ? ImageState::Original() : ImageState::Current());
         LogSystem::Add(LOG_INFO, ImVec4(0,1,0.5f,1), "[全部执行%s] %zu 个工具",
             s_runtimeMode ? "/运行模式" : "", ToolChainState::ReadOnlyTools().size());
     }
 
     void RequestStepNext() {
         if (s_stepCursor >= (int)ToolChainState::ReadOnlyTools().size()) { s_stepCursor = 0; s_stepTimeMs = 0; }
-        if (s_stepCursor == 0) { s_originalImage = !ImageState::Original().empty() ? ImageState::Original().clone() : ImageState::Current().clone(); s_originalVersion = ImageState::Version(); s_lastInputImage = s_originalImage.clone(); s_lastOutputImage = s_originalImage.clone(); s_originalToolOutputImage = s_originalImage.clone(); s_imageDirty = false; }
+        if (s_stepCursor == 0) { ResetBatchImagesFromSource(!ImageState::Original().empty() ? ImageState::Original() : ImageState::Current()); s_imageDirty = false; }
         s_isStep = true;
         s_currentIndex = s_stepCursor;
         s_mode = Mode::Running;
@@ -148,8 +153,9 @@ namespace ToolController
         if (!selectedInput.empty())
         {
             auto& currentImage = ImageState::CurrentRef();
-            selectedInput.copyTo(currentImage);
-            s_lastInputImage = selectedInput.clone();
+            if (selectedInput.data != currentImage.data)
+                selectedInput.copyTo(currentImage);
+            s_lastInputImage = selectedInput;
             if (s_isStep)
             {
                 cv::Mat rgba;
@@ -180,7 +186,7 @@ namespace ToolController
         if (!s_isStep)
             s_batchTotalMs += s_stepTimeMs;
         if (!ImageState::Current().empty())
-            s_lastOutputImage = ImageState::Current().clone();
+            s_lastOutputImage = ImageState::Current();
 
         if (s_isStep) {
             s_stepCursor++;
@@ -199,11 +205,7 @@ namespace ToolController
                     s_mode = Mode::Idle;  // 简化：循环等下一帧手动触发
                 } else if (s_loop) {
                     s_currentIndex = 0; s_imageDirty = false;
-                    s_originalImage = !ImageState::Original().empty() ? ImageState::Original().clone() : ImageState::Current().clone();
-                    s_originalVersion = ImageState::Version();
-                    s_lastInputImage = s_originalImage.clone();
-                    s_lastOutputImage = s_originalImage.clone();
-                    s_originalToolOutputImage = s_originalImage.clone();
+                    ResetBatchImagesFromSource(!ImageState::Original().empty() ? ImageState::Original() : ImageState::Current());
                     s_batchTimerStarted = false;
                     s_nextLoopRunAt = std::chrono::high_resolution_clock::now()
                         + std::chrono::duration_cast<std::chrono::high_resolution_clock::duration>(
