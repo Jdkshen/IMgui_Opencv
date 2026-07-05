@@ -2,16 +2,19 @@
 
 #include <algorithm>
 
+// =====================================================
+// 内部状态（模块私有）
+// =====================================================
 namespace ToolChainState
 {
 namespace
 {
-    std::vector<ToolInstance> s_tools;
-    int s_activeToolIndex = -1;
-    bool s_yoloLiveDetect = false;
-    int s_yoloLiveInstanceIndex = -1;
-    float s_yoloLastTimeMs = 0.0f;
-    float s_yoloLiveFrameMs = 0.0f;
+    std::vector<ToolInstance> s_tools;       // 工具实例列表
+    int s_activeToolIndex = -1;              // 当前激活的工具索引（-1 = 无）
+    bool s_yoloLiveDetect = false;           // YOLO 实时检测开关
+    int s_yoloLiveInstanceIndex = -1;        // 实时检测使用的工具实例索引
+    float s_yoloLastTimeMs = 0.0f;           // 最近一次推理耗时
+    float s_yoloLiveFrameMs = 0.0f;          // 实时帧耗时
 }
 
 std::vector<ToolInstance>& Tools()

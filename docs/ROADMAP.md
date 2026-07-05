@@ -1,6 +1,6 @@
 # 开发路线
 
-> 当前版本: 2026-06-26 | 12 个工具 | type 0-11 ITool | 后续按“稳定平台 -> 工业工具 -> 执行链路 -> 发布 -> 平台化”推进
+> 当前版本: 2026-06-28 | 13 个 ITool 工具 | type 0-11、13 ITool | type 12 原图特殊工具 | 后续按“稳定平台 -> 工业工具 -> 执行链路 -> 发布 -> 平台化”推进
 
 ---
 
@@ -27,12 +27,14 @@
 | 17 | 工具链输入 | 每实例可选上一步原图、上一步处理图、原图工具输出 |
 | 18 | 添加工具图标 | 添加工具弹窗支持 PNG 图标，失败时回退内置图标 |
 | 19 | OpenCV 5.0 YOLO 实验 | type=11，用于和 ONNX Runtime YOLO 对比测试 |
+| 20 | 结果导出 | JSON 结果、PNG 结果截图、Markdown 运行报告 |
+| 21 | OCR 文字识别 | type=13，PP-OCRv6 tiny + NCNN，支持 ROI、置信度、文本框叠加 |
 
 ## 第二阶段 ✅ 架构升级（优先级排序）
 
 | # | 任务 | 说明 |
 |---|------|------|
-| ① | **ITool 接口** | ✅ 已完成 — type 0-11 已接入 ITool；type 12 原图为工具链重置特殊工具 |
+| ① | **ITool 接口** | ✅ 已完成 — type 0-11、13 已接入 ITool；type 12 原图为工具链重置特殊工具 |
 | ② | **ToolResult 统一** | ✅ 已完成 — `ToolResult { measurements, regions, detections, lines, texts, debugImage }` 替代各工具独立结构 |
 | ③ | **ROI 升级** | ✅ 已完成 — `ROI_TYPE_RECT/POINT/LINE/CIRCLE/POLYGON` 5 种几何类型 + 按类型可视化 |
 | ④ | **Recipe 版本化** | ✅ 已完成 — `"version": 1` |
@@ -43,9 +45,9 @@
 
 | # | 功能 | 状态 |
 |---|------|------|
-| 1 | 结果导出 | 🔲 导出 `ToolResult` 中的检测框、区域、直线、测量值，优先 CSV/JSON |
+| 1 | 结果导出 | ✅ 已完成 — 导出 `ToolResult` 的 detections、regions、lines、texts、measurements 到 JSON |
 | 2 | 配方加载后自动执行 | 🔲 加载配方和图片/模板后，一键或自动执行全部工具 |
-| 3 | 运行报告 | 🔲 每次全部执行后输出工具名、耗时、结果数量、OK/NG，先做 TXT/CSV |
+| 3 | 运行报告 | ✅ 已完成 — 全部执行后可生成 Markdown 报告，包含工具名、耗时、结果数量、OK/FAIL |
 
 ## 第四阶段 🔲 工业常用工具
 
@@ -55,7 +57,7 @@
 | 2 | Blob 分析增强 | 面积、中心点、外接矩形、圆度、长宽比、筛选条件、OK/NG 阈值 |
 | 3 | 二维码/条码识别 | 先接 OpenCV `QRCodeDetector`；条码后续可接 ZXing-cpp |
 | 4 | 图像差分 | 参考图 vs 当前图，`absdiff + threshold + morphology + 差异高亮` |
-| 5 | OCR 识别 | 放后面，引入模型/运行时/中文识别后再做 |
+| 5 | OCR 识别 | ✅ 已接入 — PP-OCRv6 tiny + NCNN；后续可继续优化模型、字典和性能 |
 
 ## 第五阶段 🔲 执行链路升级
 
@@ -71,7 +73,7 @@
 
 | # | 任务 | 说明 |
 |---|------|------|
-| 1 | 制作 `runtime.zip` | 包含 OpenCV、ONNX Runtime、DirectML 等运行时 DLL/lib |
+| 1 | 制作 `runtime.zip` | 包含 OpenCV、ONNX Runtime、DirectML、NCNN 等运行时 DLL/lib |
 | 2 | GitHub Release | 仓库保留源码，Release 附件放运行时包 |
 | 3 | 构建文档更新 | `docs/BUILD.md` 增加“下载 runtime.zip 解压到 redist/” |
 
@@ -90,8 +92,8 @@
 
 | 优先级 | 阶段 | 先做任务 |
 |---|------|------|
-| P0 | 稳定平台 | 结果导出 -> 配方加载后自动执行 -> 运行报告 |
-| P1 | 工业常用工具 | 尺寸测量 -> Blob 分析增强 -> 二维码/条码 -> 图像差分 -> OCR |
+| P0 | 稳定平台 | 配方加载后自动执行；继续完善导出格式和运行报告 |
+| P1 | 工业常用工具 | 尺寸测量 -> Blob 分析增强 -> 二维码/条码 -> 图像差分；OCR 已先行接入，后续优化 |
 | P2 | 执行链路升级 | OK/NG -> 失败停止 -> 启用/禁用 -> 复制/粘贴参数 -> 分组/折叠 |
 | P3 | 工程发布 | runtime.zip -> GitHub Release -> BUILD 文档 |
 | P4 | 平台化 | 节点编辑器 -> 插件系统 -> 工业相机 -> 工业通讯 |

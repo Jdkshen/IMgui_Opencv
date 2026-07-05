@@ -165,6 +165,23 @@ struct RecipeToolInstance
     bool mcfImgGray = false, mcfImgBinary = false;
     int  mcfImgBinThresh = 128;
     int mcfRoiX = 0, mcfRoiY = 0, mcfRoiW = 0, mcfRoiH = 0;
+
+    // type==13 OCR文字识别
+    std::string ocrDetModelPath = "models\\ppocrv6\\PP_OCRv6_tiny_det.ncnn.bin";
+    std::string ocrDetParamPath = "models\\ppocrv6\\PP_OCRv6_tiny_det.ncnn.param";
+    std::string ocrRecModelPath = "models\\ppocrv6\\PP_OCRv6_tiny_rec.ncnn.bin";
+    std::string ocrRecParamPath = "models\\ppocrv6\\PP_OCRv6_tiny_rec.ncnn.param";
+    std::string ocrDictionaryPath = "models\\ppocrv6\\ppocr_keys_v6_tiny.txt";
+    float ocrMinConfidence = 0.30f;
+    int ocrMaxItems = 8;
+    int ocrInputSize = 512;
+    int ocrMaxCandidates = 220;
+    int ocrMinBoxArea = 0;
+    int ocrMinBoxHeight = 0;
+    int ocrRoiPadding = 24;
+    bool ocrFastMode = true;
+    bool ocrDetectOnly = false;
+    bool ocrUseROI = true;
 };
 
 struct RecipeData

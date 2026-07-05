@@ -4,7 +4,7 @@
 
 ## 项目定位
 
-`IMgui_Opencv` 是一个基于 Dear ImGui、DirectX 12、OpenCV 的 Windows 桌面视觉工具。项目使用 Visual Studio C++ 工程组织，核心能力包括图片/视频加载、ROI 管理、图像处理、模板匹配、YOLO 检测、轮廓/形状/直线检测、形态学、颜色分析、多点找色、工具链输入、配方保存加载和日志显示。
+`IMgui_Opencv` 是一个基于 Dear ImGui、DirectX 12、OpenCV 的 Windows 桌面视觉工具。项目使用 Visual Studio C++ 工程组织，核心能力包括图片/视频加载、ROI 管理、图像处理、模板匹配、YOLO 检测、轮廓/形状/直线检测、形态学、颜色分析、多点找色、OCR、结果导出、工具链输入、配方保存加载和日志显示。
 
 主要技术栈：
 
@@ -13,7 +13,7 @@
 | UI | Dear ImGui，Docking，多视口 |
 | 渲染 | DirectX 12 |
 | 图像处理 | OpenCV |
-| 推理 | ONNX Runtime / OpenCV DNN 相关封装；OpenCV 5.0 YOLO 实验工具 |
+| 推理 | ONNX Runtime / OpenCV DNN / NCNN；OpenCV 5.0 YOLO 实验工具和 PP-OCRv6 tiny OCR |
 | 配置/配方 | nlohmann/json |
 | 平台 | Win32，XAudio2，Media Foundation |
 | 工程 | Visual Studio C++20，`Windows_imgui.vcxproj` |
@@ -29,8 +29,8 @@ IMgui_Opencv/
 ├── Log/                    # 日志系统
 ├── include/                # 第三方头文件和 ImGui 源码
 ├── assets/                 # 字体、测试图片等资源
-├── models/                 # ONNX/PT 模型、类别文件、测试视频/图片
-├── redist/                 # 运行时 DLL 和 lib
+├── models/                 # ONNX/PT/NCNN 模型、类别文件、测试视频/图片
+├── redist/                 # 本地/Release 运行时 DLL 和 lib
 ├── recipes/                # 配方文件及模板资源
 ├── Test/                   # C++ 回归测试工程
 ├── docs/                   # 项目文档
@@ -58,7 +58,7 @@ flowchart TD
 
 - UI 负责显示窗口、收集参数、编辑 ROI 和触发执行。
 - Core 负责保存运行上下文、调度工具、执行工具、加载资源和管理配方。
-- Algorithm 封装具体视觉算法；当前 type 0-11 已接入 `ITool`，type 12 原图由 `ToolController` 特殊处理。
+- Algorithm 封装具体视觉算法；当前 type 0-11、13 已接入 `ITool`，type 12 原图由 `ToolController` 特殊处理。
 - 渲染纹理上传、图片显示状态、部分工具链状态仍通过全局变量连接。
 
 ## 程序入口和主循环
@@ -159,6 +159,7 @@ ROI 交互主要在 `UI/ROIManager.cpp` 中完成，包含控制点、拖动、�
 | `ToolExecutor.*` | 统一工具执行入口，按工具类型分发 |
 | `ToolController.*` | 工具执行调度器，支持单个、全部、单步和循环执行 |
 | `ResultPublisher.h` | 结果发布相关声明 |
+| `ResultExporter.*` | JSON 结果、PNG 结果截图和 Markdown 运行报告导出 |
 | `ImageUtils.h` | 图像格式转换和安全上传辅助 |
 | `LegacyAppState.h` / `UIStateBridge.h` | 旧全局状态过渡桥，隔离 UI/Core 迁移期依赖 |
 
@@ -186,7 +187,7 @@ ROI 交互主要在 `UI/ROIManager.cpp` 中完成，包含控制点、拖动、�
 extern VisionContext gContext;
 ```
 
-它的作用是减少算法接口对零散全局变量的依赖。当前 type 0-11 已通过 ITool 执行，但部分处理链路仍会同步 `gImage`、`gPendingUpload`、`gNeedUpload` 等运行状态。
+它的作用是减少算法接口对零散全局变量的依赖。当前 type 0-11、13 已通过 ITool 执行，但部分处理链路仍会同步 `gImage`、`gPendingUpload`、`gNeedUpload` 等运行状态。
 
 ### ToolController
 
@@ -235,6 +236,7 @@ ToolController::Reset()
 | 10 | 多点找色 | `RunViaITool()` |
 | 11 | YOLO OpenCV 5.0 | `RunViaITool()`，`OpenCVYoloITool`，OpenCV DNN 实验工具 |
 | 12 | 原图 | `ToolController` 中恢复本轮原图，作为工具链重置节点 |
+| 13 | OCR 文字识别 | `RunViaITool()`，`OCRTool`，PP-OCRv6 tiny + NCNN |
 
 `RunViaITool()` 会把 `ToolInstance` 中的 UI 参数同步到具体 `ITool` 实例，再把当前图像、ROI、模板写入 `gContext`，最后执行：
 
@@ -273,6 +275,8 @@ gContext.unifiedResults
 | `ColorAnalyzer.*` | 色彩空间分析和直方图 |
 | `ThresholdTool.*` | 灰度、模糊、阈值、Canny 管线 |
 | `MultiColorFinder.*` | 多点找色工具 |
+| `OCRTool.*` | OCR 工具 ITool 实现、缓存、ROI 和结果转换 |
+| `WindowsPPOCREngine.*` | PP-OCRv6 tiny NCNN 模型加载、检测和识别 |
 
 ### ITool 接口
 
@@ -295,11 +299,19 @@ public:
 
 | type | 工具 |
 | --- | --- |
+| 0 | 边缘检测 |
+| 1 | 模板匹配 |
+| 2 | Blob 分析 |
+| 3 | 阈值调试 |
 | 4 | YOLO 检测 |
 | 5 | 轮廓分析 |
 | 6 | 形状匹配 |
 | 7 | 直线检测 |
+| 8 | 形态学 |
+| 9 | 颜色分析 |
 | 10 | 多点找色 |
+| 11 | YOLO OpenCV 5.0 |
+| 13 | OCR 文字识别 |
 
 工具通过 `ToolRegistry` 注册和创建：
 
@@ -321,7 +333,7 @@ ITool::Create(type)
 | `regions` | 轮廓、Blob、形状匹配区域 |
 | `detections` | YOLO/分类检测框 |
 | `lines` | 直线检测结果 |
-| `texts` | OCR 预留 |
+| `texts` | OCR 文本框、文本内容和置信度 |
 | `debugImage` | 可选调试图像 |
 
 这套结构是 UI 统一叠加绘制和结果管理的基础。
@@ -341,6 +353,7 @@ ITool::Create(type)
 - 颜色分析参数：色彩空间、直方图 bins、高度。
 - 多点找色参数：参考图、锚点、ROI、最大结果数、距离阈值。
 - OpenCV 5.0 YOLO 实验参数：模型路径、类别路径、置信度、NMS、实时测试/Helper 测速。
+- OCR 参数：检测/识别模型 param/bin、字典、置信度、最大文本数、输入尺寸、ROI 开关。
 - 输入来源参数：`inputSourceMode`，支持上一步原图、上一步处理图、原图工具输出。
 
 执行路径如下：
@@ -351,7 +364,7 @@ flowchart LR
     B --> C["ToolExecutor::Execute(type, instance)"]
     C --> D{"工具类型"}
     D --> E["特殊工具<br/>type 12 原图"]
-    D --> F["ITool 工具<br/>type 0-11"]
+    D --> F["ITool 工具<br/>type 0-11、13"]
     F --> G["VisionContext"]
     G --> H["ToolResult"]
     E --> I["恢复本轮原图"]
@@ -440,14 +453,16 @@ flowchart LR
 | `include/directx` | DirectX 12 辅助头文件 |
 | `include/opencv` | OpenCV 头文件 |
 | `include/onnxruntime` | ONNX Runtime C/C++ API |
+| `include/ncnn` | NCNN OCR 推理头文件 |
 | `include/nlohmann` | JSON 单头文件 |
 | `include/dxguids` | DirectX GUID 相关 |
 
 ### redist
 
-`redist/` 存放运行时 DLL 和 lib。工程文件会在构建后复制关键 DLL 到输出目录，包括：
+`redist/` 存放本地或 Release 包恢复的运行时 DLL 和 lib。工程文件会在构建后复制关键 DLL 到输出目录，包括：
 
 - `onnxruntime*.dll`
+- `ncnn.dll`
 - `opencv_world500.dll`
 - `opencv_world500d.dll`
 - `opencv_videoio_ffmpeg500_64.dll`
@@ -456,7 +471,7 @@ flowchart LR
 
 ### models
 
-`models/` 存放 ONNX 模型、类别文件、测试视频和测试图片。根目录也有若干 `.pt` 模型文件。
+`models/` 存放 ONNX/PT/NCNN 模型、类别文件、测试视频和测试图片。`models/ppocrv6/` 是 OCR 默认 PP-OCRv6 tiny 模型目录。
 
 ## Visual Studio 工程
 
@@ -470,15 +485,15 @@ flowchart LR
 | 平台 | Win32 / x64，主要配置 x64 |
 | 字符集 | Unicode |
 | 编译选项 | `/utf-8` |
-| 包含目录 | `include/directx`、`include/opencv`、`include` |
+| 包含目录 | `include/directx`、`include/ncnn`、`include/opencv`、`include` |
 | 库目录 | `redist` |
 | Debug 库 | `opencv_world500d.lib` |
-| Release 库 | `opencv_world500.lib` |
+| Release 库 | `opencv_world500.lib`、`ncnn.lib` |
 | 系统库 | `d3d12.lib`、`dxgi.lib`、`dxguid.lib`、`d3dcompiler.lib`、`Comdlg32.lib` |
 
-默认工程统一使用 OpenCV 5.0，include/lib/post-build runtime 都来自仓库 `include/` 和 `redist/`，不依赖本机 OpenCV 安装路径。
+默认工程统一使用 OpenCV 5.0，include/lib/post-build runtime 都来自项目内 `include/` 和本地 `redist/`，不依赖本机 OpenCV 安装路径。大型 `.dll/.lib` 后续建议通过 Git LFS、下载脚本或 GitHub Release 的 `runtime.zip` 恢复。
 
-构建后事件会复制字体、图片、主题配置、DLL、ONNX 模型和类别文件到输出目录。2026-06-23 已生成新的 `x64\Debug\Windows_imgui.exe` 和 `x64\Release\Windows_imgui.exe`。
+构建后事件会复制字体、主题配置、DLL、ONNX 模型、类别文件和 `models\ppocrv6\*` 到输出目录。新增 OCR/导出后需要重新确认 Debug/Release 构建。
 
 ## 日志和渲染辅助
 
@@ -497,17 +512,17 @@ FontManager::InitFonts(main_scale);
 ## 当前结构特点
 
 1. 项目已经形成比较清晰的 UI/Core/Algorithm 分层。
-2. `ITool + VisionContext + ToolResult` 已成为 type 0-11 的统一执行通路。
-3. `ToolExecutor` 当前主要负责把 type 0-11 分发到 `RunViaITool()`，type 12 原图由 `ToolController` 特殊处理。
+2. `ITool + VisionContext + ToolResult` 已成为 type 0-11、13 的统一执行通路。
+3. `ToolExecutor` 当前主要负责把 type 0-11、13 分发到 `RunViaITool()`，type 12 原图由 `ToolController` 特殊处理。
 4. 批量执行总耗时按各工具执行耗时累加，不再把跨帧等待算入算法耗时。
 5. `ToolInstance` 保存了大量 UI 参数，是工具实例和配方系统的核心。
 6. ROI 数据结构放在 UI 头文件中，Core 和 Algorithm 会间接依赖 UI 类型。
 7. 部分中文注释在当前查看环境下显示为乱码，说明文件编码或读取编码需要统一确认。
-8. `include/` 和 `redist/` 把依赖内置到仓库，便于本地构建，但体积较大。
+8. `include/` 保留第三方头文件，`redist/` 保留本地运行时目录；体积较大的 DLL/lib 建议通过 Release 包或 Git LFS 管理。
 
 ## 新增工具的一般步骤
 
-如果新增一个视觉工具，建议继续走 `ITool` 路线，并从 type 13 开始分配编号：
+如果新增一个视觉工具，建议继续走 `ITool` 路线，并从 type 14 开始分配编号：
 
 1. 在 `Algorithm/` 下新增工具类，实现 `ITool`。
 2. 在 `ITool.cpp` 的自动注册逻辑里注册新的 `type` 和名称。

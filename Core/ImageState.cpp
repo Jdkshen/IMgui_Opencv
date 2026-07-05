@@ -3,16 +3,20 @@
 #include "ImageUtils.h"
 #include "VisionContext.h"
 
+// =====================================================
+// 内部状态（模块私有，外部通过公开接口访问）
+// =====================================================
 namespace
 {
-cv::Mat s_current;
-cv::Mat s_original;
-cv::Mat s_pendingUpload;
-bool s_needUpload = false;
-int s_width = 0;
-int s_height = 0;
-int s_version = 0;
+cv::Mat s_current;         // 当前处理图像（可能被工具管线修改）
+cv::Mat s_original;        // 原始图像副本（始终保持不变）
+cv::Mat s_pendingUpload;   // 待上传到 GPU 的 RGBA 图像
+bool s_needUpload = false; // GPU 上传标记
+int s_width = 0;           // 图像宽度
+int s_height = 0;          // 图像高度
+int s_version = 0;         // 图像版本号（每次 SetImage 递增，用于缓存失效）
 
+// 同步内部状态到全局 VisionContext（兼容旧代码的全局变量访问）
 void SyncLegacyAndContext()
 {
     gContext.image = s_current.clone();

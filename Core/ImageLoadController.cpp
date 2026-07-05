@@ -13,34 +13,48 @@
 #include "../Algorithm/TemplateMatch.h"
 #include "../Log/LogSystem.h"
 
+// =====================================================
+// 内部状态
+// =====================================================
 namespace
 {
-std::string s_UploadRequest;
-bool s_RequestLoadImage = false;
+std::string s_UploadRequest;     // 当前待加载的图片路径
+bool s_RequestLoadImage = false; // 是否需要发起异步加载请求
 }
 
+// =====================================================
+// ImageLoadController::Update
+// 每帧调度流程：
+//   1. 检查 pendingPath（外部模块写入的待加载路径）
+//   2. 若有新路径 → 关闭视频 → 发起 AsyncImageLoader::RequestLoad
+//   3. 轮询 CheckAndProcess → 加载完成时：释放旧纹理 → 设置 FrameSourceState → 上传 GPU
+// =====================================================
 namespace ImageLoadController
 {
 void Update()
 {
+    // 1. 检查是否有待加载路径（由外部模块写入 pendingPath）
     if (!pendingPath.empty())
     {
-        VideoCapture::Close();
-        s_UploadRequest = pendingPath;
-        pendingPath.clear();
-        s_RequestLoadImage = true;
+        VideoCapture::Close();              // 关闭当前视频/摄像头
+        s_UploadRequest = pendingPath;       // 记录路径
+        pendingPath.clear();                 // 清空全局标记
+        s_RequestLoadImage = true;           // 标记需要加载
     }
 
+    // 2. 发起异步加载请求
     if (s_RequestLoadImage && !s_UploadRequest.empty())
     {
         s_RequestLoadImage = false;
         AsyncImageLoader::RequestLoad(s_UploadRequest);
     }
 
+    // 3. 轮询异步加载结果 → 完成时回调处理
     AsyncImageLoader::CheckAndProcess([](cv::Mat img)
     {
         try
         {
+            // 释放旧纹理资源（延迟释放队列）
             FlushPendingRelease();
             if (gTexture)
             {
@@ -48,6 +62,7 @@ void Update()
                 gTexture = nullptr;
             }
 
+            // 判断帧源类型（单图片 vs 图片序列）
             FrameSourceType sourceType = FrameSourceType::SingleImage;
             int frameIndex = -1;
             if (FrameNavigation::IsCurrentImage(s_UploadRequest))
@@ -57,12 +72,15 @@ void Update()
             }
             FrameSourceState::SetCurrentFrame(img, sourceType, s_UploadRequest, frameIndex, 0.0);
 
+            // 转换为 RGBA → 上传到 GPU 纹理
             cv::Mat rgba;
             SafeConvertToRGBA(img, rgba);
             UploadToDX12(g_pd3dDevice, g_pd3dCommandList, &gTexture, rgba,
                 DXGI_FORMAT_R8G8B8A8_UNORM, gSrvCpuHandle);
 
             LogSystem::Add(LOG_INFO, "异步图片加载完成: %dx%d", img.cols, img.rows);
+
+            // 后处理：适配窗口、清空交互状态、清空模板匹配
             FrameNavigation::FitImageToWindow();
             ROIState::ClearInteraction();
             TemplateMatch::Clear();

@@ -3,11 +3,15 @@
 #include "LegacyAppState.h"
 #include "UIStateBridge.h"
 
+// =====================================================
+// FrameNavigation — 图片序列导航实现
+// 所有函数直接委托到 LegacyAppState / UIStateBridge 的全局变量
+// =====================================================
 namespace FrameNavigation
 {
 const std::vector<std::string>& ImageList()
 {
-    return gImageList;
+    return gImageList;  // 全局图片路径列表
 }
 
 int CurrentImageIndex()

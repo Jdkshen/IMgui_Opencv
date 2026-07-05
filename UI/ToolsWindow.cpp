@@ -394,6 +394,7 @@ namespace UI
         {4, "YOLO检测", ToolCategory::Detection, "◎"},
         {5, "轮廓分析", ToolCategory::Detection, "◇"},
         {6, "形状匹配", ToolCategory::Detection, "△"},
+        {13, "文字识别", ToolCategory::Detection, "T"},
 
         {7, "直线检测", ToolCategory::Geometry,  "▬"},
 
@@ -446,6 +447,7 @@ namespace UI
             case 9:  return IM_COL32(255, 112, 67, 255);  // color
             case 10: return IM_COL32(0, 188, 212, 255);   // multi color
             case 11: return IM_COL32(102, 187, 106, 255); // experiment
+            case 13: return IM_COL32(67, 160, 255, 255);  // OCR
             default: return IM_COL32(120, 140, 160, 255);
             }
         };
@@ -481,6 +483,10 @@ namespace UI
             case 10:
                 drawList->AddCircle(center, size * 0.31f, white, 18, 1.5f);
                 drawList->AddCircleFilled(center, size * 0.10f, white, 12);
+                break;
+            case 13:
+                drawList->AddText(ImVec2(p.x + size * 0.27f, p.y + size * 0.16f), white, "T");
+                drawList->AddLine(ImVec2(p.x + 4, p.y + size - 4), ImVec2(p.x + size - 4, p.y + size - 4), white, 1.2f);
                 break;
             case 6:
                 drawList->AddTriangleFilled(ImVec2(center.x, p.y + 3), ImVec2(p.x + size - 3, p.y + size - 3), ImVec2(p.x + 3, p.y + size - 3), white);
@@ -688,6 +694,7 @@ namespace UI
                 it.lineUseROI = true;
                 it.mcfUseROI = true;
                 it.colorUseROI = true;
+                it.ocrUseROI = true;
                 cv::Rect r = roi.ToCvRect();
                 it.mcfRoiX = r.x;
                 it.mcfRoiY = r.y;
@@ -705,6 +712,7 @@ namespace UI
                 it.lineUseROI = st.backupUseROI;
                 it.mcfUseROI = st.backupUseROI;
                 it.colorUseROI = st.backupUseROI;
+                it.ocrUseROI = st.backupUseROI;
                 if (!it.searchROIs.empty())
                 {
                     cv::Rect r = it.searchROIs[0].ToCvRect();
@@ -772,6 +780,7 @@ namespace UI
                 it.lineUseROI = false;
                 it.mcfUseROI = false;
                 it.colorUseROI = false;
+                it.ocrUseROI = false;
                 it.mcfRoiX = it.mcfRoiY = it.mcfRoiW = it.mcfRoiH = 0;
                 LogSystem::Add(LOG_INFO, color, "查找区域: 已清除当前工具ROI");
                 SaveCurrentRecipe();
@@ -1381,6 +1390,59 @@ namespace UI
                     OpenCVYoloDetector::g_OpenCVYoloPostMs);
             }
 
+            EndCard();
+        };
+
+        // 13: OCR文字识别
+        g_ToolUIMap[13] = [&](ToolInstance &it, int inst)
+        {
+            auto ResetOcrDefaults = [&it]() {
+                it.ocrDetParamPath = "models\\ppocrv6\\PP_OCRv6_tiny_det.ncnn.param";
+                it.ocrDetModelPath = "models\\ppocrv6\\PP_OCRv6_tiny_det.ncnn.bin";
+                it.ocrRecParamPath = "models\\ppocrv6\\PP_OCRv6_tiny_rec.ncnn.param";
+                it.ocrRecModelPath = "models\\ppocrv6\\PP_OCRv6_tiny_rec.ncnn.bin";
+                it.ocrDictionaryPath = "models\\ppocrv6\\ppocr_keys_v6_tiny.txt";
+            };
+            if (it.ocrDetParamPath.empty() || it.ocrDetModelPath.empty() ||
+                it.ocrRecParamPath.empty() || it.ocrRecModelPath.empty() || it.ocrDictionaryPath.empty())
+                ResetOcrDefaults();
+
+            BeginCard("文字识别");
+            if (SecondaryButton("重置参数"))
+            {
+                ResetOcrDefaults();
+                it.ocrMinConfidence = 0.30f;
+                it.ocrMaxItems = 8;
+                it.ocrInputSize = 512;
+                it.ocrMaxCandidates = 220;
+                it.ocrMinBoxArea = 0;
+                it.ocrMinBoxHeight = 0;
+                it.ocrRoiPadding = 24;
+                it.ocrFastMode = true;
+                it.ocrDetectOnly = false;
+                it.ocrUseROI = true;
+            }
+            if (PrimaryButton("执行文字识别"))
+            {
+                RunToolFromCard(inst);
+            }
+            DrawSearchROIControls(it, inst);
+
+            SectionHeader("参数");
+            ImGui::SliderFloat("置信度##ocr", &it.ocrMinConfidence, 0.01f, 1.0f, "%.2f");
+            ImGui::SliderInt("最多文本##ocr", &it.ocrMaxItems, 1, 1000);
+            ImGui::TextDisabled("提示: 文本数越大，OCR耗时越高");
+            ImGui::SliderInt("最大候选##ocr", &it.ocrMaxCandidates, 1, 2000);
+            ImGui::SliderInt("输入尺寸##ocr", &it.ocrInputSize, 320, 1536);
+            ImGui::SliderInt("最小框面积##ocr", &it.ocrMinBoxArea, 0, 20000);
+            ImGui::SliderInt("最小框高度##ocr", &it.ocrMinBoxHeight, 0, 120);
+            ImGui::SliderInt("ROI扩边##ocr", &it.ocrRoiPadding, 0, 256);
+            ImGui::Checkbox("快速模式##ocr", &it.ocrFastMode);
+            ImGui::SameLine();
+            ImGui::Checkbox("只检测##ocr", &it.ocrDetectOnly);
+            ImGui::Checkbox("使用ROI##ocr", &it.ocrUseROI);
+            ImGui::TextDisabled("模型: 默认 PP-OCRv6 tiny");
+            ImGui::TextDisabled("状态: NCNN OCR接口已接入，未启用依赖时会提示");
             EndCard();
         };
 

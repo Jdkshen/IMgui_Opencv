@@ -100,7 +100,7 @@ namespace ContourDetector
         if (p.matchROI)
         {
             // ROI模式: 先从ROI找模板, 再全图匹配
-            const auto& rois = ROIState::ReadOnlyItems();
+            const auto &rois = ROIState::ReadOnlyItems();
             if (rois.empty())
             {
                 LogSystem::Add(LOG_WARN, color, "Contour:请先框选ROI");

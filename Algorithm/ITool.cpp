@@ -5,6 +5,7 @@
 #include "EdgeTool.h"
 #include "MorphologyTool.h"
 #include "MultiColorFinder.h"
+#include "OCRTool.h"
 #include "ShapeTools.h"
 #include "ThresholdTool.h"
 #include "YOLOTool.h"
@@ -87,6 +88,8 @@ namespace
             ToolRegistry::RegisterName(9, "ColorAnalyzer");
             ToolRegistry::Register(10, []() -> std::unique_ptr<ITool> { return std::make_unique<MultiColorFinder>(); });
             ToolRegistry::RegisterName(10, "MultiColorFinder");
+            ToolRegistry::Register(13, []() -> std::unique_ptr<ITool> { return std::make_unique<OCRTool>(); });
+            ToolRegistry::RegisterName(13, "OCR");
         }
     };
 

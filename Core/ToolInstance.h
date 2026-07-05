@@ -13,7 +13,7 @@
 // =====================================================
 struct ToolInstance
 {
-    int type = 0;                // 0=边缘检测 1=模板匹配 2=Blob分析 3=阈值调试 4=YOLO 5=轮廓 6=形状 7=直线 12=原图
+    int type = 0;                // 0=边缘检测 1=模板匹配 2=Blob分析 3=阈值调试 4=YOLO 5=轮廓 6=形状 7=直线 12=原图 13=OCR
     std::string label;           // 用户标签，空时显示原工具名
     int inputSourceMode = 2;     // 0=上一步原图, 1=上一步处理图, 2=原图工具输出
     cv::Mat templateImg;         // 该实例的模板图像数据
@@ -129,6 +129,23 @@ struct ToolInstance
     int mcfCrossSize = 10;
     int mcfCrossThick = 2;
     int mcfRoiX = 0, mcfRoiY = 0, mcfRoiW = 0, mcfRoiH = 0; // 搜索ROI位置（配方保存）
+
+    // ---- OCR文字识别（type==13） ----
+    std::string ocrDetModelPath = "models\\ppocrv6\\PP_OCRv6_tiny_det.ncnn.bin";
+    std::string ocrDetParamPath = "models\\ppocrv6\\PP_OCRv6_tiny_det.ncnn.param";
+    std::string ocrRecModelPath = "models\\ppocrv6\\PP_OCRv6_tiny_rec.ncnn.bin";
+    std::string ocrRecParamPath = "models\\ppocrv6\\PP_OCRv6_tiny_rec.ncnn.param";
+    std::string ocrDictionaryPath = "models\\ppocrv6\\ppocr_keys_v6_tiny.txt";
+    float ocrMinConfidence = 0.30f;
+    int ocrMaxItems = 8;
+    int ocrInputSize = 512;
+    int ocrMaxCandidates = 220;
+    int ocrMinBoxArea = 0;
+    int ocrMinBoxHeight = 0;
+    int ocrRoiPadding = 24;
+    bool ocrFastMode = true;
+    bool ocrDetectOnly = false;
+    bool ocrUseROI = true;
 
     // ---- 新架构：ITool 接口指针（为空时回退旧逻辑） ----
     ITool* toolImpl = nullptr;

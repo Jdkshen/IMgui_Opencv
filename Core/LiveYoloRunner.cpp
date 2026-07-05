@@ -13,18 +13,21 @@
 #include <chrono>
 #include <deque>
 
+// =====================================================
+// 实时 YOLO 性能统计（滑动窗口平均）
+// =====================================================
 namespace
 {
 struct LiveYoloPerfStats
 {
-    static constexpr int WarmupFrames = 5;
-    static constexpr int WindowFrames = 100;
+    static constexpr int WarmupFrames = 5;   // 预热帧数（排除前几帧的 JIT/缓存延迟）
+    static constexpr int WindowFrames = 100; // 滑动窗口大小
 
     int framesSeen = 0;
-    std::deque<float> total;
-    std::deque<float> pre;
-    std::deque<float> inf;
-    std::deque<float> post;
+    std::deque<float> total;   // 总耗时滑动窗口
+    std::deque<float> pre;     // 预处理耗时窗口
+    std::deque<float> inf;     // 推理耗时窗口
+    std::deque<float> post;    // 后处理耗时窗口
     float totalSum = 0.0f;
     float preSum = 0.0f;
     float infSum = 0.0f;
@@ -77,11 +80,13 @@ private:
     }
 };
 
+// 从工具实例或全局 ROI 列表中选取实时 YOLO 搜索区域
 cv::Rect SelectLiveYoloSearchRect(const ToolInstance& it, const cv::Mat& image)
 {
     if (image.empty())
         return {};
 
+    // 优先使用工具自身 ROI，否则使用全局 ROI
     const auto& globalROIs = ROIState::ReadOnlyItems();
     const std::vector<ROI>* rois = !it.searchROIs.empty() ? &it.searchROIs : &globalROIs;
     if (!rois || rois->empty())
@@ -92,15 +97,25 @@ cv::Rect SelectLiveYoloSearchRect(const ToolInstance& it, const cv::Mat& image)
         roiIndex = ROIState::SelectIndexFor(*rois);
 
     cv::Rect roi = (*rois)[roiIndex].ToCvRect();
-    roi &= cv::Rect(0, 0, image.cols, image.rows);
+    roi &= cv::Rect(0, 0, image.cols, image.rows);  // 裁剪到图像范围内
     return (roi.width > 0 && roi.height > 0) ? roi : cv::Rect();
 }
 }
 
+// =====================================================
+// LiveYoloRunner::Update — 实时 YOLO 检测主循环
+// 流程：
+//   1. 检查是否启用实时检测 + 是否有图像
+//   2. 从工具链获取模型路径、置信度/NMS 阈值、ROI
+//   3. 根据类型选择后端（YOLODetector=ONNX GPU / OpenCVYoloDetector=DNN CPU）
+//   4. 执行推理 → 计时 → 滑动窗口统计 → 日志输出
+//   5. 发布检测结果到叠加层和统一结果列表
+// =====================================================
 namespace LiveYoloRunner
 {
 void Update()
 {
+    // 1. 前置检查：实时检测开关 + 图像有效性
     if (!ToolChainState::YoloLiveDetect() || gImage.empty())
         return;
 

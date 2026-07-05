@@ -53,8 +53,8 @@
       <SDLCheck>true</SDLCheck>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\include\opencv;$(ProjectDir)..\include;$(ProjectDir)..;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>/utf-8 /FS %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\include\ncnn;$(ProjectDir)..\include\opencv;$(ProjectDir)..\include;$(ProjectDir)..;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <PreprocessorDefinitions>_CONSOLE;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
@@ -76,19 +76,19 @@
       <SDLCheck>true</SDLCheck>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\include\opencv;$(ProjectDir)..\include;$(ProjectDir)..;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>/utf-8 /FS %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\include\ncnn;$(ProjectDir)..\include\opencv;$(ProjectDir)..\include;$(ProjectDir)..;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
-      <PreprocessorDefinitions>_CONSOLE;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_CONSOLE;NDEBUG;IMGUI_OPENCV_ENABLE_NCNN_OCR;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(ProjectDir)..\redist;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>opencv_world500.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>opencv_world500.lib;ncnn.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /Y "$(ProjectDir)..\redist\opencv_world500.dll" "$(OutDir)"</Command>
+      <Command>xcopy /Y "$(ProjectDir)..\redist\opencv_world500.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)..\redist\ncnn.dll" "$(OutDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -102,6 +102,8 @@
     <ClCompile Include="..\Algorithm\LineDetector.cpp" />
     <ClCompile Include="..\Algorithm\MorphologyTool.cpp" />
     <ClCompile Include="..\Algorithm\MultiColorFinder.cpp" />
+    <ClCompile Include="..\Algorithm\OCRTool.cpp" />
+    <ClCompile Include="..\Algorithm\WindowsPPOCREngine.cpp" />
     <ClCompile Include="..\Algorithm\ShapeMatcher.cpp" />
     <ClCompile Include="..\Algorithm\ShapeTools.cpp" />
     <ClCompile Include="..\Algorithm\ThresholdITool.cpp" />
@@ -112,6 +114,7 @@
     <ClCompile Include="..\Core\ImageState.cpp" />
     <ClCompile Include="..\Core\TemplateState.cpp" />
     <ClCompile Include="..\Core\RecipeManager.cpp" />
+    <ClCompile Include="..\Core\ResultExporter.cpp" />
     <ClCompile Include="..\Core\ROIState.cpp" />
     <ClCompile Include="..\Core\ToolChainState.cpp" />
     <ClCompile Include="..\Core\ToolExecutor.cpp" />
@@ -126,6 +129,8 @@
     <ClInclude Include="..\Algorithm\LineDetector.h" />
     <ClInclude Include="..\Algorithm\MorphologyTool.h" />
     <ClInclude Include="..\Algorithm\MultiColorFinder.h" />
+    <ClInclude Include="..\Algorithm\OCRTool.h" />
+    <ClInclude Include="..\Algorithm\WindowsPPOCREngine.h" />
     <ClInclude Include="..\Algorithm\ShapeMatcher.h" />
     <ClInclude Include="..\Algorithm\ShapeTools.h" />
     <ClInclude Include="..\Algorithm\ThresholdTool.h" />
@@ -137,6 +142,7 @@
     <ClInclude Include="..\Core\ImageState.h" />
     <ClInclude Include="..\Core\TemplateState.h" />
     <ClInclude Include="..\Core\RecipeManager.h" />
+    <ClInclude Include="..\Core\ResultExporter.h" />
     <ClInclude Include="..\Core\ROIState.h" />
     <ClInclude Include="..\Core\ResultPublisher.h" />
     <ClInclude Include="..\Core\ToolChainState.h" />

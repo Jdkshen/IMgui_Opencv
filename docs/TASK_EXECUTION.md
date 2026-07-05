@@ -8,20 +8,20 @@
 
 | 优先级 | 任务 | 目标 | 主要文件 |
 | --- | --- | --- | --- |
-| P0-1 | 结果导出 | 导出 `ToolResult` 中的 detections、regions、lines、measurements，先支持 CSV/JSON | `Algorithm/ToolResult.h`、`Core/ResultPublisher.h`、`UI/ToolsWindow.cpp`、`docs/BUILD.md` |
+| P0-1 | 结果导出 | ✅ 已完成：`Core/ResultExporter` 可导出 JSON 结果和结果截图 | `Core/ResultExporter.*`、`UI/DockSpaceHost.cpp` |
 | P0-2 | 配方加载后自动执行 | 加载配方、图片/模板后可自动执行全部工具，让检测流程可复现 | `Core/RecipeManager.*`、`Core/ToolController.*`、`UI/DockSpaceHost.*`、`UI/ToolsWindow.*` |
-| P0-3 | 运行报告 | 全部执行后生成工具名、耗时、结果数量、OK/NG 的 TXT/CSV 报告 | `Core/ToolController.*`、`Core/ToolExecutor.*`、`Algorithm/ToolResult.h`、`UI/ToolsWindow.*` |
+| P0-3 | 运行报告 | ✅ 已完成：全部执行后可生成 Markdown 报告，包含工具名、耗时、结果数量、OK/FAIL | `Core/ResultExporter.*`、`UI/DockSpaceHost.cpp` |
 | P1-1 | 尺寸测量 | 点到点距离、线段长度、圆直径、角度、ROI 宽高 | `Algorithm/`、`Core/ToolTypes.h`、`UI/ToolsWindow.*`、`Core/RecipeManager.*` |
 | P1-2 | Blob 分析增强 | 面积、中心点、外接矩形、圆度、长宽比、筛选条件、OK/NG 阈值 | `Algorithm/BlobTool.*`、`Algorithm/ToolResult.h`、`UI/ToolsWindow.*` |
 | P1-3 | 二维码/条码识别 | 先用 OpenCV `QRCodeDetector` 做二维码，条码后续评估 ZXing-cpp | `Algorithm/`、`Windows_imgui.vcxproj`、`UI/ToolsWindow.*` |
 | P1-4 | 图像差分 | 参考图与当前图差异检测，高亮差异区域 | `Algorithm/`、`Core/RecipeManager.*`、`UI/ToolsWindow.*` |
-| P1-5 | OCR | 后置任务，等模型/运行时/中文识别方案明确后再做 | 待定 |
+| P1-5 | OCR | ✅ 已接入：type 13，PP-OCRv6 tiny + NCNN，支持 ROI、文本框、置信度和配方保存加载 | `Algorithm/OCRTool.*`、`Algorithm/WindowsPPOCREngine.*`、`Core/ToolExecutor.cpp`、`UI/ToolsWindow.cpp` |
 | P2-1 | OK/NG 状态 | 每个工具输出统一 OK/NG 和失败原因 | `Algorithm/ToolResult.h`、`Core/ToolExecutor.*`、`UI/ImageViewer.*` |
 | P2-2 | 失败停止 | 全部执行时工具 NG 可停止后续工具 | `Core/ToolController.*`、`UI/ToolsWindow.*` |
 | P2-3 | 工具启用/禁用 | 工具实例可跳过执行但保留参数 | `Core/ToolInstance.h`、`Core/ToolController.*`、`Core/RecipeManager.*` |
 | P2-4 | 复制/粘贴参数 | 同类工具之间复制参数 | `Core/ToolInstance.h`、`UI/ToolsWindow.*` |
 | P2-5 | 工具分组/折叠 | 大量工具时管理流程 | `UI/ToolsWindow.*`、`Core/RecipeManager.*` |
-| P3-1 | runtime.zip | 打包 OpenCV、ONNX Runtime、DirectML 等本地运行时 | `redist/`、`docs/BUILD.md` |
+| P3-1 | runtime.zip | 打包 OpenCV、ONNX Runtime、DirectML、NCNN 等本地运行时 | `redist/`、`docs/BUILD.md` |
 | P3-2 | GitHub Release | 源码进仓库，运行时包放 Release 附件 | GitHub Release、`docs/BUILD.md` |
 | P4 | 平台化 | 节点编辑器、插件系统、工业相机、工业通讯 | 后续单独拆分 |
 
@@ -61,7 +61,7 @@
 在 IMgui_Opencv 项目里添加新工具：XXXX
 
 要求：
-1. 分配新的 type，避免占用当前 0-12（新增工具从 13 开始）。
+1. 分配新的 type，避免占用当前 0-13（新增工具从 14 开始）。
 2. 优先实现 ITool 接口。
 3. 输出优先使用 ToolResult。
 4. UI 参数放入 ToolInstance。
@@ -95,10 +95,10 @@
 3. 在 `Algorithm/ITool.cpp` 注册：
 
 ```cpp
-ToolRegistry::Register(13, []() -> std::unique_ptr<ITool> {
+ToolRegistry::Register(14, []() -> std::unique_ptr<ITool> {
     return std::make_unique<XXXXTool>();
 });
-ToolRegistry::RegisterName(13, "XXXX");
+ToolRegistry::RegisterName(14, "XXXX");
 ```
 
 4. 在 `UI/ToolsWindow.h` 的 `ToolInstance` 中添加参数。
@@ -170,8 +170,9 @@ ToolRegistry::RegisterName(13, "XXXX");
 | 10 | 多点找色 | 已接入 ITool |
 | 11 | YOLO OpenCV 5.0 | 已接入 ITool，OpenCV DNN 实验工具 |
 | 12 | 原图 | 特殊工具，由 ToolController 恢复本轮原图 |
+| 13 | OCR 文字识别 | 已接入 ITool，PP-OCRv6 tiny + NCNN |
 
-新增工具从 `13` 开始分配。
+新增工具从 `14` 开始分配。
 
 ## 验收清单
 
@@ -190,6 +191,6 @@ ToolRegistry::RegisterName(13, "XXXX");
 
 ```powershell
 rg -n "TODO|未完成|待实现|5 个工具|5 种已接入|传统执行|专用执行|OpenCV 4.12" README.md docs -g *.md
-rg -n "ToolRegistry::Register|g_ToolRegistry|case 12|case 13|RunViaITool" Algorithm UI Core
+rg -n "ToolRegistry::Register|g_ToolRegistry|case 12|case 13|case 14|RunViaITool" Algorithm UI Core
 rg -n "ClCompile Include=.*XXXX|ClInclude Include=.*XXXX" Windows_imgui.vcxproj
 ```

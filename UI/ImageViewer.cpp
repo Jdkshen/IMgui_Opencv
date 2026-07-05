@@ -35,6 +35,38 @@ float g_YoloOverlayOffsetX = 0.0f;
 int& g_ImageVersion = ImageState::VersionRef();
 
 // ---- 统一结果叠加层（唯一结果源） ----
+static std::string TruncateUtf8Label(const std::string& text, size_t maxBytes)
+{
+    if (text.size() <= maxBytes) return text;
+    size_t cut = maxBytes;
+    while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80)
+        --cut;
+    if (cut == 0) cut = maxBytes;
+    return text.substr(0, cut) + "...";
+}
+
+static void DrawReadableLabel(ImDrawList* dl, ImVec2 anchor, ImU32 accent, const char* label)
+{
+    if (!label || !label[0]) return;
+
+    const ImVec2 textSize = ImGui::CalcTextSize(label);
+    const float padX = 4.0f;
+    const float padY = 2.0f;
+    const float fontH = ImGui::GetFontSize();
+    const float topLimit = ImGui::GetWindowPos().y + 2.0f;
+
+    ImVec2 pos(anchor.x + 2.0f, anchor.y - fontH - padY * 2.0f - 2.0f);
+    if (pos.y < topLimit)
+        pos.y = anchor.y + 2.0f;
+
+    ImVec2 bgMin(pos.x - padX, pos.y - padY);
+    ImVec2 bgMax(pos.x + textSize.x + padX, pos.y + textSize.y + padY);
+    dl->AddRectFilled(bgMin, bgMax, IM_COL32(18, 22, 28, 230), 3.0f);
+    dl->AddRect(bgMin, bgMax, accent, 3.0f, 0, 1.0f);
+    dl->AddText(ImVec2(pos.x + 1.0f, pos.y + 1.0f), IM_COL32(0, 0, 0, 220), label);
+    dl->AddText(pos, IM_COL32(255, 235, 120, 255), label);
+}
+
 static void DrawUnifiedResults(ImDrawList* dl)
 {
     const auto& results = gContext.unifiedResults;
@@ -107,6 +139,20 @@ static void DrawUnifiedResults(ImDrawList* dl)
             auto p2 = UI::ImageToScreenPos(ImVec2((float)l.p2.x, (float)l.p2.y));
             dl->AddLine(p1, p2, cols[i % nCol], t);
         }
+
+	        // OCR 文本
+	        for (const auto& text : r.texts) {
+	            auto p1 = UI::ImageToScreenPos(ImVec2((float)text.box.x, (float)text.box.y));
+	            auto p2 = UI::ImageToScreenPos(ImVec2((float)(text.box.x + text.box.width), (float)(text.box.y + text.box.height)));
+	            ImU32 boxColor = IM_COL32(0, 220, 120, 255);
+	            dl->AddRect(p1, p2, boxColor, 0, 0, t);
+	            if (!text.text.empty()) {
+	                std::string preview = TruncateUtf8Label(text.text, 48);
+	                char buf[192];
+	                snprintf(buf, sizeof(buf), "%s %.2f", preview.c_str(), text.confidence);
+	                DrawReadableLabel(dl, p1, boxColor, buf);
+	            }
+	        }
     }
 }
 
@@ -548,10 +594,12 @@ namespace UI
 		// ===== 右侧信息栏：尺寸 | 格式 | 像素坐标 | RGB值 =====
 		{
 			ImGui::SameLine();
-			if (!gImage.empty())
+			const cv::Mat image = gImage;
+			if (!image.empty() && image.data)
 			{
 				const char *fmtStr = "?";
-				int ch = gImage.channels();
+				const int ch = image.channels();
+				const bool readable8u = (image.depth() == CV_8U) && (ch == 1 || ch == 3 || ch == 4);
 				if (ch == 1)
 					fmtStr = "Gray";
 				else if (ch == 3)
@@ -566,36 +614,40 @@ namespace UI
 				{
 					ImVec2 imgCoord = ScreenToImagePos(mouse);
 					int ix = (int)imgCoord.x, iy = (int)imgCoord.y;
-					bool inImg = (ix >= 0 && ix < gImageWidth && iy >= 0 && iy < gImageHeight);
-					if (inImg)
+					bool inImg = (ix >= 0 && ix < image.cols && iy >= 0 && iy < image.rows);
+					if (inImg && readable8u)
 					{
 						// 读取像素值
 						char pixInfo[64] = "";
+						const uchar* row = image.ptr<uchar>(iy);
 						if (ch == 1)
 						{
-							uchar v = gImage.at<uchar>(iy, ix);
+							uchar v = row[ix];
 							snprintf(pixInfo, sizeof(pixInfo), " | Gray:%d", v);
 						}
 						else if (ch == 3)
 						{
-							cv::Vec3b bgr = gImage.at<cv::Vec3b>(iy, ix);
+							const uchar* bgr = row + ix * 3;
 							snprintf(pixInfo, sizeof(pixInfo), " | R:%d G:%d B:%d", bgr[2], bgr[1], bgr[0]);
 						}
 						else if (ch == 4)
 						{
-							cv::Vec4b bgra = gImage.at<cv::Vec4b>(iy, ix);
+							const uchar* bgra = row + ix * 4;
 							snprintf(pixInfo, sizeof(pixInfo), " | R:%d G:%d B:%d A:%d", bgra[2], bgra[1], bgra[0], bgra[3]);
 						}
 						ImGui::TextDisabled("%dx%d %s | X:%.0f Y:%.0f%s",
-											gImageWidth, gImageHeight, fmtStr, imgCoord.x, imgCoord.y, pixInfo);
+											image.cols, image.rows, fmtStr, imgCoord.x, imgCoord.y, pixInfo);
 					}
+					else if (inImg)
+						ImGui::TextDisabled("%dx%d %s | X:%.0f Y:%.0f",
+											image.cols, image.rows, fmtStr, imgCoord.x, imgCoord.y);
 					else
 						ImGui::TextDisabled("%dx%d %s | X:--- Y:---",
-											gImageWidth, gImageHeight, fmtStr);
+											image.cols, image.rows, fmtStr);
 				}
 				else
 				{
-					ImGui::TextDisabled("%dx%d %s", gImageWidth, gImageHeight, fmtStr);
+					ImGui::TextDisabled("%dx%d %s", image.cols, image.rows, fmtStr);
 				}
 			}
 		}

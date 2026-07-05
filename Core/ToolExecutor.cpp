@@ -8,6 +8,7 @@
 #include "../Algorithm/LineDetector.h"
 #include "../Algorithm/MorphologyTool.h"
 #include "../Algorithm/MultiColorFinder.h"
+#include "../Algorithm/OCRTool.h"
 #include "../Algorithm/OpenCVYoloDetector.h"
 #include "../Algorithm/ShapeMatcher.h"
 #include "../Algorithm/ShapeTools.h"
@@ -39,6 +40,16 @@ struct ToolRunTimings
 
 bool ConvertForCopyTo(const cv::Mat& src, int targetChannels, cv::Mat& dst);
 
+double MeasurementValue(const ToolResult& result, const char* name, double fallback = 0.0)
+{
+    for (const auto& measurement : result.measurements)
+    {
+        if (measurement.name == name)
+            return measurement.value;
+    }
+    return fallback;
+}
+
 const std::vector<ROI>& SelectSearchROIs(const ToolInstance& it)
 {
     if (!it.searchROIs.empty())
@@ -62,6 +73,7 @@ bool ToolCanUseSharedInput(const ToolInstance& it)
     case 7:  // Line
     case 9:  // Color analyzer
     case 11: // OpenCV YOLO
+    case 13: // OCR
         return true;
     case 10: // Multi-color finder preprocesses in-place only when gray/binary is enabled.
         return !it.mcfImgGray && !it.mcfImgBinary;
@@ -191,6 +203,9 @@ void ApplyToolLabelToOverlayItems(ToolResult& result, const std::string& toolLab
 
     for (auto& detection : result.detections)
         detection.label = PrefixDisplayLabel(toolLabel, detection.label);
+
+    for (auto& text : result.texts)
+        text.text = PrefixDisplayLabel(toolLabel, text.text);
 }
 
 bool ConvertForCopyTo(const cv::Mat& src, int targetChannels, cv::Mat& dst)
@@ -519,6 +534,24 @@ void SyncIToolParams(ToolInstance& it)
             yt->confThreshold = it.yoloConfThreshold;
             yt->nmsThreshold = it.yoloNmsThreshold;
         }
+    } else if (t == 13) {
+        if (auto* ot = dynamic_cast<OCRTool*>(it.toolImpl)) {
+            ot->detModelPath = it.ocrDetModelPath;
+            ot->detParamPath = it.ocrDetParamPath;
+            ot->recModelPath = it.ocrRecModelPath;
+            ot->recParamPath = it.ocrRecParamPath;
+            ot->dictionaryPath = it.ocrDictionaryPath;
+            ot->minConfidence = it.ocrMinConfidence;
+            ot->maxItems = it.ocrMaxItems;
+            ot->inputSize = it.ocrInputSize;
+            ot->maxCandidates = it.ocrMaxCandidates;
+            ot->minBoxArea = it.ocrMinBoxArea;
+            ot->minBoxHeight = it.ocrMinBoxHeight;
+            ot->roiPadding = it.ocrRoiPadding;
+            ot->fastMode = it.ocrFastMode;
+            ot->detectOnly = it.ocrDetectOnly;
+            ot->useROI = it.ocrUseROI || HasSearchROI(it);
+        }
     }
 }
 
@@ -564,6 +597,29 @@ void PublishResult(int type, ToolResult result, float ms)
             OpenCVYoloDetector::g_OpenCVYoloPreMs,
             OpenCVYoloDetector::g_OpenCVYoloInfMs,
             OpenCVYoloDetector::g_OpenCVYoloPostMs);
+    } else if (type == 13) {
+        LogSystem::Add(result.success ? LOG_INFO : LOG_WARN, ImVec4(0, 1, 0.5f, 1),
+            "%s: %zu texts, %.3f ms%s%s",
+            result.toolName.c_str(),
+            result.texts.size(),
+            ms,
+            result.message.empty() ? "" : " | ",
+            result.message.c_str());
+        if (MeasurementValue(result, "ocrCandidates", -1.0) >= 0.0)
+        {
+            LogSystem::Add(LOG_INFO, ImVec4(0.55f, 0.8f, 1.0f, 1.0f),
+                "OCR stats: det %.3f ms | rec %.3f ms | post %.3f ms | candidates %.0f/%0.f | workers %.0f | resized %.0fx%.0f | crop %.0fx%.0f",
+                MeasurementValue(result, "ocrDetectMs"),
+                MeasurementValue(result, "ocrRecognizeMs"),
+                MeasurementValue(result, "ocrPostprocessMs"),
+                MeasurementValue(result, "ocrCandidates"),
+                MeasurementValue(result, "ocrRecognizedCandidates"),
+                MeasurementValue(result, "ocrWorkers"),
+                MeasurementValue(result, "ocrResizedWidth"),
+                MeasurementValue(result, "ocrResizedHeight"),
+                MeasurementValue(result, "ocrCropWidth"),
+                MeasurementValue(result, "ocrCropHeight"));
+        }
     }
 
     PublishUnifiedResult(std::move(result));
@@ -678,6 +734,7 @@ bool Execute(int type, ToolInstance& it)
     case 0: case 1: case 2: case 3:
     case 4: case 5: case 6: case 7:
     case 8: case 9: case 10: case 11:
+    case 13:
         return RunViaITool(it);
     default: return false;
     }

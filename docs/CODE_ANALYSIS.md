@@ -90,7 +90,7 @@
 | `Core/VisionContext.h/cpp` | **统一视觉上下文** | `struct VisionContext { image, rois, frozenTemplate, unifiedResults, zoom/pan }` 替代散落全局变量 |
 | `Core/ToolInstance.h` / `Core/ToolTypes.h` | **工具元数据** | 工具实例参数、类型常量和工具名称 |
 | `Core/ToolChainState.h/cpp` | **工具链状态** | 工具输入/输出图像链路状态 |
-| `Core/ToolExecutor.h/cpp` | **统一工具执行器** | type 0-11 统一分发到 `RunViaITool()`，type 12 原图由 `ToolController` 特殊处理 |
+| `Core/ToolExecutor.h/cpp` | **统一工具执行器** | type 0-11、13 统一分发到 `RunViaITool()`，type 12 原图由 `ToolController` 特殊处理 |
 | `Core/ToolController.h/cpp` | **工具调度器** | queue 驱动 + Tick() 替代旧 ExecState 状态机 |
 | `Core/FrameRenderer.h/cpp` | **帧渲染提交** | 每帧渲染提交和渲染资源收尾 |
 | `UI/DockSpaceHost.h/cpp` | **主框架** | DockSpace 容器 + 菜单栏 + 配方菜单 |
@@ -852,6 +852,8 @@ struct DetectedObject {
 - `opencv_world500*.dll`、`opencv_videoio_ffmpeg500_64.dll`、`opencv_videoio_msmf500_64.dll` — OpenCV 5.0 运行时
 - `onnxruntime*.dll` — ONNX Runtime 运行时
 - `yolo11n.onnx` — YOLO11 模型（PostBuild 自动复制到 models/）
+- `ncnn.dll` / `ncnn.lib` — OCR 的 NCNN 运行时和链接库
+- `models/ppocrv6/*` — PP-OCRv6 tiny 检测/识别模型和字典
 
 ---
 

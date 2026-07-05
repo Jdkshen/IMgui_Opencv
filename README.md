@@ -96,9 +96,9 @@ IMgui_Opencv/
 │   ├── ROADMAP.md              ←   后续开发方向
 │   └── VIDEO_AUDIO.md          ←   视频/音频模块说明
 │
-├── redist/                     ← 运行时 DLL
-├── models/                     ← 预训练模型
-│   └── yolo11n.onnx            ←   YOLO11 Nano ONNX 模型
+├── redist/                     ← 本地/Release 运行时 DLL 和 lib
+├── models/                     ← 预训练模型与测试素材
+│   └── ppocrv6/                ←   OCR 默认 NCNN 模型
 │
 ├── Windows_imgui.cpp           ← 程序入口 + 主循环
 ├── Windows_imgui.h             ← 公共头文件汇总
@@ -246,7 +246,7 @@ wWinMain()
 
 ## 🔧 工具实例系统
 
-功能窗口（手风琴布局）支持 12 种工具类型，其中 type 0-11 已接入 ITool 统一接口；type 12 为原图重置特殊工具：
+功能窗口（手风琴布局）支持 13 种 ITool 工具；type 0-11 和 type 13 已接入 ITool 统一接口，type 12 为原图重置特殊工具：
 
 | 类型 | 功能 | 独立参数 | ITool |
 |------|------|---------|-------|
@@ -262,6 +262,7 @@ wWinMain()
 | 形态学 | 腐蚀/膨胀/开/闭等 7 种 | 核大小、形状、迭代次数 | ✅ MorphologyITool |
 | 颜色分析 | BGR/HSV/Lab/YCbCr | 色域切换、直方图 | ✅ ColorAnalyzerITool |
 | 多点找色 | 多颜色点同时匹配 | 参考图、锚点、ROI、容差、最大结果数 | ✅ MultiColorFinder |
+| OCR文字识别 | PP-OCRv6 tiny + NCNN 推理 | 检测/识别模型、字典、置信度、最大文本数、ROI | ✅ OCRTool |
 
 > **ITool 接口**：统一 `Execute(VisionContext& ctx) → ToolResult`，结果通过 `DrawUnifiedResults()` 在图像上叠加绘制。
 
@@ -312,7 +313,7 @@ enum class Mode { Idle, Running, Waiting };
 2. 安装 VS2022（勾选"使用 C++ 的桌面开发"）
 3. 打开 `Windows_imgui.slnx`，直接编译运行
 
-**不需要额外安装 OpenCV 或配置任何路径**，默认工程依赖已包含在项目中。当前 `Windows_imgui.vcxproj` 统一链接仓库内置 OpenCV 5.0 runtime（`redist/opencv_world500*.dll/lib`），include 和 runtime 都从 `include/`、`redist/` 取得。
+**不需要额外安装 OpenCV 或配置本机绝对路径**。当前 `Windows_imgui.vcxproj` 使用项目内 `include/` 头文件，并从本地 `redist/` 取 OpenCV 5.0、ONNX Runtime、DirectML、NCNN 的 `.lib/.dll`。大型运行时文件后续建议通过 GitHub Release 的 `runtime.zip` 恢复到 `redist/`。
 
 ## 🔧 技术债务 & 重构路线
 
@@ -379,7 +380,7 @@ ROI → 矩形(RECT) / 点(POINT) / 线段(LINE) / 圆(CIRCLE) / 多边形(POLYG
 |------|------|------|
 | 一 | ✅ 完成 | 图片浏览、ROI、图像处理、模板匹配、YOLO、视频、配方、日志 |
 | 二 | ✅ 完成 | ITool 接口、ToolResult、VisionContext、ROI 类型升级 |
-| 三 | 进行中 | ✅ 多点找色；规划 OCR、二维码/条码、Blob分析增强、尺寸测量 |
+| 三 | 进行中 | ✅ 多点找色、结果导出、运行报告、OCR；规划配方自动执行、二维码/条码、Blob分析增强、尺寸测量 |
 | 四 | 🔲 规划 | 工业相机SDK、Modbus TCP、PLC通讯、OPC UA、MQTT |
 | 五 | 🔲 远景 | 节点式流程编辑器、可选脚本/插件系统；当前主线不依赖 Python |
 

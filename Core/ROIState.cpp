@@ -1,11 +1,14 @@
 #include "ROIState.h"
 
+// =====================================================
+// 内部状态（模块私有）
+// =====================================================
 namespace ROIState
 {
 namespace
 {
-    std::vector<ROI> s_rois;
-    int s_selectedROI = -1;
+    std::vector<ROI> s_rois;     // ROI 列表
+    int s_selectedROI = -1;      // 当前选中 ROI 索引（-1 = 无选中）
 }
 
 std::vector<ROI>& Items()

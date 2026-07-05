@@ -47,6 +47,10 @@ recipes/
 *.mov
 *.mkv
 models/
+!models/
+models/*
+!models/ppocrv6/
+!models/ppocrv6/*
 Test/__pycache__/
 
 # Third-party runtime binaries should come from repository redist packages,

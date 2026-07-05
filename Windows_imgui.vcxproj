@@ -74,7 +74,7 @@
     <IncludePath>$(ProjectDir)include\opencv;$(ProjectDir)include;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <IncludePath>$(ProjectDir)include\opencv;$(ProjectDir)include;$(IncludePath)</IncludePath>
+    <IncludePath>$(ProjectDir)include\ncnn;$(ProjectDir)include\opencv;$(ProjectDir)include;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -123,7 +123,7 @@
       <AdditionalLibraryDirectories>$(ProjectDir)redist;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
-      <Command>del /Q "$(OutDir)opencv_world4*.dll" 2&gt;nul &amp; del /Q "$(OutDir)opencv_videoio_ffmpeg4*_64.dll" 2&gt;nul &amp; xcopy /Y /D "$(ProjectDir)assets\fonts\*" "$(OutDir)" &amp; if exist "$(ProjectDir)theme.cfg" xcopy /Y /D "$(ProjectDir)theme.cfg" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\onnxruntime*.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_world500d.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_ffmpeg500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_msmf500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\DirectML.dll" "$(OutDir)" &amp; xcopy /Y /D "$(ProjectDir)models\*.onnx" "$(OutDir)models\" &amp; xcopy /Y /D "$(ProjectDir)models\*.txt" "$(OutDir)models\"</Command>
+      <Command>del /Q "$(OutDir)opencv_world4*.dll" 2&gt;nul &amp; del /Q "$(OutDir)opencv_videoio_ffmpeg4*_64.dll" 2&gt;nul &amp; xcopy /Y /D "$(ProjectDir)assets\fonts\*" "$(OutDir)" &amp; if exist "$(ProjectDir)theme.cfg" xcopy /Y /D "$(ProjectDir)theme.cfg" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\onnxruntime*.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_world500d.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_ffmpeg500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_msmf500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\DirectML.dll" "$(OutDir)" &amp; xcopy /Y /D "$(ProjectDir)models\*.onnx" "$(OutDir)models\" &amp; xcopy /Y /D "$(ProjectDir)models\*.txt" "$(OutDir)models\" &amp; if exist "$(ProjectDir)models\ppocrv6" xcopy /Y /D /S /I "$(ProjectDir)models\ppocrv6\*" "$(OutDir)models\ppocrv6\"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -132,21 +132,21 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDEBUG;_WINDOWS;IMGUI_OPENCV_ENABLE_NCNN_OCR;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>$(ProjectDir)include\directx;$(ProjectDir)include\opencv;$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)include\directx;$(ProjectDir)include\ncnn;$(ProjectDir)include\opencv;$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(ProjectDir)redist;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>opencv_world500.lib;d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;Comdlg32.lib</AdditionalDependencies>
+      <AdditionalDependencies>opencv_world500.lib;ncnn.lib;d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;Comdlg32.lib</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>del /Q "$(OutDir)opencv_world4*.dll" 2&gt;nul &amp; del /Q "$(OutDir)opencv_videoio_ffmpeg4*_64.dll" 2&gt;nul &amp; xcopy /Y /D "$(ProjectDir)assets\fonts\*" "$(OutDir)" &amp; if exist "$(ProjectDir)theme.cfg" xcopy /Y /D "$(ProjectDir)theme.cfg" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\onnxruntime*.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_world500.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_ffmpeg500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_msmf500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\DirectML.dll" "$(OutDir)" &amp; xcopy /Y /D "$(ProjectDir)models\*.onnx" "$(OutDir)models\" &amp; xcopy /Y /D "$(ProjectDir)models\*.txt" "$(OutDir)models\"</Command>
+      <Command>del /Q "$(OutDir)opencv_world4*.dll" 2&gt;nul &amp; del /Q "$(OutDir)opencv_videoio_ffmpeg4*_64.dll" 2&gt;nul &amp; xcopy /Y /D "$(ProjectDir)assets\fonts\*" "$(OutDir)" &amp; if exist "$(ProjectDir)theme.cfg" xcopy /Y /D "$(ProjectDir)theme.cfg" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\onnxruntime*.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\ncnn.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_world500.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_ffmpeg500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_msmf500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\DirectML.dll" "$(OutDir)" &amp; xcopy /Y /D "$(ProjectDir)models\*.onnx" "$(OutDir)models\" &amp; xcopy /Y /D "$(ProjectDir)models\*.txt" "$(OutDir)models\" &amp; if exist "$(ProjectDir)models\ppocrv6" xcopy /Y /D /S /I "$(ProjectDir)models\ppocrv6\*" "$(OutDir)models\ppocrv6\"</Command>
     </PostBuildEvent>
     <PreLinkEvent>
       <Command>
@@ -180,6 +180,7 @@
     <ClInclude Include="Core\DX12Context.h" />
     <ClInclude Include="Core\OpenCVTest.h" />
     <ClInclude Include="Core\ResultPublisher.h" />
+    <ClInclude Include="Core\ResultExporter.h" />
     <ClInclude Include="Core\OpenFileDialog.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="resource.h" />
@@ -209,6 +210,8 @@
     <ClInclude Include="Algorithm\MorphologyTool.h" />
     <ClInclude Include="Algorithm\ColorAnalyzer.h" />
     <ClInclude Include="Algorithm\MultiColorFinder.h" />
+    <ClInclude Include="Algorithm\OCRTool.h" />
+    <ClInclude Include="Algorithm\WindowsPPOCREngine.h" />
     <ClInclude Include="Renderer\FontManager.h" />
     <ClInclude Include="UI\DockSpaceHost.h" />
     <ClInclude Include="UI\ImageViewer.h" />
@@ -239,6 +242,7 @@
     <ClCompile Include="Core\ThemeManager.cpp" />
     <ClCompile Include="Core\DX12Context.cpp" />
     <ClCompile Include="Core\OpenCVTest.cpp" />
+    <ClCompile Include="Core\ResultExporter.cpp" />
     <ClCompile Include="Core\OpenFileDialog.cpp" />
     <ClCompile Include="include\imgui\imgui.cpp" />
     <ClCompile Include="include\imgui\imgui_demo.cpp" />
@@ -266,6 +270,8 @@
     <ClCompile Include="Algorithm\MorphologyTool.cpp" />
     <ClCompile Include="Algorithm\ColorAnalyzer.cpp" />
     <ClCompile Include="Algorithm\MultiColorFinder.cpp" />
+    <ClCompile Include="Algorithm\OCRTool.cpp" />
+    <ClCompile Include="Algorithm\WindowsPPOCREngine.cpp" />
     <ClCompile Include="Renderer\FontManager.cpp" />
     <ClCompile Include="UI\DockSpaceHost.cpp" />
     <ClCompile Include="UI\ImageViewer.cpp" />

@@ -390,6 +390,21 @@ namespace RecipeManager
             tj["mcfRoiH"] = t.mcfRoiH;
             tj["mcfRefImageBase64"] = NormalizeBinaryStringForJson(t.mcfRefImageBase64);
             tj["mcfPointsJson"] = t.mcfPointsJson;
+            tj["ocrDetModelPath"] = t.ocrDetModelPath;
+            tj["ocrDetParamPath"] = t.ocrDetParamPath;
+            tj["ocrRecModelPath"] = t.ocrRecModelPath;
+            tj["ocrRecParamPath"] = t.ocrRecParamPath;
+            tj["ocrDictionaryPath"] = t.ocrDictionaryPath;
+            tj["ocrMinConfidence"] = t.ocrMinConfidence;
+            tj["ocrMaxItems"] = t.ocrMaxItems;
+            tj["ocrInputSize"] = t.ocrInputSize;
+            tj["ocrMaxCandidates"] = t.ocrMaxCandidates;
+            tj["ocrMinBoxArea"] = t.ocrMinBoxArea;
+            tj["ocrMinBoxHeight"] = t.ocrMinBoxHeight;
+            tj["ocrRoiPadding"] = t.ocrRoiPadding;
+            tj["ocrFastMode"] = t.ocrFastMode;
+            tj["ocrDetectOnly"] = t.ocrDetectOnly;
+            tj["ocrUseROI"] = t.ocrUseROI;
 
             // 搜索 ROI 子数组
             json &srois = tj["searchROIs"] = json::array();
@@ -677,6 +692,21 @@ namespace RecipeManager
                 t.mcfRoiH = tj.value("mcfRoiH", 0);
                 t.mcfRefImageBase64 = tj.value("mcfRefImageBase64", "");
                 t.mcfPointsJson = tj.value("mcfPointsJson", "");
+                t.ocrDetModelPath = tj.value("ocrDetModelPath", "models\\ppocrv6\\PP_OCRv6_tiny_det.ncnn.bin");
+                t.ocrDetParamPath = tj.value("ocrDetParamPath", "models\\ppocrv6\\PP_OCRv6_tiny_det.ncnn.param");
+                t.ocrRecModelPath = tj.value("ocrRecModelPath", "models\\ppocrv6\\PP_OCRv6_tiny_rec.ncnn.bin");
+                t.ocrRecParamPath = tj.value("ocrRecParamPath", "models\\ppocrv6\\PP_OCRv6_tiny_rec.ncnn.param");
+                t.ocrDictionaryPath = tj.value("ocrDictionaryPath", "models\\ppocrv6\\ppocr_keys_v6_tiny.txt");
+                t.ocrMinConfidence = tj.value("ocrMinConfidence", 0.30f);
+                t.ocrMaxItems = tj.value("ocrMaxItems", 8);
+                t.ocrInputSize = tj.value("ocrInputSize", 512);
+                t.ocrMaxCandidates = tj.value("ocrMaxCandidates", 220);
+                t.ocrMinBoxArea = tj.value("ocrMinBoxArea", 0);
+                t.ocrMinBoxHeight = tj.value("ocrMinBoxHeight", 0);
+                t.ocrRoiPadding = tj.value("ocrRoiPadding", 24);
+                t.ocrFastMode = tj.value("ocrFastMode", true);
+                t.ocrDetectOnly = tj.value("ocrDetectOnly", false);
+                t.ocrUseROI = tj.value("ocrUseROI", true);
 
                 // 搜索 ROI 子数组
                 if (tj.contains("searchROIs") && tj["searchROIs"].is_array())
@@ -936,6 +966,21 @@ namespace RecipeManager
             t.mcfRoiY = src.mcfRoiY;
             t.mcfRoiW = src.mcfRoiW;
             t.mcfRoiH = src.mcfRoiH;
+            t.ocrDetModelPath = src.ocrDetModelPath;
+            t.ocrDetParamPath = src.ocrDetParamPath;
+            t.ocrRecModelPath = src.ocrRecModelPath;
+            t.ocrRecParamPath = src.ocrRecParamPath;
+            t.ocrDictionaryPath = src.ocrDictionaryPath;
+            t.ocrMinConfidence = src.ocrMinConfidence;
+            t.ocrMaxItems = src.ocrMaxItems;
+            t.ocrInputSize = src.ocrInputSize;
+            t.ocrMaxCandidates = src.ocrMaxCandidates;
+            t.ocrMinBoxArea = src.ocrMinBoxArea;
+            t.ocrMinBoxHeight = src.ocrMinBoxHeight;
+            t.ocrRoiPadding = src.ocrRoiPadding;
+            t.ocrFastMode = src.ocrFastMode;
+            t.ocrDetectOnly = src.ocrDetectOnly;
+            t.ocrUseROI = src.ocrUseROI;
 
             for (const auto &roi : src.searchROIs)
             {
@@ -1151,6 +1196,21 @@ namespace RecipeManager
             it.mcfRoiY = t.mcfRoiY;
             it.mcfRoiW = t.mcfRoiW;
             it.mcfRoiH = t.mcfRoiH;
+            it.ocrDetModelPath = t.ocrDetModelPath;
+            it.ocrDetParamPath = t.ocrDetParamPath;
+            it.ocrRecModelPath = t.ocrRecModelPath;
+            it.ocrRecParamPath = t.ocrRecParamPath;
+            it.ocrDictionaryPath = t.ocrDictionaryPath;
+            it.ocrMinConfidence = t.ocrMinConfidence;
+            it.ocrMaxItems = t.ocrMaxItems;
+            it.ocrInputSize = t.ocrInputSize;
+            it.ocrMaxCandidates = t.ocrMaxCandidates;
+            it.ocrMinBoxArea = t.ocrMinBoxArea;
+            it.ocrMinBoxHeight = t.ocrMinBoxHeight;
+            it.ocrRoiPadding = t.ocrRoiPadding;
+            it.ocrFastMode = t.ocrFastMode;
+            it.ocrDetectOnly = t.ocrDetectOnly;
+            it.ocrUseROI = t.ocrUseROI;
 
             // 多点找色 type==10
             if (t.type == 10)

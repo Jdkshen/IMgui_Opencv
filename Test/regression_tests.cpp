@@ -7,9 +7,12 @@
 #include "../Algorithm/ShapeMatcher.h"
 #include "../Algorithm/ShapeTools.h"
 #include "../Algorithm/MultiColorFinder.h"
+#include "../Algorithm/OCRTool.h"
+#include "../Algorithm/WindowsPPOCREngine.h"
 #include "../Core/RecipeManager.h"
 #include "../Core/FrameSourceState.h"
 #include "../Core/ImageState.h"
+#include "../Core/ResultExporter.h"
 #include "../Core/ROIState.h"
 #include "../Core/ToolChainState.h"
 #include "../Core/ToolExecutor.h"
@@ -22,7 +25,9 @@
 
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 
@@ -304,6 +309,175 @@ void TestMultiColorFinderNoPoints()
 
     Require(!result.success, "multi-color finder should fail when no points are configured");
     Require(result.message == "请至少添加1个颜色点", "multi-color finder failure message regressed");
+}
+
+void TestOCRToolMissingEngineFailsWithTextResultContract()
+{
+    VisionContext ctx;
+    ctx.image = cv::Mat::zeros(64, 96, CV_8UC3);
+
+    ROI roi;
+    roi.start = ImVec2(8.0f, 10.0f);
+    roi.end = ImVec2(58.0f, 42.0f);
+    ctx.rois.push_back(roi);
+    ctx.selectedROI = 0;
+
+    OCRTool tool;
+    tool.useROI = true;
+    tool.detParamPath = "missing_det.ncnn.param";
+    tool.detModelPath = "missing_det.ncnn.param";
+    tool.recParamPath = "missing_rec.ncnn.param";
+    tool.recModelPath = "missing_rec.ncnn.param";
+    tool.dictionaryPath = "missing_keys.txt";
+    tool.minConfidence = 0.35f;
+    tool.maxItems = 250;
+    tool.inputSize = 960;
+    tool.maxCandidates = 320;
+    tool.minBoxArea = 24;
+    tool.minBoxHeight = 8;
+    tool.roiPadding = 32;
+    tool.fastMode = false;
+    tool.detectOnly = true;
+
+    ITool* entry = &tool;
+    ToolResult result = entry->Execute(ctx);
+
+    Require(!result.success, "OCR tool should fail when NCNN OCR engine is unavailable");
+    Require(result.texts.empty(), "OCR tool without engine should not emit text items");
+    Require(result.message.find("NCNN") != std::string::npos || result.message.find("model") != std::string::npos,
+        "OCR tool failure message should mention missing NCNN engine or model file");
+    Require(result.measurements.size() >= 4, "OCR tool should report the selected ROI even on engine failure");
+    Require(result.measurements.size() >= 8, "OCR tool should report the expanded OCR input rect");
+
+    nlohmann::json saved = tool.Save();
+    OCRTool loaded;
+    loaded.Load(saved);
+    Require(loaded.detParamPath == tool.detParamPath, "OCR det param path save/load regressed");
+    Require(loaded.detModelPath == tool.detModelPath, "OCR det model path save/load regressed");
+    Require(loaded.recParamPath == tool.recParamPath, "OCR rec param path save/load regressed");
+    Require(loaded.recModelPath == tool.recModelPath, "OCR rec model path save/load regressed");
+    Require(loaded.dictionaryPath == tool.dictionaryPath, "OCR dictionary path save/load regressed");
+    Require(std::abs(loaded.minConfidence - tool.minConfidence) < 0.0001f, "OCR confidence save/load regressed");
+    Require(loaded.maxItems == tool.maxItems, "OCR max items save/load regressed");
+    Require(loaded.inputSize == tool.inputSize, "OCR input size save/load regressed");
+    Require(loaded.maxCandidates == tool.maxCandidates, "OCR max candidates save/load regressed");
+    Require(loaded.minBoxArea == tool.minBoxArea, "OCR min box area save/load regressed");
+    Require(loaded.minBoxHeight == tool.minBoxHeight, "OCR min box height save/load regressed");
+    Require(loaded.roiPadding == tool.roiPadding, "OCR ROI padding save/load regressed");
+    Require(loaded.fastMode == tool.fastMode, "OCR fast mode save/load regressed");
+    Require(loaded.detectOnly == tool.detectOnly, "OCR detect-only save/load regressed");
+    Require(loaded.useROI == tool.useROI, "OCR ROI flag save/load regressed");
+}
+
+void TestWindowsPPOCREngineUnavailableContract()
+{
+    WindowsPPOCRConfig cfg;
+    cfg.detParamPath = "missing_det.ncnn.param";
+    cfg.detModelPath = "missing_det.ncnn.bin";
+    cfg.recParamPath = "missing_rec.ncnn.param";
+    cfg.recModelPath = "missing_rec.ncnn.bin";
+    cfg.dictionaryPath = "missing_keys.txt";
+
+    WindowsPPOCREngine engine;
+    std::string error;
+    Require(!engine.Load(cfg, &error), "NCNN OCR engine should not load without NCNN support or model files");
+    Require(error.find("NCNN") != std::string::npos || error.find("model") != std::string::npos,
+        "NCNN OCR engine load failure should explain the missing dependency or model");
+
+    std::vector<PPOCRTextResult> texts;
+    error.clear();
+    Require(!engine.Recognize(cv::Mat::zeros(16, 16, CV_8UC3), texts, &error),
+        "NCNN OCR engine should not recognize before successful load");
+    Require(texts.empty(), "NCNN OCR unavailable path should not emit text results");
+    Require(!error.empty(), "NCNN OCR recognize failure should provide an error");
+}
+
+void TestWindowsPPOCRRecognitionCropKeepsHorizontalAspect()
+{
+    const cv::Size size = WindowsPPOCREngine::RecognitionCropSizeForTest(48.0f, 360.0f, 0);
+    Require(size.height == 48, "OCR recognition crop height should match recognizer input height");
+    Require(size.width >= 300, "OCR recognition crop collapsed horizontal text width");
+    Require(size.width > size.height, "OCR recognition crop should preserve horizontal text aspect");
+}
+
+void TestWindowsPPOCREngineLoadsBundledModels()
+{
+    const std::filesystem::path root = FindRepoRoot();
+    const std::filesystem::path modelDir = root / "models" / "ppocrv6";
+
+    WindowsPPOCRConfig cfg;
+    cfg.detParamPath = (modelDir / "PP_OCRv6_tiny_det.ncnn.param").string();
+    cfg.detModelPath = (modelDir / "PP_OCRv6_tiny_det.ncnn.bin").string();
+    cfg.recParamPath = (modelDir / "PP_OCRv6_tiny_rec.ncnn.param").string();
+    cfg.recModelPath = (modelDir / "PP_OCRv6_tiny_rec.ncnn.bin").string();
+    cfg.dictionaryPath = (modelDir / "ppocr_keys_v6_tiny.txt").string();
+    cfg.inputSize = 320;
+    cfg.minConfidence = 0.30f;
+    cfg.maxItems = 1;
+
+    WindowsPPOCREngine engine;
+    std::string error;
+    Require(engine.Load(cfg, &error), error.empty() ? "NCNN OCR bundled model load failed" : error.c_str());
+    Require(engine.IsReady(), "NCNN OCR engine should be ready after loading bundled models");
+
+    std::vector<PPOCRTextResult> texts;
+    error.clear();
+    Require(engine.Recognize(cv::Mat::zeros(64, 128, CV_8UC3), texts, &error),
+        error.empty() ? "NCNN OCR blank image inference failed" : error.c_str());
+    Require(texts.empty(), "NCNN OCR blank image should not emit text");
+}
+
+void TestWindowsPPOCREngineResolvesRelativeModelsFromReleaseDir()
+{
+    const std::filesystem::path root = FindRepoRoot();
+    const std::filesystem::path originalCwd = std::filesystem::current_path();
+    const std::filesystem::path tempCwd = std::filesystem::temp_directory_path() / "imgui_opencv_ocr_cwd";
+    std::filesystem::create_directories(tempCwd);
+
+    try {
+        std::filesystem::current_path(tempCwd);
+        const std::string resolved = WindowsPPOCREngine::ResolvePathForTest(
+            "models\\ppocrv6\\PP_OCRv6_tiny_det.ncnn.param");
+        std::filesystem::current_path(originalCwd);
+        Require(std::filesystem::exists(resolved), "NCNN OCR relative model path did not resolve to an existing file");
+        Require(resolved.find("ppocrv6") != std::string::npos, "NCNN OCR relative model path resolved to unexpected location");
+    }
+    catch (...) {
+        std::filesystem::current_path(originalCwd);
+        throw;
+    }
+}
+
+void TestOCRToolDefaultRelativeModelsWorkOutsideReleaseCwd()
+{
+    const std::filesystem::path originalCwd = std::filesystem::current_path();
+    const std::filesystem::path tempCwd = std::filesystem::temp_directory_path() / "imgui_opencv_ocr_tool_cwd";
+    std::filesystem::create_directories(tempCwd);
+
+    try {
+        std::filesystem::current_path(tempCwd);
+
+        VisionContext ctx;
+        ctx.image = cv::Mat::zeros(64, 128, CV_8UC3);
+
+        OCRTool tool;
+        tool.useROI = false;
+        tool.inputSize = 320;
+        tool.maxItems = 1;
+
+        ToolResult result = tool.Execute(ctx);
+        ToolResult cached = tool.Execute(ctx);
+        std::filesystem::current_path(originalCwd);
+
+        Require(result.success, result.message.empty() ? "OCR tool relative model execution failed" : result.message.c_str());
+        Require(result.message.find("missing") == std::string::npos, "OCR tool still reports missing model for default relative paths");
+        Require(cached.success, "OCR tool cached execution should succeed");
+        Require(cached.message.find("缓存") != std::string::npos, "OCR tool should reuse cached result for unchanged image and parameters");
+    }
+    catch (...) {
+        std::filesystem::current_path(originalCwd);
+        throw;
+    }
 }
 
 void TestMorphologyToolITool()
@@ -645,6 +819,55 @@ void TestShapeMatcherTemplateLargerThanSearchImage()
     const auto matches = ShapeMatcher::Search(image, tpl, params, {});
     Require(matches.empty(), "shape matcher should return no matches when template does not fit inside search image");
 }
+
+std::string ReadTextFile(const std::filesystem::path& path)
+{
+    std::ifstream in(path, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+}
+
+void TestResultExporterWritesResultsAndReport()
+{
+    ResultExporter::ExportSnapshot snapshot;
+    snapshot.recipeName = "export_test";
+    snapshot.imagePath = "sample.jpg";
+    snapshot.imageWidth = 64;
+    snapshot.imageHeight = 48;
+    snapshot.resultImagePath = "result.png";
+    snapshot.totalTimeMs = 1.5f;
+
+    ToolInstance tool;
+    tool.type = 10;
+    tool.label = "找到色";
+    snapshot.tools.push_back(tool);
+    snapshot.toolTimesMs.push_back(0.25f);
+
+    ToolResult result;
+    result.toolName = "多点找色[找到色]";
+    ToolResult::Region region;
+    region.bbox = cv::Rect(1, 2, 3, 4);
+    region.score = 0.99f;
+    region.label = "找到色 #1";
+    result.regions.push_back(region);
+    snapshot.results.push_back(result);
+
+    const auto dir = std::filesystem::temp_directory_path() / "imgui_opencv_regression";
+    std::filesystem::create_directories(dir);
+    const auto jsonPath = dir / "results_export.json";
+    const auto reportPath = dir / "run_report.md";
+
+    Require(ResultExporter::ExportResultsJson(jsonPath.string().c_str(), snapshot), "result json export failed");
+    Require(ResultExporter::ExportRunReportMarkdown(reportPath.string().c_str(), snapshot), "run report export failed");
+
+    const std::string jsonText = ReadTextFile(jsonPath);
+    const std::string reportText = ReadTextFile(reportPath);
+    Require(jsonText.find("\"kind\": \"vision_results\"") != std::string::npos, "result json missing kind");
+    Require(jsonText.find("\"resultImagePath\": \"result.png\"") != std::string::npos, "result json missing result image path");
+    Require(jsonText.find("找到色 #1") != std::string::npos, "result json missing region label");
+    Require(reportText.find("运行报告") != std::string::npos, "run report missing title");
+    Require(reportText.find("结果图像: result.png") != std::string::npos, "run report missing result image path");
+    Require(reportText.find("多点找色") != std::string::npos, "run report missing tool name");
+}
 }
 
 int main()
@@ -657,6 +880,12 @@ int main()
         TestSampleImageCorePipeline();
         TestLineToolSampleImage();
         TestMultiColorFinderNoPoints();
+        TestOCRToolMissingEngineFailsWithTextResultContract();
+        TestWindowsPPOCREngineUnavailableContract();
+        TestWindowsPPOCRRecognitionCropKeepsHorizontalAspect();
+        TestWindowsPPOCREngineLoadsBundledModels();
+        TestWindowsPPOCREngineResolvesRelativeModelsFromReleaseDir();
+        TestOCRToolDefaultRelativeModelsWorkOutsideReleaseCwd();
         TestMorphologyToolITool();
         TestColorAnalyzerITool();
         TestBlobToolITool();
@@ -671,6 +900,7 @@ int main()
         TestToolInstanceLabelDefaultIsEmpty();
         TestCoreStateOwnsRoiAndToolChain();
         TestShapeMatcherTemplateLargerThanSearchImage();
+        TestResultExporterWritesResultsAndReport();
         std::cout << "regression_tests: all tests passed\n";
         return 0;
     }
