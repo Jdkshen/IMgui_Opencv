@@ -1,59 +1,59 @@
-# MultiColorFinder UI Optimization Design
+# 多点找色工具 UI 优化设计
 
-## Scope
+## 改动范围
 
-Optimize only the MultiColorFinder tool card in `UI/ToolsWindow.cpp`. The recognition algorithm, `ColorPoint` structure, recipe schema, reference-image capture flow, ROI behavior, and execution semantics remain unchanged.
+仅优化 `UI/ToolsWindow.cpp` 中的多点找色工具卡片。本次不修改识别算法、`ColorPoint` 数据结构、配方格式、参考图获取流程、ROI 行为和工具执行逻辑。
 
-## Goals
+## 优化目标
 
-- Keep the reference preview readable with dozens of color points.
-- Make one point easy to locate and edit without scrolling through an unbounded list.
-- Reduce per-frame ImGui work for large point collections.
-- Preserve compatibility with existing recipes and tool instances.
+- 颜色点达到几十个时，参考图预览仍然清晰可读。
+- 可以快速定位和修改某个颜色点，不再依赖无限向下延伸的参数列表。
+- 减少颜色点较多时每帧提交给 ImGui 的控件数量。
+- 兼容现有配方和已经创建的多点找色工具。
 
-## Interaction Design
+## 交互设计
 
-### Reference Preview
+### 参考图预览
 
-- Keep the existing fixed-size reference preview and click-to-add behavior.
-- Draw every point as a compact cross marker.
-- Draw a numeric label only for the selected point or the point currently hovered in the preview.
-- Highlight the selected point with a distinct outline and color.
-- Clicking an existing marker selects it instead of adding a duplicate point at that location. Clicking elsewhere continues to add a new point and selects it.
-- The tooltip reports the selected point number, relative offset, BGR value, and tolerance when hovering a marker.
+- 保留当前固定尺寸的参考图预览和点击取色操作。
+- 所有颜色点都绘制为紧凑的十字标记。
+- 只给当前选中点或鼠标悬停点显示编号，避免大量编号相互遮挡。
+- 当前选中点使用独立的颜色和外框进行高亮。
+- 点击已有标记时选中对应颜色点，不再在相同位置重复添加点；点击其他位置时继续添加新颜色点，并自动选中新点。
+- 鼠标悬停在标记上时，提示点位编号、相对偏移、BGR 颜色值和容差。
 
-### Point Controls
+### 颜色点参数区
 
-- Keep the point count and unified tolerance control above the list.
-- Replace the vertically expanding controls with a fixed-height scrollable ImGui table.
-- Use columns for selection/number, color swatch, relative offset, BGR value, tolerance, and delete.
-- Use a compact numeric tolerance editor rather than a full-width slider for every row.
-- Clicking a row selects that point and highlights the matching preview marker.
-- Use `ImGuiListClipper` so only visible rows are submitted when the point count is large.
-- Provide `Select all` only where it has a concrete operation; this version keeps `Clear all` and does not add unused multi-selection state.
+- 在列表上方保留颜色点数量和统一容差设置。
+- 把当前无限向下延伸的控件改为固定高度、可滚动的 ImGui 表格。
+- 表格包含：选择状态和编号、颜色块、相对偏移、BGR 值、容差、删除操作。
+- 每一行使用紧凑的数字输入框修改容差，不再为每个颜色点绘制完整宽度的滑块。
+- 点击表格行可选中对应颜色点，同时高亮参考图中的点位。
+- 使用 `ImGuiListClipper`，颜色点较多时只提交当前可见行的控件。
+- 本次提供“清空全部”操作；不增加没有实际批量操作用途的多选状态和“全选”功能。
 
-## State And Data Flow
+## 状态与数据流
 
-- Store only a selected point index per tool instance as transient UI state in `ToolsWindow.cpp`.
-- Clamp or clear the selected index whenever points are reset, cleared, removed, or replaced.
-- Point edits continue to mutate `MultiColorFinder::points` directly and request the existing live rerun.
-- Deleting the anchor point retains the current established vector behavior; this UI change does not redefine anchor coordinates or rewrite remaining offsets.
-- No UI selection state is serialized. Existing recipe save/load remains byte-compatible at the schema level.
+- 在 `ToolsWindow.cpp` 内为每个工具实例保存一个临时的“当前选中点序号”。
+- 重置参数、清除参考图、删除颜色点或替换点位数据时，及时修正或清空选中序号，避免越界。
+- 修改颜色点时仍然直接更新 `MultiColorFinder::points`，并继续使用现有的实时重新执行请求。
+- 删除锚点时保持当前已有的列表行为；本次 UI 优化不重新定义锚点坐标，也不重算其他颜色点的相对偏移。
+- 当前选中点属于临时 UI 状态，不保存到配方。现有配方保存和加载格式保持兼容。
 
-## Edge Cases
+## 边界情况
 
-- Empty point list: show the existing capture guidance and no table.
-- One point: identify it as the anchor and keep selection valid.
-- Deleted selected point: select the nearest remaining row, or clear selection when the list becomes empty.
-- Dense or overlapping points: choose the nearest marker within a small screen-space hit radius.
-- Narrow tool panel: keep stable column widths for swatch and actions; allow offset/BGR text to clip with a tooltip rather than overlap adjacent controls.
+- 没有颜色点：保留现有取色提示，不显示空表格。
+- 只有一个颜色点：将其标记为锚点，并保证选中状态有效。
+- 删除当前选中点：自动选中距离最近的剩余行；列表清空后取消选中。
+- 多个点重叠或距离很近：在固定的屏幕像素范围内选取距离鼠标最近的标记。
+- 工具面板宽度较窄：颜色块和操作列使用固定宽度；偏移和 BGR 文本允许裁剪，并通过悬停提示显示完整内容，避免控件重叠。
 
-## Verification
+## 验证项目
 
-- Add points through the preview and verify the new point becomes selected.
-- Select a row and verify only its preview label is shown and highlighted.
-- Select a preview marker and verify the matching row becomes selected and visible.
-- Edit unified and per-point tolerance and verify the existing rerun request still occurs.
-- Delete first, middle, last, and selected points without stale indexing or crashes.
-- Load an existing MultiColorFinder recipe and verify all points, colors, offsets, and tolerances are unchanged.
-- Run the Release x64 build and regression test executable.
+- 在参考图中添加颜色点，确认新点自动成为当前选中点。
+- 点击表格行，确认参考图只显示该点的编号并正确高亮。
+- 点击参考图中的已有标记，确认表格同步选中对应行并滚动到可见位置。
+- 修改统一容差和单点容差，确认现有实时重新执行逻辑仍然有效。
+- 分别删除第一个、中间、最后一个和当前选中的颜色点，确认没有索引残留、越界或崩溃。
+- 加载已有的多点找色配方，确认颜色点数量、颜色值、相对偏移和容差完全不变。
+- 完成 Release x64 主程序构建并运行回归测试程序。
