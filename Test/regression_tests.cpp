@@ -2876,6 +2876,32 @@ void TestToolChainDuplicate()
         !tools[2].judgement.stopOnFailure,
         "batch stop-on-failure operation did not update all tools");
 
+    tools[1].label = "复制源";
+    tools[1].templateImg = cv::Mat(3, 3, CV_8UC1, cv::Scalar(4));
+    tools[1].hasLastResult = true;
+    tools[1].lastResult.success = true;
+    Require(ToolChainState::CopyToolToClipboard(1) && ToolChainState::HasToolClipboard(),
+        "tool clipboard copy failed");
+    tools[1].label = "已修改";
+    tools[1].templateImg.at<unsigned char>(0, 0) = 9;
+
+    int pasted = -1;
+    Require(ToolChainState::PasteToolAfter(2, &pasted) && pasted == 3,
+        "tool clipboard paste failed");
+    auto& pastedTools = ToolChainState::Tools();
+    Require(pastedTools.size() == 4 && pastedTools[3].label == "复制源",
+        "pasted tool parameters were not preserved");
+    Require(!pastedTools[3].templateImg.empty() &&
+        pastedTools[3].templateImg.at<unsigned char>(0, 0) == 4,
+        "tool clipboard did not deep-copy template assets");
+    Require(pastedTools[3].toolId != pastedTools[1].toolId &&
+        !pastedTools[3].hasLastResult && pastedTools[3].toolImpl == nullptr,
+        "pasted tool runtime state was not reset");
+    int pastedAgain = -1;
+    Require(ToolChainState::PasteToolAfter(3, &pastedAgain) && pastedAgain == 4 &&
+        ToolChainState::Count() == 5,
+        "tool clipboard did not support repeated paste");
+
     ToolChainState::ClearTools();
 }
 

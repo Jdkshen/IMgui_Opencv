@@ -882,6 +882,7 @@ namespace UI
         int currentCardType = -1;
         int currentCardInst = -1;
         int duplicateToolIndex = -1;
+        int pasteToolAfterIndex = -1;
         auto BeginCard = [isDark, &currentCardType, &currentCardInst, &duplicateToolIndex,
             &SecondaryButton, &SectionHeader](const char *title, const char *icon = "")
         {
@@ -3138,6 +3139,11 @@ TemplateState::ClearResults();
                         moveTo = inst + 1;
                     }
                     ImGui::Separator();
+                    if (ImGui::MenuItem("复制", "Ctrl+C"))
+                        ToolChainState::CopyToolToClipboard(inst);
+                    if (ImGui::MenuItem("粘贴", "Ctrl+V", false, ToolChainState::HasToolClipboard()))
+                        pasteToolAfterIndex = inst;
+                    ImGui::Separator();
                     const bool canRemove = inst >= 0 && inst < static_cast<int>(ToolChainState::Count());
                     if (ImGui::MenuItem("删除", nullptr, false, canRemove))
                         selectedForRemove = inst;
@@ -3291,6 +3297,15 @@ TemplateState::ClearResults();
 
             ImGui::PopStyleVar();
 
+            if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+                !ImGui::GetIO().WantTextInput && ToolChainState::ActiveIndex() >= 0)
+            {
+                if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_C))
+                    ToolChainState::CopyToolToClipboard(ToolChainState::ActiveIndex());
+                if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_V) && ToolChainState::HasToolClipboard())
+                    pasteToolAfterIndex = ToolChainState::ActiveIndex();
+            }
+
             if (moveFrom >= 0 && moveTo >= 0) {
                 if (ToolChainState::MoveTool(moveFrom, moveTo)) {
                     ToolController::OnToolChainChanged();
@@ -3308,6 +3323,15 @@ TemplateState::ClearResults();
             if (duplicateToolIndex >= 0) {
                 int insertedIndex = -1;
                 if (ToolChainState::DuplicateTool(duplicateToolIndex, &insertedIndex)) {
+                    ToolController::OnToolChainChanged();
+                    ToolChainState::SetActiveIndex(insertedIndex);
+                    SaveCurrentRecipe();
+                }
+            }
+
+            if (pasteToolAfterIndex >= 0) {
+                int insertedIndex = -1;
+                if (ToolChainState::PasteToolAfter(pasteToolAfterIndex, &insertedIndex)) {
                     ToolController::OnToolChainChanged();
                     ToolChainState::SetActiveIndex(insertedIndex);
                     SaveCurrentRecipe();

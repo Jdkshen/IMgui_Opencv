@@ -20,7 +20,7 @@
 | P2-1 | Blob 与图像差分 | ✅ Blob 特征/筛选参数、聚合质量指标、统一命名测量项公差判定；图像差分参考图/差异区域/差异面积已完成 | `Algorithm/BlobTool.*`、`Algorithm/DifferenceTool.*`、`Core/ToolJudgement.*` |
 | P2-2 | 标定与 Fixture 产品化 | ✅ 多点 X/Y 比例拟合、透视拟合、逐点残差、RMS/最大残差、标定文件导入导出和 Fixture 坐标轴已接入；后续补镜头畸变标定 | `Core/CalibrationFitter.*`、`Core/CalibrationModel.*`、`Core/FixtureTransform.*`, `UI/ImageViewer.*` |
 | P2-3 | SPC 与报表 | ✅ 均值、标准差、Cp/Cpk、测量项选择、统计窗口、趋势图和 CSV 导出 | `Core/ResultExporter.*`、`Core/InspectionHistory.*`、`UI/StatsWindow.*` |
-| P3-1 | 工具链体验 | ✅ 启用/禁用、复制、稳定 ID、运行前检查、依赖显示/循环校验、分组筛选及批量启用/标签/失败策略 | `Core/ToolChainPreflight.*`、`Core/ToolChainValidator.*`、`Core/ToolChainState.*`、`UI/ToolsWindow.*` |
+| P3-1 | 工具链体验 | ✅ 启用/禁用、Core 工具剪贴板复制粘贴、稳定 ID、运行前检查、依赖显示/循环校验、分组筛选及批量启用/标签/失败策略 | `Core/ToolChainPreflight.*`、`Core/ToolChainValidator.*`、`Core/ToolChainState.*`、`UI/ToolsWindow.*` |
 | P4-1 | 工程发布 | ✅ GitHub clean runner 已完成主程序、回归工程、完整测试、运行包校验和 artifact 上传；Git LFS 与可迁移案例资源已验证 | `.github/workflows/`、`scripts/`、`docs/RELEASE.md` |
 | P4-2 | 设备平台化 | ✅ 通用途径已完成并接入主程序：设备连接与控制面板作为左侧同区域页签，配置 OpenCV/UVC/RTSP 相机、普通 TCP 文本、Modbus TCP、Modbus PLC、open62541 OPC UA；异步抓帧进入统一图像链，批次结果自动发布 OK/NG；厂商专用 SDK 由目标设备适配 | `Core/HardwareRuntimeService.*`、`Core/TcpTextAdapter.*`、`Core/OpenCvCameraAdapter.*`、`Core/ModbusTcpAdapter.*`、`Core/ModbusPlcAdapter.*`、`Core/Open62541OpcUaAdapter.*`、`UI/HardwareWindow.*`、`UI/Sidebar.*` |
 

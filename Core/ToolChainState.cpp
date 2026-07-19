@@ -3,6 +3,7 @@
 #include "ToolROIService.h"
 
 #include <algorithm>
+#include <optional>
 
 // =====================================================
 // 内部状态（模块私有）
@@ -20,6 +21,7 @@ namespace
     float s_mcfLastTimeMs = 0.0f;
     int s_mcfLastCount = 0;
     std::uint64_t s_nextToolId = 1;
+    std::optional<ToolInstance> s_toolClipboard;
 
     std::uint64_t EnsureToolIdInternal(ToolInstance& tool)
     {
@@ -28,6 +30,56 @@ namespace
         else if (tool.toolId >= s_nextToolId)
             s_nextToolId = tool.toolId + 1;
         return tool.toolId;
+    }
+
+    ToolInstance CloneToolForInsertion(const ToolInstance& source)
+    {
+        ToolInstance copy = source;
+        copy.toolId = 0;
+        copy.toolImpl = nullptr;
+        copy.lastResult = ToolResult{};
+        copy.hasLastResult = false;
+        copy.measureRuntimeROIIds.clear();
+        copy.templateImg = source.templateImg.empty() ? cv::Mat() : source.templateImg.clone();
+        copy.shpTplImage = source.shpTplImage.empty() ? cv::Mat() : source.shpTplImage.clone();
+        copy.mcfRefImage = source.mcfRefImage.empty() ? cv::Mat() : source.mcfRefImage.clone();
+        copy.differenceReferenceImage = source.differenceReferenceImage.empty()
+            ? cv::Mat() : source.differenceReferenceImage.clone();
+        return copy;
+    }
+
+    bool InsertToolClone(int insertIndex, const ToolInstance& source, int* insertedIndex)
+    {
+        if (insertIndex < 0 || insertIndex > static_cast<int>(s_tools.size()))
+            return false;
+
+        ToolInstance copy = CloneToolForInsertion(source);
+        if (copy.resultRoiSourceTool >= insertIndex)
+            ++copy.resultRoiSourceTool;
+        if (copy.fixture.sourceToolIndex >= insertIndex)
+            ++copy.fixture.sourceToolIndex;
+
+        s_tools.insert(s_tools.begin() + insertIndex, std::move(copy));
+        EnsureToolIdInternal(s_tools[insertIndex]);
+
+        for (int i = 0; i < static_cast<int>(s_tools.size()); ++i)
+        {
+            if (i == insertIndex)
+                continue;
+            ToolInstance& tool = s_tools[i];
+            if (tool.resultRoiSourceTool >= insertIndex)
+                ++tool.resultRoiSourceTool;
+            if (tool.fixture.sourceToolIndex >= insertIndex)
+                ++tool.fixture.sourceToolIndex;
+        }
+        if (s_activeToolIndex >= insertIndex)
+            ++s_activeToolIndex;
+        if (s_yoloLiveInstanceIndex >= insertIndex)
+            ++s_yoloLiveInstanceIndex;
+
+        if (insertedIndex)
+            *insertedIndex = insertIndex;
+        return true;
     }
 }
 
@@ -331,44 +383,28 @@ bool DuplicateTool(int index, int* duplicatedIndex)
         return false;
 
     EnsureToolIds();
+    return InsertToolClone(index + 1, s_tools[index], duplicatedIndex);
+}
 
-    ToolInstance copy = s_tools[index];
-    copy.toolId = 0;
-    copy.toolImpl = nullptr;
-    copy.lastResult = ToolResult{};
-    copy.hasLastResult = false;
-    copy.measureRuntimeROIIds.clear();
-    copy.templateImg = s_tools[index].templateImg.empty()
-        ? cv::Mat() : s_tools[index].templateImg.clone();
-    copy.shpTplImage = s_tools[index].shpTplImage.empty()
-        ? cv::Mat() : s_tools[index].shpTplImage.clone();
-    copy.mcfRefImage = s_tools[index].mcfRefImage.empty()
-        ? cv::Mat() : s_tools[index].mcfRefImage.clone();
-    copy.differenceReferenceImage = s_tools[index].differenceReferenceImage.empty()
-        ? cv::Mat() : s_tools[index].differenceReferenceImage.clone();
-
-    const int insertIndex = index + 1;
-    s_tools.insert(s_tools.begin() + insertIndex, std::move(copy));
-    EnsureToolIdInternal(s_tools[insertIndex]);
-
-    for (int i = 0; i < static_cast<int>(s_tools.size()); ++i)
-    {
-        if (i == insertIndex)
-            continue;
-        ToolInstance& tool = s_tools[i];
-        if (tool.resultRoiSourceTool >= insertIndex)
-            ++tool.resultRoiSourceTool;
-        if (tool.fixture.sourceToolIndex >= insertIndex)
-            ++tool.fixture.sourceToolIndex;
-    }
-    if (s_activeToolIndex >= insertIndex)
-        ++s_activeToolIndex;
-    if (s_yoloLiveInstanceIndex >= insertIndex)
-        ++s_yoloLiveInstanceIndex;
-
-    if (duplicatedIndex)
-        *duplicatedIndex = insertIndex;
+bool CopyToolToClipboard(int index)
+{
+    if (index < 0 || index >= static_cast<int>(s_tools.size()))
+        return false;
+    EnsureToolIds();
+    s_toolClipboard = CloneToolForInsertion(s_tools[index]);
     return true;
+}
+
+bool HasToolClipboard()
+{
+    return s_toolClipboard.has_value();
+}
+
+bool PasteToolAfter(int index, int* pastedIndex)
+{
+    if (!s_toolClipboard || index < -1 || index >= static_cast<int>(s_tools.size()))
+        return false;
+    return InsertToolClone(index + 1, *s_toolClipboard, pastedIndex);
 }
 
 void SetAllEnabled(bool enabled)

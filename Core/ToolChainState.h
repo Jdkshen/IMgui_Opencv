@@ -53,6 +53,9 @@ namespace ToolChainState
     void ClearTools();               // 释放工具实现并清空工具链及实时状态
     void MoveOriginalToolToFront();  // 将"原图"工具移到工具链最前面
     bool DuplicateTool(int index, int* duplicatedIndex = nullptr);
+    bool CopyToolToClipboard(int index);
+    bool HasToolClipboard();
+    bool PasteToolAfter(int index, int* pastedIndex = nullptr);
     void SetAllEnabled(bool enabled);
     void SetGroupEnabled(const std::string& groupName, bool enabled);
     void SetAllResultLabelsVisible(bool visible);
