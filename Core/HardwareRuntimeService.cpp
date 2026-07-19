@@ -216,6 +216,20 @@ DeviceOperationResult StartCameraCapture(const HardwareCameraConnectionConfig& r
     if (!result.success)
         return s_lastCameraOperation = std::move(result);
 
+    const DeviceOperationResult autoExposure = camera->SetControl(
+        CameraControl::AutoExposure, config.autoExposure ? 1.0 : 0.0);
+    if (!config.autoExposure)
+    {
+        camera->SetControl(CameraControl::Exposure, config.exposure);
+        camera->SetControl(CameraControl::Gain, config.gain);
+    }
+    else
+    {
+        camera->SetControl(CameraControl::Gain, config.gain);
+    }
+    if (!autoExposure.success)
+        s_lastCameraOperation = autoExposure;
+
     s_cameraConfig = std::move(config);
     s_cameraFrameIndex = 0;
     {
@@ -249,6 +263,14 @@ bool CameraAutoCaptureEnabled()
 {
     std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
     return s_cameraAutoCapture;
+}
+
+DeviceOperationResult SetCameraControl(CameraControl control, double value)
+{
+    ICameraAdapter* camera = HardwareAdapterService::Camera();
+    if (!camera)
+        return {false, "industrial camera adapter is not connected"};
+    return camera->SetControl(control, value);
 }
 
 void RequestCameraFrame(bool runToolChainAfterCapture)

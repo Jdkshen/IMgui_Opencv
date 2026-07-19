@@ -67,6 +67,33 @@ public:
         return {true, "OpenCV camera frame captured"};
     }
 
+    DeviceOperationResult SetControl(CameraControl control, double value) override
+    {
+        if (!capture_.isOpened())
+            return {false, "OpenCV camera is not open"};
+
+        int property = -1;
+        double driverValue = value;
+        switch (control)
+        {
+        case CameraControl::AutoExposure:
+            property = cv::CAP_PROP_AUTO_EXPOSURE;
+            // DirectShow commonly uses 0.75 for auto and 0.25 for manual.
+            driverValue = value > 0.5 ? 0.75 : 0.25;
+            break;
+        case CameraControl::Exposure:
+            property = cv::CAP_PROP_EXPOSURE;
+            break;
+        case CameraControl::Gain:
+            property = cv::CAP_PROP_GAIN;
+            break;
+        }
+
+        if (property < 0 || !capture_.set(property, driverValue))
+            return {false, "OpenCV camera rejected the requested control"};
+        return {true, "OpenCV camera control updated"};
+    }
+
 private:
     cv::VideoCapture capture_;
 };
@@ -136,6 +163,23 @@ DeviceOperationResult OpenCvCameraAdapter::GrabFrame(cv::Mat& frame, int timeout
         return Fail(std::move(result.message));
     if (frame.empty())
         return Fail("OpenCV camera returned an empty frame");
+    return result;
+}
+
+DeviceOperationResult OpenCvCameraAdapter::SetControl(CameraControl control, double value)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (state_ != DeviceConnectionState::Connected)
+        return Fail("OpenCV camera is not connected");
+
+    // The backend interface is intentionally kept private; controls are
+    // exposed by the concrete OpenCV backend through this adapter.
+    auto* backend = dynamic_cast<OpenCvCaptureBackend*>(backend_.get());
+    if (!backend)
+        return {false, "camera control is unavailable for this backend"};
+    DeviceOperationResult result = backend->SetControl(control, value);
+    if (!result.success)
+        lastError_ = result.message;
     return result;
 }
 

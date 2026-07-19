@@ -112,6 +112,9 @@ void DrawHardwarePanel()
     static int cameraIntervalMs = 33;
     static bool cameraAutoCapture = true;
     static bool cameraRunAfterCapture = true;
+    static bool cameraAutoExposure = true;
+    static float cameraExposure = -6.0f;
+    static float cameraGain = 0.0f;
 
     static int outputType = 0;
     static char outputKey[96] = "output-main";
@@ -161,6 +164,17 @@ void DrawHardwarePanel()
     ImGui::TextDisabled("抓帧间隔 (ms)");
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputInt("##camera_interval", &cameraIntervalMs);
+    if (ImGui::Checkbox("自动曝光", &cameraAutoExposure))
+        HardwareRuntimeService::SetCameraControl(
+            CameraControl::AutoExposure, cameraAutoExposure ? 1.0 : 0.0);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(82.0f);
+    if (ImGui::DragFloat("曝光##camera_exposure", &cameraExposure, 0.1f, -13.0f, 5.0f, "%.2f"))
+        HardwareRuntimeService::SetCameraControl(CameraControl::Exposure, cameraExposure);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(82.0f);
+    if (ImGui::DragFloat("增益##camera_gain", &cameraGain, 0.5f, 0.0f, 100.0f, "%.1f"))
+        HardwareRuntimeService::SetCameraControl(CameraControl::Gain, cameraGain);
     if (ImGui::Checkbox("自动抓帧", &cameraAutoCapture))
         HardwareRuntimeService::SetCameraAutoCapture(cameraAutoCapture);
     ImGui::SameLine();
@@ -179,6 +193,9 @@ void DrawHardwarePanel()
         config.grabTimeoutMs = std::max(1, cameraTimeoutMs);
         config.captureIntervalMs = std::max(1, cameraIntervalMs);
         config.autoCapture = cameraAutoCapture;
+        config.autoExposure = cameraAutoExposure;
+        config.exposure = cameraExposure;
+        config.gain = cameraGain;
         LogOperation("工业相机连接", HardwareRuntimeService::ConnectCamera(config));
     }
     ImGui::SameLine();

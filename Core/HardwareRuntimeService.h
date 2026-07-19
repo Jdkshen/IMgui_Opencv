@@ -42,6 +42,9 @@ struct HardwareCameraConnectionConfig
     int grabTimeoutMs = 250;
     int captureIntervalMs = 33;
     bool autoCapture = true;
+    bool autoExposure = true;
+    double exposure = -6.0;
+    double gain = 0.0;
 };
 
 struct HardwareOutputConnectionConfig
@@ -76,6 +79,7 @@ namespace HardwareRuntimeService
     void DisconnectCamera();
     void SetCameraAutoCapture(bool enabled);
     bool CameraAutoCaptureEnabled();
+    DeviceOperationResult SetCameraControl(CameraControl control, double value);
     void RequestCameraFrame(bool runToolChainAfterCapture = false);
 
     DeviceOperationResult ConnectOutput(const HardwareOutputConnectionConfig& config);

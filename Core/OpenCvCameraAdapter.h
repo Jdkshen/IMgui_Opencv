@@ -13,6 +13,10 @@ public:
     virtual DeviceOperationResult Open(const DeviceEndpoint& endpoint) = 0;
     virtual void Close() = 0;
     virtual DeviceOperationResult Read(cv::Mat& frame, int timeoutMs) = 0;
+    virtual DeviceOperationResult SetControl(CameraControl, double)
+    {
+        return {false, "camera controls are not supported by this backend"};
+    }
 };
 
 class OpenCvCameraAdapter final : public ICameraAdapter
@@ -30,6 +34,7 @@ public:
     DeviceOperationResult GrabFrame(cv::Mat& frame, int timeoutMs) override;
     DeviceOperationResult StartStream() override;
     void StopStream() override;
+    DeviceOperationResult SetControl(CameraControl control, double value) override;
 
     bool IsStreaming() const;
 
