@@ -1,6 +1,7 @@
 #include "ToolController.h"
 #include "ToolExecutor.h"
 #include "FrameNavigation.h"
+#include "HardwareRuntimeService.h"
 #include "ImageState.h"
 #include "ImageUtils.h"
 #include "ROIState.h"
@@ -37,6 +38,39 @@ namespace ToolController
     static std::chrono::high_resolution_clock::time_point s_nextLoopRunAt;
     static constexpr float kLoopMinIntervalMs = 150.0f;
 
+    static void LogHardwarePublish(const DeviceOperationResult& published, bool quiet)
+    {
+        if (published.success && quiet)
+            return;
+        LogSystem::Add(published.success ? LOG_INFO : LOG_ERROR,
+            "硬件结果发布%s: %s",
+            published.success ? "成功" : "失败",
+            published.message.c_str());
+    }
+
+    static void PublishConfiguredHardwareStatus(ToolResultStatus status, bool quiet = false)
+    {
+        if (!HardwareRuntimeService::OutputAutoPublishEnabled())
+            return;
+        LogHardwarePublish(HardwareRuntimeService::PublishConfiguredStatus(status), quiet);
+    }
+
+    static void PublishConfiguredHardwareResult(bool quiet = false)
+    {
+        if (!HardwareRuntimeService::OutputAutoPublishEnabled())
+            return;
+
+        std::vector<ToolResult> results;
+        for (const ToolInstance& tool : ToolChainState::ReadOnlyTools())
+        {
+            if (tool.hasLastResult)
+                results.push_back(tool.lastResult);
+        }
+        const DeviceOperationResult published =
+            HardwareRuntimeService::PublishInspectionResults(results);
+        LogHardwarePublish(published, quiet);
+    }
+
     static bool ValidateToolChainForRun()
     {
         const ToolChainPreflightResult validation = ToolChainPreflight::Check(
@@ -53,6 +87,7 @@ namespace ToolController
             else
                 LogSystem::Add(LOG_ERROR, "运行前检查失败: %s", issue.message.c_str());
         }
+        PublishConfiguredHardwareStatus(ToolResultStatus::Error);
         return false;
     }
 
@@ -248,7 +283,13 @@ namespace ToolController
         if (s_mode != Mode::Running) return;
         auto& tools = ToolChainState::Tools();
         if (s_currentIndex < 0 || s_currentIndex >= (int)tools.size()) { s_mode = Mode::Idle; return; }
-        if (ImageState::Current().empty()) { LogSystem::Add(LOG_WARN, "执行中止：未加载图片"); s_mode = Mode::Idle; return; }
+        if (ImageState::Current().empty())
+        {
+            LogSystem::Add(LOG_WARN, "执行中止：未加载图片");
+            s_mode = Mode::Idle;
+            PublishConfiguredHardwareStatus(ToolResultStatus::Error);
+            return;
+        }
 
         const auto now = std::chrono::high_resolution_clock::now();
         if (s_loop && s_currentIndex == 0 && now < s_nextLoopRunAt)
@@ -299,6 +340,7 @@ namespace ToolController
             s_mode = Mode::Idle;
             s_loop = false;
             s_batchTimerStarted = false;
+            PublishConfiguredHardwareResult();
             return;
         }
 
@@ -308,6 +350,7 @@ namespace ToolController
         } else {
             s_currentIndex++;
             if (s_currentIndex >= (int)tools.size()) {
+                PublishConfiguredHardwareResult(s_loop);
                 if (!s_loop)
                 {
                     LogSystem::Add(LOG_INFO, ImVec4(0,1,0.5f,1), "[全部执行%s] 完成 %.1fms",

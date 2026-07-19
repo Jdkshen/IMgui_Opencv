@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 enum class HardwareOutputKind
 {
@@ -22,12 +23,75 @@ struct HardwareOutputBinding
     bool invert = false;
 };
 
+enum class HardwareOutputAdapterType
+{
+    ModbusTcp,
+    ModbusPlc,
+    OpcUa
+};
+
+struct HardwareCameraConnectionConfig
+{
+    DeviceEndpoint endpoint;
+    std::string sourceName = "industrial-camera";
+    int grabTimeoutMs = 250;
+    int captureIntervalMs = 33;
+    bool autoCapture = true;
+};
+
+struct HardwareOutputConnectionConfig
+{
+    HardwareOutputAdapterType adapterType = HardwareOutputAdapterType::ModbusTcp;
+    DeviceEndpoint endpoint;
+    HardwareOutputBinding binding;
+    bool plcUseHoldingRegister = false;
+    bool autoPublish = false;
+};
+
+struct HardwareRuntimeSnapshot
+{
+    DeviceConnectionState cameraState = DeviceConnectionState::Disconnected;
+    DeviceConnectionState outputState = DeviceConnectionState::Disconnected;
+    std::string cameraAdapterName;
+    std::string outputAdapterName;
+    std::string outputAdapterKey;
+    bool cameraAutoCapture = false;
+    bool cameraCapturePending = false;
+    bool outputAutoPublish = false;
+    int cameraFrameIndex = 0;
+    DeviceOperationResult lastCameraOperation;
+    DeviceOperationResult lastOutputOperation;
+};
+
 namespace HardwareRuntimeService
 {
+    DeviceOperationResult ConnectCamera(const HardwareCameraConnectionConfig& config);
+    DeviceOperationResult StartCameraCapture(const HardwareCameraConnectionConfig& config);
+    void DisconnectCamera();
+    void SetCameraAutoCapture(bool enabled);
+    bool CameraAutoCaptureEnabled();
+    void RequestCameraFrame();
+
+    DeviceOperationResult ConnectOutput(const HardwareOutputConnectionConfig& config);
+    void DisconnectOutput();
+    void ConfigureOutputBinding(const HardwareOutputBinding& binding, bool autoPublish);
+    void SetOutputAutoPublish(bool enabled);
+    bool OutputAutoPublishEnabled();
+
     DeviceOperationResult GrabCameraFrame(int timeoutMs = 1000,
         const std::string& sourceName = "camera", int frameIndex = -1,
         double timestampMs = 0.0);
 
     DeviceOperationResult PublishInspectionStatus(ToolResultStatus status,
         const HardwareOutputBinding& binding);
+
+    ToolResultStatus AggregateInspectionStatus(const std::vector<ToolResult>& results);
+    DeviceOperationResult PublishConfiguredStatus(ToolResultStatus status);
+    DeviceOperationResult PublishInspectionResults(const std::vector<ToolResult>& results);
+
+    // Called from the UI thread once per frame. Completed camera grabs are published
+    // to ImageState here so worker threads never touch rendering/application state.
+    void Tick();
+    HardwareRuntimeSnapshot Snapshot();
+    void Shutdown();
 }

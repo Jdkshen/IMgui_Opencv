@@ -153,11 +153,12 @@ ROI 交互主要在 `UI/ROIManager.cpp` 中完成，包含控制点、拖动、�
 | `ImageLoadController.*` | 图片加载请求、异步加载回调和上传调度 |
 | `ImageImportService.*` | 单图/递归文件夹导入、导航与输入切换状态清理 |
 | `HardwareAdapters.*` | 工业相机、PLC、Modbus TCP、OPC UA 适配器接口与注册 |
-| `HardwareRuntimeService.*` | 相机帧发布及 OK/NG 到 PLC/Modbus/OPC UA 的运行协调 |
+| `HardwareRuntimeService.*` | 设备连接、异步相机抓帧、结果聚合及 OK/NG 到 PLC/Modbus/OPC UA 的运行协调 |
 | `OpenCvCameraAdapter.*` | UVC、摄像头索引和 OpenCV 视频流 URL 的通用相机实现 |
 | `ModbusTcpAdapter.*` | Winsock Modbus TCP 01/03/05/06 客户端与协议校验 |
 | `ModbusPlcAdapter.*` | PLC 标签到 Modbus 线圈/寄存器及工程量的映射 |
 | `Open62541OpcUaAdapter.*` | open62541 原生 OPC UA TCP 客户端、NodeId 与标量读写 |
+| `../UI/HardwareWindow.*` | 工业相机和结果输出配置界面，仅调用 HardwareRuntimeService API |
 | `LiveYoloRunner.*` | 实时 YOLO 推理调度和耗时统计 |
 | `FrameRenderer.*` | 每帧渲染提交和渲染资源收尾 |
 | `VisionContext.*` | 统一视觉上下文，保存图片、ROI、模板和结果 |

@@ -925,6 +925,29 @@ void TestCalibrationModel()
     const cv::Point2d unchanged = distortion.UndistortPixel({100.0, 120.0});
     Require(cv::norm(unchanged - cv::Point2d(100.0, 120.0)) < 1.0e-6,
         "zero lens distortion should preserve pixel coordinates");
+
+    distortion.k1 = 0.10;
+    distortion.k2 = -0.02;
+    distortion.p1 = 0.001;
+    distortion.p2 = -0.001;
+    distortion.k3 = 0.005;
+    const cv::Point2d idealPixel(500.0, 350.0);
+    const double normalizedX = (idealPixel.x - distortion.cx) / distortion.fx;
+    const double normalizedY = (idealPixel.y - distortion.cy) / distortion.fy;
+    const double radius2 = normalizedX * normalizedX + normalizedY * normalizedY;
+    const double radial = 1.0 + distortion.k1 * radius2 +
+        distortion.k2 * radius2 * radius2 + distortion.k3 * radius2 * radius2 * radius2;
+    const double distortedX = normalizedX * radial +
+        2.0 * distortion.p1 * normalizedX * normalizedY +
+        distortion.p2 * (radius2 + 2.0 * normalizedX * normalizedX);
+    const double distortedY = normalizedY * radial +
+        distortion.p1 * (radius2 + 2.0 * normalizedY * normalizedY) +
+        2.0 * distortion.p2 * normalizedX * normalizedY;
+    const cv::Point2d observedPixel(
+        distortion.fx * distortedX + distortion.cx,
+        distortion.fy * distortedY + distortion.cy);
+    Require(cv::norm(distortion.UndistortPixel(observedPixel) - idealPixel) < 1.0e-4,
+        "non-zero radial/tangential lens distortion correction regressed");
 }
 
 void TestFixtureTransform()
@@ -1988,6 +2011,85 @@ void TestHardwareAdapterServiceLifecycle()
     FrameSourceState::Clear();
 }
 
+void TestHardwareRuntimeAutomation()
+{
+    HardwareRuntimeService::Shutdown();
+    ImageState::Clear();
+    FrameSourceState::Clear();
+
+    auto camera = std::make_unique<TestCameraAdapter>(nullptr);
+    TestCameraAdapter* cameraView = camera.get();
+    HardwareAdapterService::SetCamera(std::move(camera));
+    Require(cameraView->Connect({"camera-auto", 0, {}}).success,
+        "automation camera connect failed");
+
+    HardwareCameraConnectionConfig captureConfig;
+    captureConfig.sourceName = "camera-auto";
+    captureConfig.autoCapture = false;
+    captureConfig.grabTimeoutMs = 100;
+    captureConfig.captureIntervalMs = 10;
+    Require(HardwareRuntimeService::StartCameraCapture(captureConfig).success,
+        "registered camera capture worker failed to start");
+    HardwareRuntimeService::RequestCameraFrame();
+    for (int attempt = 0; attempt < 200; ++attempt)
+    {
+        HardwareRuntimeService::Tick();
+        if (HardwareRuntimeService::Snapshot().cameraFrameIndex > 0)
+            break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const HardwareRuntimeSnapshot cameraSnapshot = HardwareRuntimeService::Snapshot();
+    Require(cameraSnapshot.cameraFrameIndex >= 1 &&
+        cameraSnapshot.lastCameraOperation.success &&
+        FrameSourceState::Current().sourceType == FrameSourceType::Camera &&
+        ImageState::Current().size() == cv::Size(6, 4) &&
+        ImageState::NeedUploadRef() && !ImageState::PendingUploadRef().empty(),
+        "asynchronous industrial-camera frame was not published on Tick");
+
+    auto modbus = std::make_unique<TestModbusAdapter>();
+    TestModbusAdapter* modbusView = modbus.get();
+    Require(HardwareAdapterService::Register("automation-output", std::move(modbus)) &&
+        modbusView->Connect({"127.0.0.1", 502, {}}).success,
+        "automation output adapter registration failed");
+    HardwareOutputBinding output;
+    output.kind = HardwareOutputKind::ModbusCoil;
+    output.adapterKey = "automation-output";
+    output.address = 23;
+    HardwareRuntimeService::ConfigureOutputBinding(output, true);
+
+    ToolResult pass;
+    pass.status = ToolResultStatus::Pass;
+    ToolResult skippedFailure;
+    skippedFailure.status = ToolResultStatus::Fail;
+    skippedFailure.skipped = true;
+    Require(HardwareRuntimeService::AggregateInspectionStatus({pass, skippedFailure}) ==
+        ToolResultStatus::Pass &&
+        HardwareRuntimeService::PublishInspectionResults({pass, skippedFailure}).success &&
+        modbusView->lastAddress == 23 && modbusView->lastValue,
+        "skipped result incorrectly changed automatic inspection output");
+
+    ToolResult fail;
+    fail.status = ToolResultStatus::Fail;
+    Require(HardwareRuntimeService::PublishInspectionResults({pass, fail}).success &&
+        !modbusView->lastValue,
+        "failed tool result was not published as NG");
+
+    ToolResult error;
+    error.status = ToolResultStatus::Error;
+    Require(HardwareRuntimeService::AggregateInspectionStatus({fail, error}) ==
+        ToolResultStatus::Error &&
+        HardwareRuntimeService::AggregateInspectionStatus({skippedFailure}) ==
+        ToolResultStatus::Error,
+        "inspection status aggregation priority regressed");
+
+    HardwareRuntimeService::Shutdown();
+    Require(HardwareAdapterService::Camera() == nullptr &&
+        HardwareAdapterService::Keys().empty(),
+        "hardware runtime shutdown left registered devices behind");
+    FrameSourceState::Clear();
+    ImageState::Clear();
+}
+
 void TestConcreteModbusTcpAdapterProtocol()
 {
     auto transport = std::make_unique<ScriptedModbusTransport>();
@@ -2779,6 +2881,17 @@ void TestToolControllerInputSourcesAndChainReset()
     second.toolImpl = new TestInputCaptureTool(&previousOutputSeen);
     ToolChainState::Tools().push_back(std::move(second));
 
+    auto batchOutput = std::make_unique<TestModbusAdapter>();
+    TestModbusAdapter* batchOutputView = batchOutput.get();
+    Require(HardwareAdapterService::Register("batch-output", std::move(batchOutput)) &&
+        batchOutputView->Connect({"127.0.0.1", 502, {}}).success,
+        "batch hardware output setup failed");
+    HardwareOutputBinding batchBinding;
+    batchBinding.kind = HardwareOutputKind::ModbusCoil;
+    batchBinding.adapterKey = "batch-output";
+    batchBinding.address = 31;
+    HardwareRuntimeService::ConfigureOutputBinding(batchBinding, true);
+
     ToolController::RequestRunAll(false);
     for (int i = 0; i < 8 && ToolController::GetMode() != ToolController::Mode::Idle; ++i)
         ToolController::Tick();
@@ -2786,6 +2899,16 @@ void TestToolControllerInputSourcesAndChainReset()
         "batch execution did not finish");
     Require(firstSeen == 10, ("batch original-tool input fallback regressed: " + std::to_string(firstSeen)).c_str());
     Require(previousOutputSeen == 40, ("batch previous processed-image input regressed: " + std::to_string(previousOutputSeen)).c_str());
+    Require(batchOutputView->lastAddress == 31 && batchOutputView->lastValue,
+        "completed tool batch did not publish the aggregate Pass status");
+
+    ImageState::Clear();
+    batchOutputView->lastValue = true;
+    ToolController::RequestRunAll(false);
+    Require(!batchOutputView->lastValue,
+        "tool-chain preflight failure did not publish Error/NG to hardware");
+
+    HardwareRuntimeService::Shutdown();
 
     ToolController::OnToolChainChanged();
     ToolChainState::ClearTools();
@@ -3203,6 +3326,7 @@ int main(int argc, char** argv)
         TestToolAssetServiceOwnsCaptureWorkflow();
         TestToolROIServiceOwnsBoundROIEditing();
         TestHardwareAdapterServiceLifecycle();
+        TestHardwareRuntimeAutomation();
         TestConcreteModbusTcpAdapterProtocol();
         TestConcreteOpenCvCameraAdapter();
         TestConcreteOpen62541OpcUaAdapter();

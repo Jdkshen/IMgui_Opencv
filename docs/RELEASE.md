@@ -22,7 +22,7 @@ pwsh -File .\scripts\package_runtime.ps1 -IncludeCudaProvider
 
 ## Continuous integration
 
-`.github/workflows/windows-build.yml` checks out Git LFS runtime dependencies, builds both Visual Studio projects, and runs the complete `RegressionTests.exe` command. Missing optional OCR or YOLO model files do not fail the build; the runtime package simply excludes absent optional assets.
+`.github/workflows/windows-build.yml` uses the Node 24 action generations, checks out Git LFS runtime dependencies, builds both Visual Studio projects, and runs the complete `RegressionTests.exe` command. Missing optional OCR or YOLO model files do not fail the build; the runtime package simply excludes absent optional assets. A missing runtime ZIP fails artifact upload.
 
 Winsock and IP Helper are Windows system dependencies linked through `Ws2_32.lib` and
 `Iphlpapi.lib`; they do not add DLLs to the runtime archive. The open62541 OPC UA client

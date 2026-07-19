@@ -118,6 +118,7 @@
     <ClInclude Include="Algorithm\DifferenceTool.h"><Filter>Algorithm</Filter></ClInclude>
     <ClInclude Include="UI\DockSpaceHost.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="UI\ImageViewer.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="UI\HardwareWindow.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="UI\LogWindow.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="UI\ROIManager.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="UI\Sidebar.h"><Filter>UI</Filter></ClInclude>
@@ -212,6 +213,7 @@
     <ClCompile Include="Core\OpenFileDialog.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="UI\DockSpaceHost.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="UI\ImageViewer.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="UI\HardwareWindow.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="UI\LogWindow.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="UI\ROIManager.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="UI\Sidebar.cpp"><Filter>UI</Filter></ClCompile>

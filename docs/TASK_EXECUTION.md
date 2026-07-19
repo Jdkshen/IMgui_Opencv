@@ -22,7 +22,7 @@
 | P2-3 | SPC 与报表 | ✅ 均值、标准差、Cp/Cpk、测量项选择、统计窗口、趋势图和 CSV 导出 | `Core/ResultExporter.*`、`Core/InspectionHistory.*`、`UI/StatsWindow.*` |
 | P3-1 | 工具链体验 | ✅ 启用/禁用、复制、稳定 ID、运行前检查、依赖显示/循环校验、分组筛选及批量启用/标签/失败策略 | `Core/ToolChainPreflight.*`、`Core/ToolChainValidator.*`、`Core/ToolChainState.*`、`UI/ToolsWindow.*` |
 | P4-1 | 工程发布 | ✅ GitHub clean runner 已完成主程序、回归工程、完整测试、运行包校验和 artifact 上传；Git LFS 与可迁移案例资源已验证 | `.github/workflows/`、`scripts/`、`docs/RELEASE.md` |
-| P4-2 | 设备平台化 | ✅ 通用途径已完成：OpenCV/UVC/RTSP 相机、Winsock Modbus TCP 01/03/05/06、Modbus PLC 标签映射、open62541 原生 OPC UA TCP；厂商专用 SDK 由目标设备适配 | `Core/HardwareAdapters.*`、`Core/OpenCvCameraAdapter.*`、`Core/ModbusTcpAdapter.*`、`Core/ModbusPlcAdapter.*`、`Core/Open62541OpcUaAdapter.*` |
+| P4-2 | 设备平台化 | ✅ 通用途径已完成并接入主程序：设备窗口配置 OpenCV/UVC/RTSP 相机、Modbus TCP、Modbus PLC、open62541 OPC UA；异步抓帧进入统一图像链，批次结果自动发布 OK/NG；厂商专用 SDK 由目标设备适配 | `Core/HardwareRuntimeService.*`、`Core/OpenCvCameraAdapter.*`、`Core/ModbusTcpAdapter.*`、`Core/ModbusPlcAdapter.*`、`Core/Open62541OpcUaAdapter.*`、`UI/HardwareWindow.*` |
 
 ## 任务描述模板
 

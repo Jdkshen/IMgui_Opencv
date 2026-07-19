@@ -141,6 +141,11 @@ distortion calibration remains a later extension.
 - Native OPC UA is implemented with open62541 v1.4.17 and protocol-tested against a real
   local OPC UA TCP server. The bundled build supports anonymous SecurityPolicy None;
   certificate-enabled deployments require an approved encryption-enabled rebuild.
+- The device window now connects portable camera/Modbus/PLC/OPC UA adapters through Core.
+  Camera reads run asynchronously, completed frames enter the normal image/GPU path on
+  the UI thread, and tool batches automatically publish aggregate Pass/Fail/Error status.
+- CI uses the Node 24 generations of checkout, MSBuild setup, and artifact upload actions;
+  a missing runtime archive fails the workflow instead of producing an empty artifact.
 - Vendor-specific camera/PLC SDK adapters remain deployment choices; see
   `docs/HARDWARE_INTEGRATION.md` for the required Core boundary.
 - Keep device implementations out of UI and preserve offline recipe/regression operation.

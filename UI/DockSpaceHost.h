@@ -16,6 +16,7 @@ extern bool g_ShowSidebar;
 extern bool g_ShowStats;
 extern bool g_ShowOpenCV;
 extern bool g_ShowTools;
+extern bool g_ShowHardware;
 
 // 图像显示状态分散在 ImageViewer.h / ROIManager.h 中声明
 // ROI 数据与交互状态在 ROIManager.h (namespace UI) 中声明

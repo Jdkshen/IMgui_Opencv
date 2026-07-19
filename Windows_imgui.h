@@ -22,6 +22,7 @@
 #include "Core/VisionContext.h"
 #include "Core/ToolExecutor.h"
 #include "Core/ToolController.h"
+#include "Core/HardwareRuntimeService.h"
 
 // 渲染与日志
 #include "Renderer/FontManager.h"
@@ -35,6 +36,7 @@
 #include "UI/Sidebar.h"
 #include "UI/StatsWindow.h"
 #include "UI/ToolsWindow.h"
+#include "UI/HardwareWindow.h"
 
 // 算法模块
 #include "Algorithm/ThresholdTool.h"

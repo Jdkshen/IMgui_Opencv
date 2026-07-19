@@ -83,6 +83,7 @@ bool g_ShowSidebar = true;
 bool g_ShowStats = true;
 bool g_ShowOpenCV = true;
 bool g_ShowTools = true;
+bool g_ShowHardware = false;
 
 namespace UI
 {
@@ -517,6 +518,8 @@ TemplateState::ClearResults();
                 g_ShowOpenCV = !g_ShowOpenCV;
             if (ImGui::Selectable("功能窗口", g_ShowTools))
                 g_ShowTools = !g_ShowTools;
+            if (ImGui::Selectable("设备连接", g_ShowHardware))
+                g_ShowHardware = !g_ShowHardware;
             ImGui::Separator();
 
             if (ImGui::BeginMenu("主题"))
@@ -543,6 +546,8 @@ TemplateState::ClearResults();
                 g_ShowTools = true;
             if (ImGui::MenuItem("日志窗口"))
                 g_ShowLog = true;
+            if (ImGui::MenuItem("设备连接"))
+                g_ShowHardware = true;
             ImGui::EndMenu();
         }
 
@@ -667,6 +672,7 @@ TemplateState::ClearResults();
             ImGui::DockBuilderDockWindow("侧边栏",   left);
             ImGui::DockBuilderDockWindow("日志窗口", bottom);
             ImGui::DockBuilderDockWindow("性能统计", bottom);
+            ImGui::DockBuilderDockWindow("设备连接", right);
             // 每个停靠节点的标签栏在单窗口时自动隐藏（节省空间），图钉仍可用
             ImGuiDockNodeFlags autoHideFlags = ImGuiDockNodeFlags_AutoHideTabBar;
             if (auto n = ImGui::DockBuilderGetNode(left))   n->LocalFlags |= autoHideFlags;

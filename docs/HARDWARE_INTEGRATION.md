@@ -13,6 +13,12 @@ ToolResultStatus -> HardwareRuntimeService -> PLC tag / Modbus coil / OPC UA nod
 UI code should configure adapters and display status only. It must not call vendor SDKs
 or protocol sockets directly.
 
+The application exposes this through `View -> Device connection`. The window configures
+camera sources, Modbus TCP coils, Modbus-backed PLC tags, and OPC UA NodeIds without
+calling protocol implementations from UI code. `HardwareRuntimeService::Tick()` performs
+camera grabs asynchronously and publishes completed frames on the UI thread, so a camera
+read does not block ImGui rendering or mutate `ImageState` from a worker thread.
+
 ## OpenCV camera adapter
 
 `OpenCvCameraAdapter` supports camera indexes and stream URLs available through the
@@ -30,6 +36,11 @@ camera->StartStream();
 HardwareAdapterService::SetCamera(std::move(camera));
 HardwareRuntimeService::GrabCameraFrame(1000, "line-camera");
 ```
+
+For the application runtime, prefer `HardwareRuntimeService::ConnectCamera()` and enable
+automatic capture. Manual `GrabCameraFrame()` remains available for integrations and
+tests. Each published frame updates `FrameSourceState`, `ImageState`, `VisionContext`, and
+the pending GPU upload image together.
 
 Vendor cameras that expose UVC, RTSP, FFmpeg, or GStreamer can use this adapter. Cameras
 requiring a vendor SDK should implement `ICameraAdapter`; captured frames still enter
@@ -103,6 +114,10 @@ HardwareRuntimeService::PublishInspectionStatus(result.status, output);
 ```
 
 `Pass` writes true. `Fail` and `Error` write false unless `invert` is enabled.
+When automatic publishing is enabled in the device window, `ToolController` aggregates
+all non-skipped tool results at the end of each batch. `Error` has priority over `Fail`,
+and `Fail` has priority over `Pass`. A preflight failure or missing execution image also
+publishes `Error`; skipped/disabled tools do not turn an otherwise passing batch into NG.
 
 ## OPC UA
 
