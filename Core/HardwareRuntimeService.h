@@ -62,6 +62,7 @@ struct HardwareRuntimeSnapshot
     std::string outputAdapterKey;
     bool cameraAutoCapture = false;
     bool cameraCapturePending = false;
+    bool cameraToolRunPending = false;
     bool outputAutoPublish = false;
     int cameraFrameIndex = 0;
     DeviceOperationResult lastCameraOperation;
@@ -75,7 +76,7 @@ namespace HardwareRuntimeService
     void DisconnectCamera();
     void SetCameraAutoCapture(bool enabled);
     bool CameraAutoCaptureEnabled();
-    void RequestCameraFrame();
+    void RequestCameraFrame(bool runToolChainAfterCapture = false);
 
     DeviceOperationResult ConnectOutput(const HardwareOutputConnectionConfig& config);
     void DisconnectOutput();

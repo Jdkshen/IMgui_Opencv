@@ -111,6 +111,7 @@ void DrawHardwarePanel()
     static int cameraTimeoutMs = 250;
     static int cameraIntervalMs = 33;
     static bool cameraAutoCapture = true;
+    static bool cameraRunAfterCapture = true;
 
     static int outputType = 0;
     static char outputKey[96] = "output-main";
@@ -162,6 +163,8 @@ void DrawHardwarePanel()
     ImGui::InputInt("##camera_interval", &cameraIntervalMs);
     if (ImGui::Checkbox("自动抓帧", &cameraAutoCapture))
         HardwareRuntimeService::SetCameraAutoCapture(cameraAutoCapture);
+    ImGui::SameLine();
+    ImGui::Checkbox("抓帧后执行", &cameraRunAfterCapture);
 
     const float twoButtonWidth = (ImGui::GetContentRegionAvail().x -
         ImGui::GetStyle().ItemSpacing.x) * 0.5f;
@@ -179,8 +182,11 @@ void DrawHardwarePanel()
         LogOperation("工业相机连接", HardwareRuntimeService::ConnectCamera(config));
     }
     ImGui::SameLine();
-    if (ImGui::Button("抓取一帧", ImVec2(twoButtonWidth, 0.0f)))
-        HardwareRuntimeService::RequestCameraFrame();
+    if (ImGui::Button(cameraRunAfterCapture ? "抓帧并执行" : "抓取一帧",
+        ImVec2(twoButtonWidth, 0.0f)))
+    {
+        HardwareRuntimeService::RequestCameraFrame(cameraRunAfterCapture);
+    }
     if (ImGui::Button("断开相机", ImVec2(-1.0f, 0.0f)))
         HardwareRuntimeService::DisconnectCamera();
     DrawOperationMessage(snapshot.lastCameraOperation);

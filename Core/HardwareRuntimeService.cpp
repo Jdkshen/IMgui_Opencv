@@ -8,6 +8,7 @@
 #include "Open62541OpcUaAdapter.h"
 #include "OpenCvCameraAdapter.h"
 #include "TcpTextAdapter.h"
+#include "ToolController.h"
 #include "VideoCapture.h"
 
 #include <opencv2/core/mat.hpp>
@@ -44,6 +45,8 @@ bool s_cameraWorkerStop = false;
 bool s_cameraWorkerBusy = false;
 bool s_cameraFrameRequested = false;
 bool s_cameraAutoCapture = false;
+int s_runToolChainAfterFrameIndex = -1;
+bool s_cameraToolRunPending = false;
 bool s_outputAutoPublish = false;
 int s_cameraFrameIndex = 0;
 int s_cameraScheduledFrameIndex = 0;
@@ -139,6 +142,8 @@ void StopCameraWorker()
         s_cameraWorkerStop = true;
         s_cameraAutoCapture = false;
         s_cameraFrameRequested = false;
+        s_runToolChainAfterFrameIndex = -1;
+        s_cameraToolRunPending = false;
     }
     s_cameraWorkerCondition.notify_all();
     if (s_cameraWorker.joinable())
@@ -246,11 +251,13 @@ bool CameraAutoCaptureEnabled()
     return s_cameraAutoCapture;
 }
 
-void RequestCameraFrame()
+void RequestCameraFrame(bool runToolChainAfterCapture)
 {
     {
         std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
         s_cameraFrameRequested = true;
+        if (runToolChainAfterCapture)
+            s_runToolChainAfterFrameIndex = s_cameraScheduledFrameIndex + 1;
     }
     s_cameraWorkerCondition.notify_all();
 }
@@ -454,6 +461,7 @@ void Tick()
 {
     PendingCameraFrame pending;
     bool hasPendingFrame = false;
+    bool runToolChainAfterPublish = false;
     {
         std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
         if (s_hasPendingCameraFrame)
@@ -462,18 +470,46 @@ void Tick()
             s_pendingCameraFrame = {};
             s_hasPendingCameraFrame = false;
             hasPendingFrame = true;
+            if (s_runToolChainAfterFrameIndex >= 0 &&
+                pending.frameIndex >= s_runToolChainAfterFrameIndex)
+            {
+                runToolChainAfterPublish = pending.operation.success &&
+                    !pending.frame.empty();
+                s_runToolChainAfterFrameIndex = -1;
+            }
         }
     }
-    if (!hasPendingFrame)
-        return;
-
-    s_lastCameraOperation = pending.operation;
-    if (pending.operation.success && !pending.frame.empty())
+    if (hasPendingFrame)
     {
-        PublishFrame(pending.frame, pending.sourceName,
-            pending.frameIndex, pending.timestampMs);
-        s_cameraFrameIndex = pending.frameIndex;
-        s_lastCameraOperation.message = "工业相机帧已发布";
+        s_lastCameraOperation = pending.operation;
+        if (pending.operation.success && !pending.frame.empty())
+        {
+            PublishFrame(pending.frame, pending.sourceName,
+                pending.frameIndex, pending.timestampMs);
+            s_cameraFrameIndex = pending.frameIndex;
+            s_lastCameraOperation.message = "工业相机帧已发布";
+            if (runToolChainAfterPublish)
+            {
+                std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
+                s_cameraToolRunPending = true;
+            }
+        }
+    }
+
+    bool requestToolRun = false;
+    if (ToolController::GetMode() == ToolController::Mode::Idle)
+    {
+        std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
+        if (s_cameraToolRunPending)
+        {
+            s_cameraToolRunPending = false;
+            requestToolRun = true;
+        }
+    }
+    if (requestToolRun)
+    {
+        ToolController::RequestRunAll(false);
+        s_lastCameraOperation.message = "工业相机帧已发布，工具链已开始执行";
     }
 }
 
@@ -498,6 +534,8 @@ HardwareRuntimeSnapshot Snapshot()
         std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
         snapshot.cameraAutoCapture = s_cameraAutoCapture;
         snapshot.cameraCapturePending = s_cameraWorkerBusy || s_hasPendingCameraFrame;
+        snapshot.cameraToolRunPending = s_runToolChainAfterFrameIndex >= 0 ||
+            s_cameraToolRunPending;
     }
     snapshot.outputAutoPublish = s_outputAutoPublish;
     snapshot.cameraFrameIndex = s_cameraFrameIndex;

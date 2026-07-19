@@ -2255,6 +2255,30 @@ void TestHardwareRuntimeAutomation()
         ImageState::NeedUploadRef() && !ImageState::PendingUploadRef().empty(),
         "asynchronous industrial-camera frame was not published on Tick");
 
+    ToolController::Reset();
+    ToolChainState::ClearTools();
+    ToolInstance cameraInputTool;
+    cameraInputTool.type = 12;
+    ToolChainState::AddTool(std::move(cameraInputTool));
+    const int firstFrameIndex = cameraSnapshot.cameraFrameIndex;
+    HardwareRuntimeService::RequestCameraFrame(true);
+    bool linkedRunStarted = false;
+    for (int attempt = 0; attempt < 200; ++attempt)
+    {
+        HardwareRuntimeService::Tick();
+        if (HardwareRuntimeService::Snapshot().cameraFrameIndex > firstFrameIndex &&
+            ToolController::GetMode() == ToolController::Mode::Running)
+        {
+            linkedRunStarted = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    Require(linkedRunStarted,
+        "camera capture did not trigger the tool chain after publishing a new frame");
+    ToolController::Reset();
+    ToolChainState::ClearTools();
+
     auto modbus = std::make_unique<TestModbusAdapter>();
     TestModbusAdapter* modbusView = modbus.get();
     Require(HardwareAdapterService::Register("automation-output", std::move(modbus)) &&
