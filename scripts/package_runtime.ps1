@@ -119,6 +119,8 @@ try {
         "Windows_imgui.exe",
         "docs/recipe_examples/case_qr_clean.recipe",
         "docs/recipe_examples/case_pipeline.recipe",
+        "docs/recipe_examples/12345_tpl0.png",
+        "docs/recipe_examples/12345_tpl1.png",
         "assets/images/qr_tests/qr_test.png",
         "assets/images/ocr_product_sample.jpg",
         "docs/HARDWARE_INTEGRATION.md"
