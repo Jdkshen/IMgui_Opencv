@@ -15,7 +15,7 @@ namespace
         return {
             {"startX", roi.start.x}, {"startY", roi.start.y},
             {"endX", roi.end.x}, {"endY", roi.end.y},
-            {"type", roi.type}, {"points", std::move(points)}
+            {"angle", roi.angle}, {"type", roi.type}, {"points", std::move(points)}
         };
     }
 
@@ -26,6 +26,7 @@ namespace
         roi.start.y = value.value("startY", 0.0f);
         roi.end.x = value.value("endX", 0.0f);
         roi.end.y = value.value("endY", 0.0f);
+        roi.angle = value.value("angle", 0.0f);
         roi.type = value.value("type", ROI_TYPE_RECT);
         if (value.contains("points") && value["points"].is_array())
         {
@@ -254,7 +255,12 @@ nlohmann::json ToolInstance::ToRecipeJson() const
     SAVE_FIELD(measureNominal);
     SAVE_FIELD(measureToleranceMinus);
     SAVE_FIELD(measureTolerancePlus);
+    SAVE_FIELD(geometryDrawType);
 #undef SAVE_FIELD
+
+    result["geometryItems"] = json::array();
+    for (const GeometryPrimitive& primitive : geometryItems)
+        result["geometryItems"].push_back(GeometryPrimitiveToJson(primitive));
 
     result["judgement"] = {
         {"enabled", judgement.enabled}, {"stopOnFailure", judgement.stopOnFailure},
@@ -506,7 +512,19 @@ void ToolInstance::LoadRecipeJson(const nlohmann::json& source)
     LOAD_FIELD(measureNominal);
     LOAD_FIELD(measureToleranceMinus);
     LOAD_FIELD(measureTolerancePlus);
+    LOAD_FIELD(geometryDrawType);
 #undef LOAD_FIELD
+
+    geometryItems.clear();
+    if (source.contains("geometryItems") && source["geometryItems"].is_array())
+    {
+        for (const auto& value : source["geometryItems"])
+        {
+            GeometryPrimitive primitive;
+            if (GeometryPrimitiveFromJson(value, primitive))
+                geometryItems.push_back(std::move(primitive));
+        }
+    }
 
     if (source.contains("judgement") && source["judgement"].is_object())
     {

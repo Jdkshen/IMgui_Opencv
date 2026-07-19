@@ -99,6 +99,7 @@
     <ClCompile Include="..\Algorithm\DifferenceTool.cpp" />
     <ClCompile Include="..\Algorithm\ContourDetector.cpp" />
     <ClCompile Include="..\Algorithm\EdgeTool.cpp" />
+    <ClCompile Include="..\Algorithm\GeometryDrawTool.cpp" />
     <ClCompile Include="..\Algorithm\ITool.cpp" />
     <ClCompile Include="..\Algorithm\LineDetector.cpp" />
     <ClCompile Include="..\Algorithm\MorphologyTool.cpp" />
@@ -139,6 +140,8 @@
     <ClCompile Include="..\Core\ResultROIResolver.cpp" />
     <ClCompile Include="..\Core\ROIState.cpp" />
     <ClCompile Include="..\Core\ROIEditorState.cpp" />
+    <ClCompile Include="..\Core\RotatedROI.cpp" />
+    <ClCompile Include="..\Core\GeometryPrimitive.cpp" />
     <ClCompile Include="..\Core\RealtimeDetectionState.cpp" />
     <ClCompile Include="..\Core\ResultOverlayState.cpp" />
     <ClCompile Include="..\Core\ToolChainState.cpp" />
@@ -158,6 +161,7 @@
     <ClInclude Include="..\Algorithm\DifferenceTool.h" />
     <ClInclude Include="..\Algorithm\ContourDetector.h" />
     <ClInclude Include="..\Algorithm\EdgeTool.h" />
+    <ClInclude Include="..\Algorithm\GeometryDrawTool.h" />
     <ClInclude Include="..\Algorithm\ITool.h" />
     <ClInclude Include="..\Algorithm\LineDetector.h" />
     <ClInclude Include="..\Algorithm\MorphologyTool.h" />
@@ -199,6 +203,8 @@
     <ClInclude Include="..\Core\ResultROIResolver.h" />
     <ClInclude Include="..\Core\ROIState.h" />
     <ClInclude Include="..\Core\ROIEditorState.h" />
+    <ClInclude Include="..\Core\RotatedROI.h" />
+    <ClInclude Include="..\Core\GeometryPrimitive.h" />
     <ClInclude Include="..\Core\DetectionTypes.h" />
     <ClInclude Include="..\Core\RealtimeDetectionState.h" />
     <ClInclude Include="..\Core\ResultPublisher.h" />

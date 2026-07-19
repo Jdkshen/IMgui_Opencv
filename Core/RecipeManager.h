@@ -47,6 +47,7 @@ struct RecipeROI
     float startY = 0.0f;
     float endX = 0.0f;
     float endY = 0.0f;
+    float angle = 0.0f;
     int type = 0;
 };
 

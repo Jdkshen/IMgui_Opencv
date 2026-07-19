@@ -2,6 +2,7 @@
 #include "../imgui/imgui.h"
 #include "../imgui/imgui_impl_dx12.h"
 #include "ImageViewer.h"
+#include "GeometryDrawEditor.h"
 #include "ROIManager.h"
 #include "../Core/OpenFileDialog.h"
 #include "../Core/DX12Context.h"
@@ -517,7 +518,8 @@ namespace UI
 		}
 
 		// 左键拖拽平移（未拖动ROI时）
-		if (!gDraggingROI && gActiveHandle == HANDLE_NONE &&
+			if (!GeometryDrawEditor::IsCanvasActive() &&
+				!gDraggingROI && gActiveHandle == HANDLE_NONE &&
 			ImGui::IsWindowHovered() && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
 		{
 			ImVec2 delta = ImGui::GetIO().MouseDelta;
@@ -612,8 +614,9 @@ namespace UI
 			}
 
 			// 统一结果叠加层（Contour/Shape/Line/MCF 已全部迁移至此）
-			DrawUnifiedResults(dl);
-			DrawFixtureOverlays(dl);
+				DrawUnifiedResults(dl);
+				DrawFixtureOverlays(dl);
+				GeometryDrawEditor::DrawCanvasOverlay(dl);
 
 			// 坐标网格：固定步长，跟随平移（参照 ImGui Demo）
 			if (g_ShowCoordGrid)
@@ -645,7 +648,8 @@ namespace UI
 		}
 
 		// 处理ROI交互 + 绘制匹配结果
-		HandleROIInteraction();
+			if (!GeometryDrawEditor::HandleCanvasInteraction())
+				HandleROIInteraction();
 		ImGui::EndChild();
 
 		ImGui::Separator();

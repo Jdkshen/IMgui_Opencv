@@ -4,6 +4,7 @@
 #include "ColorAnalyzer.h"
 #include "DifferenceTool.h"
 #include "EdgeTool.h"
+#include "GeometryDrawTool.h"
 #include "MorphologyTool.h"
 #include "MeasurementTool.h"
 #include "MultiColorFinder.h"
@@ -102,6 +103,8 @@ namespace
             ToolRegistry::RegisterName(15, "Measurement");
             ToolRegistry::Register(16, []() -> std::unique_ptr<ITool> { return std::make_unique<DifferenceTool>(); });
             ToolRegistry::RegisterName(16, "Difference");
+            ToolRegistry::Register(17, []() -> std::unique_ptr<ITool> { return std::make_unique<GeometryDrawTool>(); });
+            ToolRegistry::RegisterName(17, "GeometryDraw");
         }
     };
 

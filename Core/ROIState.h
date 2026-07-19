@@ -26,6 +26,11 @@ namespace ROIState
     // 在给定 ROI 列表中智能选择索引：优先保持当前选中，否则选第一个
     int SelectIndexFor(const std::vector<ROI>& rois);
 
+    void QueueRestoreAfterImageLoad(std::vector<ROI> rois);
+    bool ApplyQueuedRestore();
+    void CancelQueuedRestore();
+    bool HasQueuedRestore();
+
     // 清空所有 ROI 和交互状态（切换图片时调用）
     void ClearInteraction();
 }

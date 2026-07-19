@@ -301,7 +301,8 @@ namespace RecipeManager
         json &rois = j["rois"] = json::array();
         for (const auto &r : data.rois)
         {
-            rois.push_back({{"startX", r.startX}, {"startY", r.startY}, {"endX", r.endX}, {"endY", r.endY}, {"type", r.type}});
+            rois.push_back({{"startX", r.startX}, {"startY", r.startY},
+                {"endX", r.endX}, {"endY", r.endY}, {"angle", r.angle}, {"type", r.type}});
         }
 
         // Tool instances
@@ -494,6 +495,7 @@ namespace RecipeManager
                 roi.startY = r.value("startY", 0.0f);
                 roi.endX = r.value("endX", 0.0f);
                 roi.endY = r.value("endY", 0.0f);
+                roi.angle = r.value("angle", 0.0f);
                 roi.type = r.value("type", 0);
                 data.rois.push_back(roi);
             }
@@ -609,6 +611,7 @@ namespace RecipeManager
             r.startY = roi.start.y;
             r.endX = roi.end.x;
             r.endY = roi.end.y;
+            r.angle = roi.angle;
             r.type = roi.type;
             d.rois.push_back(r);
         }
@@ -648,18 +651,28 @@ namespace RecipeManager
     // ===================== Apply recipe to current runtime =====================
     void Apply(const RecipeData &data)
     {
-        if (!data.imagePath.empty())
-            FrameNavigation::RequestImagePath(ResolveRecipeAssetPath(data.imagePath));
-
         // ROI
-        ROIState::Items().clear();
+        std::vector<ROI> restoredROIs;
+        restoredROIs.reserve(data.rois.size());
         for (const auto &r : data.rois)
         {
             ROI roi;
             roi.start = ImVec2(r.startX, r.startY);
             roi.end = ImVec2(r.endX, r.endY);
+            roi.angle = r.angle;
             roi.type = r.type;
-            ROIState::Items().push_back(roi);
+            restoredROIs.push_back(std::move(roi));
+        }
+        if (!data.imagePath.empty())
+        {
+            ROIState::QueueRestoreAfterImageLoad(restoredROIs);
+            FrameNavigation::RequestImagePath(ResolveRecipeAssetPath(data.imagePath));
+        }
+        else
+        {
+            ROIState::CancelQueuedRestore();
+            ROIState::Items() = std::move(restoredROIs);
+            ROIState::SetSelectedIndex(-1);
         }
 
         // 工具实例

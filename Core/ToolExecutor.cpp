@@ -8,6 +8,7 @@
 #include "../Algorithm/DifferenceTool.h"
 #include "../Algorithm/ContourDetector.h"
 #include "../Algorithm/EdgeTool.h"
+#include "../Algorithm/GeometryDrawTool.h"
 #include "../Algorithm/LineDetector.h"
 #include "../Algorithm/MorphologyTool.h"
 #include "../Algorithm/MeasurementTool.h"
@@ -24,6 +25,7 @@
 #include "ImageState.h"
 #include "ImageUtils.h"
 #include "ROIState.h"
+#include "RotatedROI.h"
 #include "TemplateState.h"
 #include "ToolChainState.h"
 #include "ToolJudgement.h"
@@ -98,11 +100,6 @@ std::vector<ROI> SelectSearchROIs(const ToolInstance& it)
     return resolved;
 }
 
-bool HasSearchROI(const ToolInstance& it)
-{
-    return !it.searchROIs.empty() || !ROIState::ReadOnlyItems().empty();
-}
-
 bool ToolCanUseSharedInput(const ToolInstance& it)
 {
     switch (it.type)
@@ -119,6 +116,7 @@ bool ToolCanUseSharedInput(const ToolInstance& it)
     case 14: // QR code
     case 15: // Measurement
     case 16: // Difference
+    case 17: // Geometry drawing
         return true;
     case 10: // Multi-color finder preprocesses in-place only when gray/binary is enabled.
         return !it.mcfImgGray && !it.mcfImgBinary;
@@ -372,7 +370,7 @@ struct LegacyIToolRegister
 
 static LegacyIToolRegister s_LegacyIToolRegister;
 
-void SyncIToolParams(ToolInstance& it)
+void SyncIToolParams(ToolInstance& it, const VisionContext& context)
 {
     const int t = it.type;
     if (t == 0) {
@@ -401,8 +399,8 @@ void SyncIToolParams(ToolInstance& it)
             tt->imgEnableThreshold = it.imgEnableThreshold;
             tt->imgThreshold = it.imgThreshold;
             tt->templateImg = it.templateImg;
-            tt->useSearchROI = HasSearchROI(it);
-            tt->searchROIs = SelectSearchROIs(it);
+            tt->useSearchROI = !context.rois.empty();
+            tt->searchROIs = context.rois;
         }
     } else if (t == 2) {
         if (auto* bt = dynamic_cast<BlobTool*>(it.toolImpl)) {
@@ -446,7 +444,7 @@ void SyncIToolParams(ToolInstance& it)
             yt->classesPath = it.yoloClassesPath;
             yt->confThreshold = it.yoloConfThreshold;
             yt->nmsThreshold = it.yoloNmsThreshold;
-            yt->useROI = HasSearchROI(it);
+            yt->useROI = !context.rois.empty();
             yt->useGPU = it.yoloUseGPU;
         }
     } else if (t == 5) {
@@ -479,7 +477,7 @@ void SyncIToolParams(ToolInstance& it)
             lt->minLength = it.lineMinLength; lt->maxGap = it.lineMaxGap;
             lt->minAngle = it.lineMinAngle; lt->maxAngle = it.lineMaxAngle;
             lt->thickness = it.lineThickness; lt->maxLines = it.lineMaxLines;
-            lt->showLabels = it.lineShowLabels; lt->useROI = HasSearchROI(it);
+            lt->showLabels = it.lineShowLabels; lt->useROI = !context.rois.empty();
         }
     } else if (t == 8) {
         if (auto* mt = dynamic_cast<MorphologyITool*>(it.toolImpl)) {
@@ -494,7 +492,7 @@ void SyncIToolParams(ToolInstance& it)
             ct->params.colorSpace = it.colorSpace;
             ct->params.histBins = it.colorHistBins;
             ct->params.showHist = it.colorShowHist;
-            ct->params.useROI = it.colorUseROI || HasSearchROI(it);
+            ct->params.useROI = it.colorUseROI || !context.rois.empty();
             ct->params.histHeight = it.colorHistHeight;
         }
     } else if (t == 10) {
@@ -505,7 +503,7 @@ void SyncIToolParams(ToolInstance& it)
             mf->imgUseGray = it.mcfImgGray;
             mf->imgUseBinary = it.mcfImgBinary;
             mf->imgBinThresh = it.mcfImgBinThresh;
-            mf->useROI = HasSearchROI(it);
+            mf->useROI = !context.rois.empty();
             mf->maxResults = it.mcfMaxResults;
             mf->minDist = it.mcfMinDist;
             mf->crossSize = it.mcfCrossSize;
@@ -534,11 +532,11 @@ void SyncIToolParams(ToolInstance& it)
             ot->roiPadding = it.ocrRoiPadding;
             ot->fastMode = it.ocrFastMode;
             ot->detectOnly = it.ocrDetectOnly;
-            ot->useROI = it.ocrUseROI || HasSearchROI(it);
+            ot->useROI = it.ocrUseROI || !context.rois.empty();
         }
     } else if (t == 14) {
         if (auto* qt = dynamic_cast<QRCodeTool*>(it.toolImpl)) {
-            qt->useROI = it.qrUseROI || HasSearchROI(it);
+            qt->useROI = it.qrUseROI || !context.rois.empty();
             qt->detectMulti = it.qrDetectMulti;
             qt->enhance = it.qrEnhance;
             qt->minSize = it.qrMinSize;
@@ -571,6 +569,9 @@ void SyncIToolParams(ToolInstance& it)
             mt->toleranceMinus = it.measureToleranceMinus;
             mt->tolerancePlus = it.measureTolerancePlus;
         }
+    } else if (t == 17) {
+        if (auto* geometry = dynamic_cast<GeometryDrawTool*>(it.toolImpl))
+            geometry->primitives = it.geometryItems;
     }
 }
 
@@ -684,7 +685,7 @@ void LogToolTimings(const ToolInstance& it, const ToolRunTimings& timings)
 namespace ToolExecutor
 {
 
-bool RunViaITool(ToolInstance& it, VisionContext& ctx, ToolRunTimings* timings = nullptr)
+bool RunViaIToolInternal(ToolInstance& it, VisionContext& ctx, ToolRunTimings* timings = nullptr)
 {
     if (ctx.image.empty()) {
         LogSystem::Add(LOG_WARN, "Please load an image first");
@@ -700,16 +701,81 @@ bool RunViaITool(ToolInstance& it, VisionContext& ctx, ToolRunTimings* timings =
     }
 
     auto tPrepare0 = std::chrono::steady_clock::now();
-    SyncIToolParams(it);
+    VisionContext rotatedContext;
+    VisionContext* executionContext = &ctx;
+    RotatedROI::Transform rotatedTransform;
+    if (it.type != 17 && ctx.rois.size() == 1 && ctx.rois[0].type == ROI_TYPE_RECT &&
+        std::abs(ctx.rois[0].angle) >= 0.0001f)
+    {
+        cv::Mat rotatedImage;
+        if (RotatedROI::Extract(ctx.image, ctx.rois[0], rotatedImage, rotatedTransform))
+        {
+            rotatedContext = ctx;
+            rotatedContext.image = std::move(rotatedImage);
+            if (!ctx.originalImage.empty())
+            {
+                RotatedROI::Transform originalTransform;
+                cv::Mat rotatedOriginal;
+                if (RotatedROI::Extract(ctx.originalImage, ctx.rois[0],
+                                        rotatedOriginal, originalTransform))
+                {
+                    rotatedContext.originalImage = std::move(rotatedOriginal);
+                }
+                else
+                {
+                    rotatedContext.originalImage = rotatedContext.image;
+                }
+            }
+            ROI localROI;
+            localROI.type = ROI_TYPE_RECT;
+            localROI.start = ImVec2(0.0f, 0.0f);
+            localROI.end = ImVec2(static_cast<float>(rotatedContext.image.cols),
+                                  static_cast<float>(rotatedContext.image.rows));
+            rotatedContext.rois.assign(1, localROI);
+            rotatedContext.selectedROI = 0;
+            rotatedContext.width = rotatedContext.image.cols;
+            rotatedContext.height = rotatedContext.image.rows;
+            rotatedContext.frame.original = rotatedContext.originalImage;
+            executionContext = &rotatedContext;
+        }
+    }
+
+    SyncIToolParams(it, *executionContext);
+    if (executionContext == &rotatedContext && it.type == 16)
+    {
+        if (auto* difference = dynamic_cast<DifferenceTool*>(it.toolImpl))
+        {
+            RotatedROI::Transform referenceTransform;
+            cv::Mat rotatedReference;
+            if (RotatedROI::Extract(it.differenceReferenceImage, ctx.rois[0],
+                                    rotatedReference, referenceTransform))
+            {
+                difference->referenceImage = std::move(rotatedReference);
+            }
+        }
+    }
     if (t == 6) {
-        ctx.frozenTemplate = TemplateState::FrozenTemplate();
+        executionContext->frozenTemplate = TemplateState::FrozenTemplate();
     }
     auto tPrepare1 = std::chrono::steady_clock::now();
     if (timings)
         timings->prepareMs += std::chrono::duration<float, std::milli>(tPrepare1 - tPrepare0).count();
 
     auto t0 = std::chrono::steady_clock::now();
-    auto result = it.toolImpl->Execute(ctx);
+    auto result = it.toolImpl->Execute(*executionContext);
+    if (executionContext == &rotatedContext)
+    {
+        RotatedROI::RestoreResult(result, rotatedTransform);
+        if (!result.debugImage.empty())
+        {
+            cv::Mat restoredDebugImage;
+            if (RotatedROI::RestoreDebugImage(result.debugImage, ctx.image,
+                                              rotatedTransform, restoredDebugImage))
+            {
+                result.debugImage = std::move(restoredDebugImage);
+            }
+        }
+    }
     ApplyMissingModelSkipPolicy(it, result);
     auto t1 = std::chrono::steady_clock::now();
     const float ms = std::chrono::duration<float, std::milli>(t1 - t0).count();
@@ -880,7 +946,15 @@ bool RunViaITool(ToolInstance& it)
     auto tPrepare1 = std::chrono::steady_clock::now();
     timings.prepareMs += std::chrono::duration<float, std::milli>(tPrepare1 - tPrepare0).count();
 
-    const bool dirty = RunViaITool(it, gContext, &timings);
+    const bool dirty = RunViaIToolInternal(it, gContext, &timings);
+    LogToolTimings(it, timings);
+    return dirty;
+}
+
+bool RunViaITool(ToolInstance& it, VisionContext& ctx)
+{
+    ToolRunTimings timings;
+    const bool dirty = RunViaIToolInternal(it, ctx, &timings);
     LogToolTimings(it, timings);
     return dirty;
 }
@@ -891,7 +965,7 @@ bool Execute(int type, ToolInstance& it)
     case 0: case 1: case 2: case 3:
     case 4: case 5: case 6: case 7:
     case 8: case 9: case 10: case 11:
-    case 13: case 14: case 15:
+    case 13: case 14: case 15: case 16: case 17:
         return RunViaITool(it);
     default: return false;
     }

@@ -2,6 +2,7 @@
 #include "../Algorithm/ColorAnalyzer.h"
 #include "../Algorithm/DifferenceTool.h"
 #include "../Algorithm/EdgeTool.h"
+#include "../Algorithm/GeometryDrawTool.h"
 #include "../Algorithm/MorphologyTool.h"
 #include "../Algorithm/CaliperOperators.h"
 #include "../Algorithm/MeasurementTool.h"
@@ -39,6 +40,7 @@
 #include "../Core/InspectionHistory.h"
 #include "../Core/ROIState.h"
 #include "../Core/ROIEditorState.h"
+#include "../Core/RotatedROI.h"
 #include "../Core/ToolChainState.h"
 #include "../Core/ToolChainValidator.h"
 #include "../Core/ToolChainPreflight.h"
@@ -604,6 +606,146 @@ void TestYoloToolNoModelPath()
     Require(result.message == "model is not loaded", "YOLO failure message regressed");
 }
 
+void TestRotatedROIExtractionAndResultRestore()
+{
+    cv::Mat source = cv::Mat::zeros(160, 180, CV_8UC3);
+    ROI roi;
+    roi.type = ROI_TYPE_RECT;
+    roi.start = ImVec2(55.0f, 60.0f);
+    roi.end = ImVec2(125.0f, 100.0f);
+    roi.angle = 30.0f;
+
+    const auto corners = roi.Corners();
+    std::vector<cv::Point> polygon;
+    for (const ImVec2& point : corners)
+        polygon.emplace_back(cvRound(point.x), cvRound(point.y));
+    cv::fillConvexPoly(source, polygon, cv::Scalar(40, 120, 220));
+
+    cv::Mat crop;
+    RotatedROI::Transform transform;
+    Require(RotatedROI::Extract(source, roi, crop, transform),
+        "rotated ROI extraction failed");
+    Require(crop.size() == cv::Size(70, 40), "rotated ROI crop size regressed");
+    Require(cv::mean(crop)[2] > 180.0, "rotated ROI crop sampled the wrong image area");
+
+    ToolResult result;
+    ToolResult::Region region;
+    region.bbox = cv::Rect(10, 8, 20, 12);
+    region.contour = {{10, 8}, {30, 8}, {30, 20}, {10, 20}};
+    region.center = cv::Point2f(20.0f, 14.0f);
+    region.area = 240.0f;
+    region.angle = 5.0f;
+    result.regions.push_back(region);
+    result.detections.push_back({cv::Rect(12, 10, 9, 7), 2, 0.8f, "part"});
+    result.lines.push_back({cv::Point(0, 20), cv::Point(70, 20), 70.0f, 0.0f});
+    result.texts.push_back({"code", cv::Rect(15, 6, 18, 8), 0.9f});
+    result.debugImage = crop.clone();
+
+    const cv::Point2f expectedCenter = RotatedROI::MapPoint(
+        cv::Point2f(20.0f, 14.0f), transform.cropToSource);
+    RotatedROI::RestoreResult(result, transform);
+    Require(cv::norm(result.regions[0].center - expectedCenter) < 0.01,
+        "rotated ROI region center restore regressed");
+    Require(std::abs(result.regions[0].angle - 35.0f) < 0.01f,
+        "rotated ROI region angle restore regressed");
+    Require(result.regions[0].bbox.contains(result.regions[0].contour.front()),
+        "rotated ROI region bounds restore regressed");
+    Require(result.detections[0].box.area() > 0 && result.texts[0].box.area() > 0,
+        "rotated ROI box restore regressed");
+    Require(std::abs(result.lines[0].angle - 30.0f) < 1.0f,
+        "rotated ROI line angle restore regressed");
+
+    cv::Mat restoredDebug;
+    Require(RotatedROI::RestoreDebugImage(result.debugImage, source, transform, restoredDebug),
+        "rotated ROI debug image restore failed");
+    Require(restoredDebug.size() == source.size() && restoredDebug.type() == source.type(),
+        "rotated ROI debug image shape regressed");
+    const cv::Rect bounds = roi.ToCvRect();
+    for (const ImVec2& point : corners)
+        Require(bounds.contains(cv::Point(static_cast<int>(std::floor(point.x)),
+                                          static_cast<int>(std::floor(point.y)))),
+            "rotated ROI covering rectangle regressed");
+}
+
+void TestToolExecutorUsesRotatedROI()
+{
+    VisionContext context;
+    context.image = cv::Mat::zeros(180, 200, CV_8UC3);
+    cv::circle(context.image, cv::Point(100, 90), 9, cv::Scalar(255, 255, 255), cv::FILLED);
+    context.originalImage = context.image;
+    context.width = context.image.cols;
+    context.height = context.image.rows;
+    ROI roi;
+    roi.type = ROI_TYPE_RECT;
+    roi.start = ImVec2(60.0f, 65.0f);
+    roi.end = ImVec2(140.0f, 115.0f);
+    roi.angle = 32.0f;
+    context.rois.push_back(roi);
+    context.selectedROI = 0;
+
+    ToolInstance tool;
+    tool.type = 2;
+    tool.toolId = 7001;
+    tool.blobThresholdMode = 1;
+    tool.blobThreshold = 127;
+    tool.blobMinArea = 50;
+    tool.blobMaxArea = 1000;
+    ToolExecutor::RunViaITool(tool, context);
+    Require(tool.hasLastResult && tool.lastResult.success &&
+        tool.lastResult.regions.size() == 1,
+        "ToolExecutor rotated ROI Blob execution failed");
+    Require(cv::norm(tool.lastResult.regions[0].center - cv::Point2f(100.0f, 90.0f)) < 2.0,
+        "ToolExecutor rotated ROI result coordinates regressed");
+}
+
+void TestGeometryDrawToolAndRecipe()
+{
+    GeometryPrimitive line;
+    line.type = GeometryPrimitiveType::Line;
+    line.name = "axis";
+    line.points = {{10.0f, 12.0f}, {90.0f, 40.0f}};
+
+    GeometryPrimitive rotated;
+    rotated.type = GeometryPrimitiveType::RotatedRectangle;
+    rotated.name = "rotated";
+    rotated.points = {{35.0f, 30.0f}, {95.0f, 70.0f}};
+    rotated.angle = 27.5f;
+    rotated.filled = true;
+    rotated.color = {255, 80, 20, 128};
+
+    GeometryPrimitive text;
+    text.type = GeometryPrimitiveType::Text;
+    text.name = "caption";
+    text.text = "测试 A";
+    text.points = {{8.0f, 80.0f}};
+    text.fontSize = 18;
+
+    VisionContext context;
+    context.image = cv::Mat::zeros(110, 130, CV_8UC3);
+    GeometryDrawTool tool;
+    tool.primitives = {line, rotated, text};
+    ToolResult result = tool.Execute(context);
+    Require(result.success && result.debugImage.size() == context.image.size(),
+        "geometry draw output image regressed");
+    Require(result.lines.size() == 1 && result.regions.size() == 1 && result.texts.size() == 1,
+        "geometry draw result contract regressed");
+    Require(cv::countNonZero(result.debugImage.reshape(1)) > 0,
+        "geometry draw produced a blank image");
+
+    ToolInstance instance;
+    instance.type = 17;
+    instance.geometryDrawType = static_cast<int>(GeometryPrimitiveType::RotatedRectangle);
+    instance.geometryItems = {line, rotated, text};
+    ToolInstance loaded;
+    loaded.LoadRecipeJson(instance.ToRecipeJson());
+    Require(loaded.type == 17 && loaded.geometryItems.size() == 3 &&
+        loaded.geometryDrawType == static_cast<int>(GeometryPrimitiveType::RotatedRectangle) &&
+        std::abs(loaded.geometryItems[1].angle - 27.5f) < 0.001f &&
+        loaded.geometryItems[2].text == "测试 A",
+        "geometry draw recipe serialization regressed");
+    Require(ITool::Create(17) != nullptr, "geometry draw tool registration regressed");
+}
+
 void TestQRCodeToolRecognizesBundledSample()
 {
     const std::filesystem::path imagePath =
@@ -1144,7 +1286,7 @@ void TestRecipeRoundTrip()
     data.threshold.thresholdValue = 123;
     data.tmMatch.maxResults = 3;
     data.tmMatch.matchThreshold = 0.91f;
-    data.rois.push_back({1.0f, 2.0f, 30.0f, 40.0f, 0});
+    data.rois.push_back({1.0f, 2.0f, 30.0f, 40.0f, 27.5f, 0});
 
     ToolInstance tool;
     tool.type = 4;
@@ -1188,6 +1330,7 @@ void TestRecipeRoundTrip()
     toolROI.type = ROI_TYPE_RECT;
     toolROI.start = ImVec2(5.0f, 6.0f);
     toolROI.end = ImVec2(20.0f, 21.0f);
+    toolROI.angle = -12.25f;
     tool.searchROIs.push_back(toolROI);
     RecipeToolInstance toolSnapshot;
     toolSnapshot.CaptureFrom(tool);
@@ -1280,7 +1423,8 @@ void TestRecipeRoundTrip()
     Require(loaded.name == data.name, "recipe name round-trip regressed");
     Require(loaded.threshold.useGray == data.threshold.useGray, "threshold round-trip regressed");
     Require(loaded.threshold.thresholdValue == data.threshold.thresholdValue, "threshold value round-trip regressed");
-    Require(loaded.rois.size() == 1 && loaded.rois[0].endX == 30.0f, "ROI round-trip regressed");
+    Require(loaded.rois.size() == 1 && loaded.rois[0].endX == 30.0f &&
+        std::abs(loaded.rois[0].angle - 27.5f) < 0.001f, "ROI round-trip regressed");
     Require(loaded.tools.size() == 4, "tool count round-trip regressed");
     const ToolInstance loadedTool = loaded.tools[0].CreateToolInstance();
     const ToolInstance loadedMcf = loaded.tools[1].CreateToolInstance();
@@ -1304,6 +1448,9 @@ void TestRecipeRoundTrip()
     Require(loadedTool.groupName == "检测组" && loadedTool.collapsed,
         "tool group/collapse recipe round-trip regressed");
     Require(loadedTool.yoloUseROI, "YOLO ROI flag round-trip regressed");
+    Require(loadedTool.searchROIs.size() == 1 &&
+        std::abs(loadedTool.searchROIs[0].angle + 12.25f) < 0.001f,
+        "tool ROI angle round-trip regressed");
     Require(loadedTool.judgement.enabled && loadedTool.judgement.stopOnFailure,
         "judgement flags round-trip regressed");
     Require(loadedTool.judgement.minResultCount == 2 && loadedTool.judgement.maxResultCount == 5,
@@ -1372,7 +1519,26 @@ void TestRecipeRoundTrip()
         cv::norm(loadedMeasurement.fixture.referenceOrigin - cv::Point2f(12.0f, 34.0f)) < 0.001f,
         "fixture settings round-trip regressed");
 
+    const std::filesystem::path legacyPath =
+        std::filesystem::temp_directory_path() / "imgui_opencv_legacy_roi.recipe";
+    {
+        std::ifstream input(path);
+        nlohmann::json legacy = nlohmann::json::parse(input);
+        legacy["rois"][0].erase("angle");
+        legacy["tools"][0]["searchROIs"][0].erase("angle");
+        std::ofstream output(legacyPath);
+        output << legacy.dump(2);
+    }
+    RecipeData legacyLoaded;
+    Require(RecipeManager::Load(legacyPath.string().c_str(), legacyLoaded),
+        "legacy ROI recipe load failed");
+    const ToolInstance legacyTool = legacyLoaded.tools[0].CreateToolInstance();
+    Require(legacyLoaded.rois.size() == 1 && legacyLoaded.rois[0].angle == 0.0f &&
+        legacyTool.searchROIs.size() == 1 && legacyTool.searchROIs[0].angle == 0.0f,
+        "legacy recipe ROI angle did not default to zero");
+
     std::filesystem::remove(path);
+    std::filesystem::remove(legacyPath);
     std::filesystem::remove(path.parent_path() / "imgui_opencv_regression_tool.png");
     std::filesystem::remove(path.parent_path() / "imgui_opencv_regression_difference.png");
 }
@@ -3125,7 +3291,21 @@ void TestToolInstanceLabelDefaultIsEmpty()
 void TestCoreStateOwnsRoiAndToolChain()
 {
     ROIState::ClearInteraction();
+    ROIState::CancelQueuedRestore();
     ToolChainState::ClearTools();
+
+    ROI queued;
+    queued.start = ImVec2(10.0f, 20.0f);
+    queued.end = ImVec2(50.0f, 60.0f);
+    queued.angle = 22.5f;
+    ROIState::QueueRestoreAfterImageLoad({queued});
+    Require(ROIState::HasQueuedRestore(), "recipe ROI restore was not queued");
+    ROIState::ClearInteraction();
+    Require(ROIState::ApplyQueuedRestore() && ROIState::ReadOnlyItems().size() == 1 &&
+        std::abs(ROIState::ReadOnlyItems()[0].angle - 22.5f) < 0.001f,
+        "recipe ROI restore after image load regressed");
+    ROIState::CancelQueuedRestore();
+    ROIState::ClearInteraction();
 
     ROI roi;
     roi.start = ImVec2(1.0f, 2.0f);
@@ -3421,6 +3601,9 @@ int main(int argc, char** argv)
         }
         TestTemplateMatch();
         TestRoiConversion();
+        TestRotatedROIExtractionAndResultRestore();
+        TestToolExecutorUsesRotatedROI();
+        TestGeometryDrawToolAndRecipe();
         TestYoloToolNoModelPath();
         TestQRCodeToolRecognizesBundledSample();
         TestRecursiveImageFolderScanSupportsCommonFormats();

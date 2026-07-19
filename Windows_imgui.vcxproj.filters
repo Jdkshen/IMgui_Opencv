@@ -102,6 +102,8 @@
     <ClInclude Include="Core\ROIEditorState.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\RealtimeDetectionState.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ROI.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\RotatedROI.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\GeometryPrimitive.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ToolInstance.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ToolAssetService.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ToolROIService.h"><Filter>Core</Filter></ClInclude>
@@ -119,6 +121,7 @@
     <ClInclude Include="Algorithm\DifferenceTool.h"><Filter>Algorithm</Filter></ClInclude>
     <ClInclude Include="UI\DockSpaceHost.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="UI\ImageViewer.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="UI\GeometryDrawEditor.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="UI\HardwareWindow.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="UI\LogWindow.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="UI\ROIManager.h"><Filter>UI</Filter></ClInclude>
@@ -135,6 +138,7 @@
     <ClInclude Include="Algorithm\ThresholdTool.h"><Filter>Algorithm</Filter></ClInclude>
     <ClInclude Include="Algorithm\ContourDetector.h"><Filter>Algorithm</Filter></ClInclude>
     <ClInclude Include="Algorithm\EdgeTool.h"><Filter>Algorithm</Filter></ClInclude>
+    <ClInclude Include="Algorithm\GeometryDrawTool.h"><Filter>Algorithm</Filter></ClInclude>
     <ClInclude Include="Algorithm\ShapeMatcher.h"><Filter>Algorithm</Filter></ClInclude>
     <ClInclude Include="Algorithm\BlobTool.h"><Filter>Algorithm</Filter></ClInclude>
     <ClInclude Include="Algorithm\MorphologyTool.h">
@@ -199,6 +203,8 @@
     <ClCompile Include="Core\LiveYoloRunner.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ROIState.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ROIEditorState.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\RotatedROI.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\GeometryPrimitive.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\VisionContext.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ToolExecutor.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ToolInstance.cpp"><Filter>Core</Filter></ClCompile>
@@ -215,6 +221,7 @@
     <ClCompile Include="Core\OpenFileDialog.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="UI\DockSpaceHost.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="UI\ImageViewer.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="UI\GeometryDrawEditor.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="UI\HardwareWindow.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="UI\LogWindow.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="UI\ROIManager.cpp"><Filter>UI</Filter></ClCompile>
@@ -232,6 +239,7 @@
     <ClCompile Include="Algorithm\ThresholdTool.cpp"><Filter>Algorithm</Filter></ClCompile>
     <ClCompile Include="Algorithm\ContourDetector.cpp"><Filter>Algorithm</Filter></ClCompile>
     <ClCompile Include="Algorithm\EdgeTool.cpp"><Filter>Algorithm</Filter></ClCompile>
+    <ClCompile Include="Algorithm\GeometryDrawTool.cpp"><Filter>Algorithm</Filter></ClCompile>
     <ClCompile Include="Algorithm\ShapeMatcher.cpp"><Filter>Algorithm</Filter></ClCompile>
     <ClCompile Include="Algorithm\BlobTool.cpp"><Filter>Algorithm</Filter></ClCompile>
     <ClCompile Include="Algorithm\MorphologyTool.cpp">

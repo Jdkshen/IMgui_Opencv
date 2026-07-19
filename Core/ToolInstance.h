@@ -8,6 +8,7 @@
 #include <nlohmann/json.hpp>
 
 #include "ROI.h"
+#include "GeometryPrimitive.h"
 #include "BarcodeTypes.h"
 #include "FixtureTransform.h"
 #include "CalibrationModel.h"
@@ -20,7 +21,7 @@
 // =====================================================
 struct ToolInstance
 {
-    int type = 0;                // 0-16 工具类型，12=原图
+    int type = 0;                // 0-17 工具类型，12=原图
     std::uint64_t toolId = 0;    // 稳定实例身份，0 表示尚未分配
     bool enabled = true;         // 工具链执行开关，禁用时保留参数和结果位置
     std::string label;           // 用户标签，空时显示原工具名
@@ -230,6 +231,10 @@ struct ToolInstance
     double measureCalibrationRmsError = 0.0;
     double measureCalibrationMaxError = 0.0;
     std::string measureCalibrationFitMessage;
+
+    // ---- 几何绘制（type==17） ----
+    int geometryDrawType = static_cast<int>(GeometryPrimitiveType::Line);
+    std::vector<GeometryPrimitive> geometryItems;
 
     // ---- 新架构：ITool 接口指针（为空时回退旧逻辑） ----
     ITool* toolImpl = nullptr;

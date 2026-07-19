@@ -64,6 +64,22 @@ namespace UI
         ImGui::PopItemWidth();
         ImGui::SetItemTooltip("右键画框时将创建此类型的ROI");
 
+        ROI* selectedROI = ROIState::MutableAt(ROIState::SelectedIndex());
+        if (selectedROI && selectedROI->type == ROI_TYPE_RECT)
+        {
+            ImGui::TextDisabled("矩形角度");
+            ImGui::SetNextItemWidth(-52.0f);
+            if (ImGui::DragFloat("##roi_angle", &selectedROI->angle, 0.1f,
+                                 -180.0f, 180.0f, "%.2f deg"))
+            {
+                while (selectedROI->angle > 180.0f) selectedROI->angle -= 360.0f;
+                while (selectedROI->angle <= -180.0f) selectedROI->angle += 360.0f;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("归零##roi_angle_reset"))
+                selectedROI->angle = 0.0f;
+        }
+
         if (ImGui::Button("清除当前类型 ROI", ImVec2(-1, 0)))
         {
             auto& rois = ROIState::Items();

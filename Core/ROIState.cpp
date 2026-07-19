@@ -8,6 +8,8 @@ namespace ROIState
 namespace
 {
     std::vector<ROI> s_rois;     // ROI 列表
+    std::vector<ROI> s_queuedRestore;
+    bool s_hasQueuedRestore = false;
     int s_selectedROI = -1;      // 当前选中 ROI 索引（-1 = 无选中）
 }
 
@@ -93,6 +95,34 @@ int SelectIndexFor(const std::vector<ROI>& rois)
     if (selected >= 0 && selected < static_cast<int>(rois.size()))
         return selected;
     return 0;
+}
+
+void QueueRestoreAfterImageLoad(std::vector<ROI> rois)
+{
+    s_queuedRestore = std::move(rois);
+    s_hasQueuedRestore = true;
+}
+
+bool ApplyQueuedRestore()
+{
+    if (!s_hasQueuedRestore)
+        return false;
+    s_rois = std::move(s_queuedRestore);
+    s_queuedRestore.clear();
+    s_hasQueuedRestore = false;
+    s_selectedROI = -1;
+    return true;
+}
+
+void CancelQueuedRestore()
+{
+    s_queuedRestore.clear();
+    s_hasQueuedRestore = false;
+}
+
+bool HasQueuedRestore()
+{
+    return s_hasQueuedRestore;
 }
 
 void ClearInteraction()

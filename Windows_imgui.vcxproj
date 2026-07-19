@@ -185,6 +185,8 @@
     <ClInclude Include="Core\ROIState.h" />
     <ClInclude Include="Core\ROIEditorState.h" />
     <ClInclude Include="Core\ROI.h" />
+    <ClInclude Include="Core\RotatedROI.h" />
+    <ClInclude Include="Core\GeometryPrimitive.h" />
     <ClInclude Include="Core\ToolInstance.h" />
     <ClInclude Include="Core\ToolAssetService.h" />
     <ClInclude Include="Core\ToolROIService.h" />
@@ -230,6 +232,7 @@
     <ClInclude Include="Algorithm\ThresholdTool.h" />
     <ClInclude Include="Algorithm\ContourDetector.h" />
     <ClInclude Include="Algorithm\EdgeTool.h" />
+    <ClInclude Include="Algorithm\GeometryDrawTool.h" />
     <ClInclude Include="Algorithm\ShapeMatcher.h" />
     <ClInclude Include="Algorithm\LineDetector.h" />
     <ClInclude Include="Algorithm\BlobTool.h" />
@@ -245,6 +248,7 @@
     <ClInclude Include="Renderer\FontManager.h" />
     <ClInclude Include="UI\DockSpaceHost.h" />
     <ClInclude Include="UI\ImageViewer.h" />
+    <ClInclude Include="UI\GeometryDrawEditor.h" />
     <ClInclude Include="UI\HardwareWindow.h" />
     <ClInclude Include="UI\LogWindow.h" />
     <ClInclude Include="UI\ROIManager.h" />
@@ -283,6 +287,8 @@
     <ClCompile Include="Core\LiveYoloRunner.cpp" />
     <ClCompile Include="Core\ROIState.cpp" />
     <ClCompile Include="Core\ROIEditorState.cpp" />
+    <ClCompile Include="Core\RotatedROI.cpp" />
+    <ClCompile Include="Core\GeometryPrimitive.cpp" />
     <ClCompile Include="Core\VisionContext.cpp" />
     <ClCompile Include="Core\ToolExecutor.cpp" />
     <ClCompile Include="Core\ToolInstance.cpp" />
@@ -321,6 +327,7 @@
     <ClCompile Include="Algorithm\ThresholdTool.cpp" />
     <ClCompile Include="Algorithm\ContourDetector.cpp" />
     <ClCompile Include="Algorithm\EdgeTool.cpp" />
+    <ClCompile Include="Algorithm\GeometryDrawTool.cpp" />
     <ClCompile Include="Algorithm\ShapeMatcher.cpp" />
     <ClCompile Include="Algorithm\LineDetector.cpp" />
     <ClCompile Include="Algorithm\BlobTool.cpp" />
@@ -336,6 +343,7 @@
     <ClCompile Include="Renderer\FontManager.cpp" />
     <ClCompile Include="UI\DockSpaceHost.cpp" />
     <ClCompile Include="UI\ImageViewer.cpp" />
+    <ClCompile Include="UI\GeometryDrawEditor.cpp" />
     <ClCompile Include="UI\HardwareWindow.cpp" />
     <ClCompile Include="UI\LogWindow.cpp" />
     <ClCompile Include="UI\ROIManager.cpp" />

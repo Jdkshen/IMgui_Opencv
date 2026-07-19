@@ -7,6 +7,7 @@
 #include "../include/imgui/imgui_internal.h"
 #include <windows.h>
 #include "ImageViewer.h"
+#include "GeometryDrawEditor.h"
 #include "ROIManager.h"
 #include "../Core/VideoCapture.h"
 #include "../Core/VisionContext.h"
@@ -458,6 +459,7 @@ namespace UI
 
         {7, "直线检测", ToolCategory::Geometry,  "▬"},
         {15, "工业测量", ToolCategory::Geometry, "M"},
+        {17, "几何绘制", ToolCategory::Geometry, "G"},
 
         {9, "颜色分析", ToolCategory::Analysis,  "◆"},
         {10, "多点找色", ToolCategory::Detection, "◉"},
@@ -475,6 +477,8 @@ namespace UI
     void ShowToolsWindow()
     {
         static cv::Mat g_PersistOriginal; // 持久保存原始图
+        if (GeometryDrawEditor::ConsumeChanged())
+            SaveCurrentRecipe();
         if (!g_ShowTools)
             return;
 
@@ -504,6 +508,7 @@ namespace UI
             case 13: return IM_COL32(67, 160, 255, 255);  // OCR
             case 14: return IM_COL32(38, 198, 218, 255);  // QR code
             case 15: return IM_COL32(255, 193, 7, 255);   // measurement
+            case 17: return IM_COL32(0, 172, 193, 255);   // geometry draw
             default: return IM_COL32(120, 140, 160, 255);
             }
         };
@@ -553,6 +558,10 @@ namespace UI
             case 15:
                 drawList->AddText(ImVec2(p.x + size * 0.20f, p.y + size * 0.16f), white, "M");
                 drawList->AddLine(ImVec2(p.x + 4, p.y + size - 5), ImVec2(p.x + size - 4, p.y + size - 5), white, 1.2f);
+                break;
+            case 17:
+                drawList->AddRect(ImVec2(p.x + 3, p.y + 4), ImVec2(p.x + size - 4, p.y + size - 4), white, 0.0f, 0, 1.3f);
+                drawList->AddLine(ImVec2(p.x + 3, p.y + size - 3), ImVec2(p.x + size - 3, p.y + 3), white, 1.3f);
                 break;
             case 6:
                 drawList->AddTriangleFilled(ImVec2(center.x, p.y + 3), ImVec2(p.x + size - 3, p.y + size - 3), ImVec2(p.x + 3, p.y + size - 3), white);
@@ -2319,6 +2328,25 @@ TemplateState::ClearResults();
             EndCard();
         };
 
+        // 17: 几何绘制
+        g_ToolUIMap[17] = [&](ToolInstance &it, int inst)
+        {
+            BeginCard("几何绘制");
+            if (SecondaryButton("重置图形"))
+            {
+                it.geometryDrawType = static_cast<int>(GeometryPrimitiveType::Line);
+                it.geometryItems.clear();
+                GeometryDrawEditor::Cancel();
+                SaveCurrentRecipe();
+            }
+            if (PrimaryButton("执行几何绘制"))
+                RunToolFromCard(inst);
+            SectionHeader("图形编辑");
+            if (GeometryDrawEditor::DrawToolPanel(it, inst))
+                SaveCurrentRecipe();
+            EndCard();
+        };
+
         // 5: 轮廓分析
         g_ToolUIMap[5] = [&](ToolInstance &it, int inst)
         {
@@ -3307,6 +3335,7 @@ TemplateState::ClearResults();
             }
 
             if (moveFrom >= 0 && moveTo >= 0) {
+                GeometryDrawEditor::Cancel();
                 if (ToolChainState::MoveTool(moveFrom, moveTo)) {
                     ToolController::OnToolChainChanged();
                     SaveCurrentRecipe();
@@ -3314,6 +3343,7 @@ TemplateState::ClearResults();
             }
 
             if (selectedForRemove >= 0) {
+                GeometryDrawEditor::Cancel();
                 if (ToolChainState::RemoveTool(selectedForRemove)) {
                     ToolController::OnToolChainChanged();
                     SaveCurrentRecipe();
@@ -3321,6 +3351,7 @@ TemplateState::ClearResults();
             }
 
             if (duplicateToolIndex >= 0) {
+                GeometryDrawEditor::Cancel();
                 int insertedIndex = -1;
                 if (ToolChainState::DuplicateTool(duplicateToolIndex, &insertedIndex)) {
                     ToolController::OnToolChainChanged();
@@ -3330,6 +3361,7 @@ TemplateState::ClearResults();
             }
 
             if (pasteToolAfterIndex >= 0) {
+                GeometryDrawEditor::Cancel();
                 int insertedIndex = -1;
                 if (ToolChainState::PasteToolAfter(pasteToolAfterIndex, &insertedIndex)) {
                     ToolController::OnToolChainChanged();

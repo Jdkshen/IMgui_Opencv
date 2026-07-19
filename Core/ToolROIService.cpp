@@ -64,7 +64,8 @@ bool SameGeometry(const ROI& first, const ROI& second)
         std::abs(first.start.x - second.start.x) <= epsilon &&
         std::abs(first.start.y - second.start.y) <= epsilon &&
         std::abs(first.end.x - second.end.x) <= epsilon &&
-        std::abs(first.end.y - second.end.y) <= epsilon;
+        std::abs(first.end.y - second.end.y) <= epsilon &&
+        std::abs(first.angle - second.angle) <= epsilon;
 }
 
 int FindMeasurementROIIndex(const ROI& boundROI)
