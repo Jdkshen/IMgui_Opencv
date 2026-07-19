@@ -232,7 +232,18 @@ namespace ToolController
         s_queue.push(toolIndex);
     }
 
-    void RequestRunAll(bool loop) {
+    void RequestRunAll(bool loop, bool triggerCamera) {
+        const HardwareRuntimeSnapshot hardware = HardwareRuntimeService::Snapshot();
+        if (triggerCamera && hardware.cameraState == DeviceConnectionState::Connected &&
+            HardwareRuntimeService::CameraTriggerOnInspectionEnabled())
+        {
+            s_mode = Mode::Idle;
+            s_loop = false;
+            HardwareRuntimeService::RequestCameraFrame(true);
+            LogSystem::Add(LOG_INFO, ImVec4(0, 1, 0.5f, 1),
+                "[全部执行] 已请求相机新帧，等待发布后执行工具链");
+            return;
+        }
         if (!ValidateToolChainForRun())
         {
             s_mode = Mode::Idle;

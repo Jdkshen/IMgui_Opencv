@@ -42,6 +42,7 @@ struct HardwareCameraConnectionConfig
     int grabTimeoutMs = 250;
     int captureIntervalMs = 33;
     bool autoCapture = true;
+    bool triggerOnInspection = true;
     bool autoExposure = true;
     double exposure = -6.0;
     double gain = 0.0;
@@ -66,6 +67,7 @@ struct HardwareRuntimeSnapshot
     bool cameraAutoCapture = false;
     bool cameraCapturePending = false;
     bool cameraToolRunPending = false;
+    bool cameraTriggerOnInspection = true;
     bool outputAutoPublish = false;
     int cameraFrameIndex = 0;
     DeviceOperationResult lastCameraOperation;
@@ -79,6 +81,8 @@ namespace HardwareRuntimeService
     void DisconnectCamera();
     void SetCameraAutoCapture(bool enabled);
     bool CameraAutoCaptureEnabled();
+    void SetCameraTriggerOnInspection(bool enabled);
+    bool CameraTriggerOnInspectionEnabled();
     DeviceOperationResult SetCameraControl(CameraControl control, double value);
     void RequestCameraFrame(bool runToolChainAfterCapture = false);
 

@@ -2261,7 +2261,7 @@ void TestHardwareRuntimeAutomation()
     cameraInputTool.type = 12;
     ToolChainState::AddTool(std::move(cameraInputTool));
     const int firstFrameIndex = cameraSnapshot.cameraFrameIndex;
-    HardwareRuntimeService::RequestCameraFrame(true);
+    ToolController::RequestRunAll(false);
     bool linkedRunStarted = false;
     for (int attempt = 0; attempt < 200; ++attempt)
     {

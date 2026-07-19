@@ -45,6 +45,7 @@ bool s_cameraWorkerStop = false;
 bool s_cameraWorkerBusy = false;
 bool s_cameraFrameRequested = false;
 bool s_cameraAutoCapture = false;
+bool s_cameraTriggerOnInspection = true;
 int s_runToolChainAfterFrameIndex = -1;
 bool s_cameraToolRunPending = false;
 bool s_outputAutoPublish = false;
@@ -141,6 +142,7 @@ void StopCameraWorker()
         std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
         s_cameraWorkerStop = true;
         s_cameraAutoCapture = false;
+        s_cameraTriggerOnInspection = true;
         s_cameraFrameRequested = false;
         s_runToolChainAfterFrameIndex = -1;
         s_cameraToolRunPending = false;
@@ -235,6 +237,7 @@ DeviceOperationResult StartCameraCapture(const HardwareCameraConnectionConfig& r
     {
         std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
         s_cameraAutoCapture = s_cameraConfig.autoCapture;
+        s_cameraTriggerOnInspection = s_cameraConfig.triggerOnInspection;
     }
     StartCameraWorker(camera);
     s_lastCameraOperation = {true, "工业相机已连接"};
@@ -263,6 +266,18 @@ bool CameraAutoCaptureEnabled()
 {
     std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
     return s_cameraAutoCapture;
+}
+
+void SetCameraTriggerOnInspection(bool enabled)
+{
+    std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
+    s_cameraTriggerOnInspection = enabled;
+}
+
+bool CameraTriggerOnInspectionEnabled()
+{
+    std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
+    return s_cameraTriggerOnInspection;
 }
 
 DeviceOperationResult SetCameraControl(CameraControl control, double value)
@@ -530,7 +545,7 @@ void Tick()
     }
     if (requestToolRun)
     {
-        ToolController::RequestRunAll(false);
+        ToolController::RequestRunAll(false, false);
         s_lastCameraOperation.message = "工业相机帧已发布，工具链已开始执行";
     }
 }
@@ -555,6 +570,7 @@ HardwareRuntimeSnapshot Snapshot()
     {
         std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
         snapshot.cameraAutoCapture = s_cameraAutoCapture;
+        snapshot.cameraTriggerOnInspection = s_cameraTriggerOnInspection;
         snapshot.cameraCapturePending = s_cameraWorkerBusy || s_hasPendingCameraFrame;
         snapshot.cameraToolRunPending = s_runToolChainAfterFrameIndex >= 0 ||
             s_cameraToolRunPending;

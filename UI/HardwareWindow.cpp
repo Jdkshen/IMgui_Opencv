@@ -112,6 +112,7 @@ void DrawHardwarePanel()
     static int cameraIntervalMs = 33;
     static bool cameraAutoCapture = true;
     static bool cameraRunAfterCapture = true;
+    static bool cameraTriggerBeforeRun = true;
     static bool cameraAutoExposure = true;
     static float cameraExposure = -6.0f;
     static float cameraGain = 0.0f;
@@ -180,6 +181,9 @@ void DrawHardwarePanel()
     ImGui::SameLine();
     ImGui::Checkbox("抓帧后执行", &cameraRunAfterCapture);
 
+    if (ImGui::Checkbox("执行前触发相机", &cameraTriggerBeforeRun))
+        HardwareRuntimeService::SetCameraTriggerOnInspection(cameraTriggerBeforeRun);
+
     const float twoButtonWidth = (ImGui::GetContentRegionAvail().x -
         ImGui::GetStyle().ItemSpacing.x) * 0.5f;
     if (ImGui::Button("连接相机", ImVec2(twoButtonWidth, 0.0f)))
@@ -193,6 +197,7 @@ void DrawHardwarePanel()
         config.grabTimeoutMs = std::max(1, cameraTimeoutMs);
         config.captureIntervalMs = std::max(1, cameraIntervalMs);
         config.autoCapture = cameraAutoCapture;
+        config.triggerOnInspection = cameraTriggerBeforeRun;
         config.autoExposure = cameraAutoExposure;
         config.exposure = cameraExposure;
         config.gain = cameraGain;

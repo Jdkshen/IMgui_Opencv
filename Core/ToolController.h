@@ -12,7 +12,7 @@ namespace ToolController
     enum class Mode { Idle, Running, Waiting };
 
     void RequestRun(int toolIndex);                // 单个工具执行（独立按钮）
-    void RequestRunAll(bool loop = false);         // 全部执行
+    void RequestRunAll(bool loop = false, bool triggerCamera = true); // 全部执行
     void RequestStepNext();                        // 单步：执行下一个工具
     void RequestStepReset();                       // 单步：重置进度
     void Tick();                                   // 每帧调用
