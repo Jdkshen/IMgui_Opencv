@@ -2980,9 +2980,46 @@ TemplateState::ClearResults();
         const float actionButtonH = ImGui::GetFrameHeight() + 4.0f;
         const float bottomModeH = ImGui::GetFrameHeight() + 2.0f;
         const float bottomTimeH = ImGui::GetTextLineHeight();
+        const ToolChainPreflightResult preflight = ToolChainState::Empty()
+            ? ToolChainPreflightResult{}
+            : ToolChainPreflight::Check(
+                  ToolChainState::ReadOnlyTools(), ImageState::HasImage(),
+                  ROIState::ReadOnlyItems().size());
+        float preflightBlockH = 0.0f;
+        if (!ToolChainState::Empty())
+        {
+            if (preflight.valid())
+            {
+                preflightBlockH = ImGui::GetTextLineHeightWithSpacing();
+            }
+            else
+            {
+                const float wrapWidth = std::max(
+                    80.0f, ImGui::GetContentRegionAvail().x - style.ScrollbarSize);
+                preflightBlockH = ImGui::GetFrameHeightWithSpacing();
+
+                char summary[128]{};
+                std::snprintf(summary, sizeof(summary),
+                    "发现 %zu 个问题，执行前请处理：", preflight.issues.size());
+                preflightBlockH += ImGui::CalcTextSize(
+                    summary, nullptr, false, wrapWidth).y + style.ItemSpacing.y;
+
+                for (const ToolChainPreflightIssue& issue : preflight.issues)
+                {
+                    const std::string line = issue.toolIndex >= 0
+                        ? "工具 " + std::to_string(issue.toolIndex + 1) + "：" + issue.message
+                        : "全局：" + issue.message;
+                    preflightBlockH += ImGui::CalcTextSize(
+                        line.c_str(), nullptr, false, wrapWidth).y + style.ItemSpacing.y;
+                }
+            }
+        }
+        const float bottomSeparatorH = style.ItemSpacing.y + 1.0f;
+        const float bottomPaddingH = style.WindowPadding.y + 4.0f;
         const float bottomH = ToolChainState::Empty()
             ? 0.0f
-            : actionButtonH + bottomModeH + bottomTimeH + style.ItemSpacing.y * 5.0f + 4.0f;
+            : actionButtonH + bottomModeH + bottomTimeH + preflightBlockH +
+              bottomSeparatorH + style.ItemSpacing.y * 5.0f + bottomPaddingH;
         ImGui::BeginChild("##ToolList", ImVec2(0, -bottomH), false,
             ImGuiWindowFlags_AlwaysVerticalScrollbar);
 
@@ -3282,9 +3319,6 @@ TemplateState::ClearResults();
         {
             ImGui::Separator();
 
-            const ToolChainPreflightResult preflight = ToolChainPreflight::Check(
-                ToolChainState::ReadOnlyTools(), ImageState::HasImage(),
-                ROIState::ReadOnlyItems().size());
             if (!preflight.valid())
             {
                 if (ImGui::CollapsingHeader("运行前检查", ImGuiTreeNodeFlags_DefaultOpen))
