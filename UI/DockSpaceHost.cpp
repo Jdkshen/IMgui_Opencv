@@ -538,6 +538,9 @@ TemplateState::ClearResults();
             ImGui::EndMenu();
         }
 
+        if (ImGui::MenuItem("连接设备(D)", nullptr, g_ShowHardware))
+            g_ShowHardware = true;
+
         if (ImGui::BeginMenu("转到(G)"))
         {
             if (ImGui::MenuItem("图像预览"))
