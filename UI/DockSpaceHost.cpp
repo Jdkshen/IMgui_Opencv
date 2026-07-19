@@ -2,6 +2,7 @@
 #include "DockSpaceHost.h"
 #include "ToolsWindow.h"
 #include "Sidebar.h"
+#include "HardwareWindow.h"
 #include "../Core/ThemeManager.h"
 #include "../Core/VisionContext.h"
 #include "../Core/RecipeManager.h"
@@ -525,7 +526,7 @@ TemplateState::ClearResults();
                 if (g_ShowHardware)
                 {
                     g_ShowSidebar = true;
-                    UI::RequestHardwarePanelFocus();
+                    UI::RequestHardwareWindowFocus();
                 }
             }
             ImGui::Separator();
@@ -550,7 +551,7 @@ TemplateState::ClearResults();
         {
             g_ShowSidebar = true;
             g_ShowHardware = true;
-            UI::RequestHardwarePanelFocus();
+            UI::RequestHardwareWindowFocus();
         }
 
         if (ImGui::BeginMenu("转到(G)"))
@@ -565,7 +566,7 @@ TemplateState::ClearResults();
             {
                 g_ShowSidebar = true;
                 g_ShowHardware = true;
-                UI::RequestHardwarePanelFocus();
+                UI::RequestHardwareWindowFocus();
             }
             ImGui::EndMenu();
         }
@@ -689,6 +690,7 @@ TemplateState::ClearResults();
             ImGui::DockBuilderDockWindow("功能窗口", right );
             ImGui::DockBuilderDockWindow("图像预览", main);
             ImGui::DockBuilderDockWindow("侧边栏",   left);
+            ImGui::DockBuilderDockWindow("设备连接", left);
             ImGui::DockBuilderDockWindow("日志窗口", bottom);
             ImGui::DockBuilderDockWindow("性能统计", bottom);
             // 每个停靠节点的标签栏在单窗口时自动隐藏（节省空间），图钉仍可用

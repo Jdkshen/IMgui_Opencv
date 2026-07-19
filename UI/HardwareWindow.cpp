@@ -1,5 +1,6 @@
 #include "HardwareWindow.h"
 
+#include "DockSpaceHost.h"
 #include "../Core/HardwareRuntimeService.h"
 #include "../Log/LogSystem.h"
 #include "../include/imgui/imgui.h"
@@ -12,6 +13,8 @@
 
 namespace
 {
+bool s_focusHardwareWindow = false;
+
 const char* ConnectionStateName(DeviceConnectionState state)
 {
     switch (state)
@@ -66,6 +69,26 @@ std::uint16_t ClampAddress(int value)
 
 namespace UI
 {
+void RequestHardwareWindowFocus()
+{
+    s_focusHardwareWindow = true;
+}
+
+void ShowHardwareWindow()
+{
+    if (!g_ShowHardware)
+        return;
+
+    if (s_focusHardwareWindow)
+        ImGui::SetNextWindowFocus();
+
+    if (ImGui::Begin("设备连接", &g_ShowHardware))
+        DrawHardwarePanel();
+    ImGui::End();
+
+    s_focusHardwareWindow = false;
+}
+
 void DrawHardwarePanel()
 {
     static char cameraAddress[256] = "0";

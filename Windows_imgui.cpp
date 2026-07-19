@@ -8,6 +8,7 @@
 #include "Core/LiveYoloRunner.h"
 #include "Core/FrameRenderer.h"
 #include "Core/VisionContext.h"
+#include "UI/HardwareWindow.h"
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -198,8 +199,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		UI::DrawDockSpaceHost();			  // 主停靠空间 + 菜单栏
 		UI::ShowSidebar();					  // 侧边栏控制面板
 		UI::ShowLogWindow();				  // 日志窗口
-		UI::ShowStatsWindow();				  // 性能统计窗口
-		UI::ShowOpenCV();					  // 图片显示窗口
+			UI::ShowStatsWindow();				  // 性能统计窗口
+			UI::ShowHardwareWindow();			  // 左侧设备连接页签
+			UI::ShowOpenCV();					  // 图片显示窗口
 		UI::ShowToolsWindow();				  // 工具窗口（ROI管理+算法入口）
 
 		// ----- 6.4 渲染 Dear ImGui 绘制数据 -----

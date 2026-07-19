@@ -2,25 +2,13 @@
 #include "DockSpaceHost.h"
 #include "ImageViewer.h"
 #include "ROIManager.h"
-#include "HardwareWindow.h"
 #include "../Core/ThemeManager.h"
 #include "../Core/ROIState.h"
 #include "../include/imgui/imgui.h"
 #include "../Log/LogSystem.h"
 
-namespace
-{
-bool s_focusHardwarePanel = false;
-}
-
 namespace UI
 {
-
-    void RequestHardwarePanelFocus()
-    {
-        s_focusHardwarePanel = true;
-    }
-
     void ShowSidebar()
     {
         if (!g_ShowSidebar)
@@ -103,17 +91,6 @@ namespace UI
                 LogSystem::Add(LOG_INFO, "自定义: %s", inputBuf);
                 inputBuf[0] = '\0';
             }
-        }
-
-        if (g_ShowHardware)
-        {
-            SectionTitle("设备连接");
-            if (s_focusHardwarePanel)
-            {
-                ImGui::SetScrollHereY(0.0f);
-                s_focusHardwarePanel = false;
-            }
-            DrawHardwarePanel();
         }
 
         ImGui::End();

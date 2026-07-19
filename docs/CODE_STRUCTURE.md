@@ -87,6 +87,7 @@ UI::DrawDockSpaceHost()
 UI::ShowSidebar()
 UI::ShowLogWindow()
 UI::ShowStatsWindow()
+UI::ShowHardwareWindow()
 UI::ShowOpenCV()
 UI::ShowToolsWindow()
 ThresholdTool::ShowThresholdWindow()
@@ -106,7 +107,8 @@ VideoCapture::Update()
 | `ImageViewer.*` | 图片窗口、缩放平移、文件夹图片列表、上一张/下一张、图片清理 |
 | `ROIManager.*` | ROI 创建、选择、拖动、缩放、绘制、坐标转换 |
 | `ToolsWindow.*` | 工具实例列表、参数 UI、批量执行/单步执行/循环执行入口 |
-| `Sidebar.*` | 侧边栏控制面板 |
+| `Sidebar.*` | 左侧控制面板页签 |
+| `HardwareWindow.*` | 与控制面板位于同一左侧停靠区的设备连接页签 |
 | `LogWindow.*` | 日志窗口显示 |
 | `StatsWindow.*` | 性能统计窗口 |
 
@@ -159,7 +161,7 @@ ROI 交互主要在 `UI/ROIManager.cpp` 中完成，包含控制点、拖动、�
 | `TcpTextAdapter.*` | 普通 TCP 文本结果输出，支持可配置 Pass/Fail 内容且不等待响应 |
 | `ModbusPlcAdapter.*` | PLC 标签到 Modbus 线圈/寄存器及工程量的映射 |
 | `Open62541OpcUaAdapter.*` | open62541 原生 OPC UA TCP 客户端、NodeId 与标量读写 |
-| `../UI/HardwareWindow.*` | 内嵌在 Sidebar 控制面板中的工业相机和结果输出配置，仅调用 HardwareRuntimeService API |
+| `../UI/HardwareWindow.*` | 左侧设备连接页签中的工业相机和结果输出配置，仅调用 HardwareRuntimeService API |
 | `LiveYoloRunner.*` | 实时 YOLO 推理调度和耗时统计 |
 | `FrameRenderer.*` | 每帧渲染提交和渲染资源收尾 |
 | `VisionContext.*` | 统一视觉上下文，保存图片、ROI、模板和结果 |
