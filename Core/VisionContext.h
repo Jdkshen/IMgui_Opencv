@@ -27,20 +27,14 @@ struct VisionContext
     int width = 0, height = 0;  // 图像尺寸
 
     // ---- ROI ----
-    std::vector<ROI> rois;      // ROI 列表（曾为 UI::gROIs）
-    int selectedROI = -1;       // 当前选中 ROI（曾为 gSelectedROI）
+    std::vector<ROI> rois;      // 本次执行的 ROI 快照
+    int selectedROI = -1;       // 本次执行的选中 ROI 快照
 
     // ---- 模板 ----
     cv::Mat frozenTemplate;     // 冻结模板（曾为 g_FrozenTemplate）
 
     // ---- 统一输出 ----
     std::vector<ToolResult> unifiedResults; // 工具执行结果叠加
-
-    // ---- 视图状态 ----
-    float zoom = 1.0f;          // 缩放（曾为 gZoom）
-    ImVec2 pan = {0, 0};        // 平移（曾为 gPan）
-    ImVec2 canvasSize = {0, 0}; // 画布大小（曾为 gCanvasSize）
-    ImVec2 imageScreenPos = {0, 0}; // 图像屏幕位置（曾为 gImageScreenPos）
 
     // ---- 便捷函数 ----
     bool HasROI() const { return !rois.empty() && selectedROI >= 0 && selectedROI < (int)rois.size(); }

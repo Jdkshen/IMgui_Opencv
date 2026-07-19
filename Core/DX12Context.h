@@ -114,11 +114,6 @@ extern ID3D12DescriptorHeap *g_pd3dDsvDescHeap; // DSV 描述符堆（预留）
 extern D3D12_CPU_DESCRIPTOR_HANDLE gSrvCpuHandle; // SRV 堆起始 CPU 句柄（索引0 = 主纹理）
 extern D3D12_GPU_DESCRIPTOR_HANDLE gSrvGpuHandle; // SRV 堆起始 GPU 句柄（ImGui::Image 使用）
 
-extern std::string pendingPath;                 // 待加载图片路径（异步加载用）
-
-extern int& gImageWidth;                        // 当前图片宽度引用（绑定到 ImageState）
-extern int& gImageHeight;                       // 当前图片高度引用（绑定到 ImageState）
-
 // =========================
 // 函数声明
 // =========================

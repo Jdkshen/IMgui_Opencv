@@ -1,0 +1,62 @@
+{
+  "version": 2,
+  "name": "case_measurement",
+  "imagePath": "../../assets/images/qr_tests/qr_test.png",
+  "rois": [
+    { "startX": 60.0, "startY": 60.0, "endX": 570.0, "endY": 570.0, "type": 0 },
+    { "startX": 160.0, "startY": 150.0, "endX": 160.0, "endY": 150.0, "type": 1 },
+    { "startX": 470.0, "startY": 150.0, "endX": 470.0, "endY": 150.0, "type": 1 },
+    { "startX": 120.0, "startY": 260.0, "endX": 520.0, "endY": 260.0, "type": 2 },
+    { "startX": 120.0, "startY": 420.0, "endX": 520.0, "endY": 420.0, "type": 2 },
+    { "startX": 315.0, "startY": 315.0, "endX": 375.0, "endY": 315.0, "type": 3 }
+  ],
+  "tools": [
+    { "type": 12, "label": "\u539f\u56fe", "showResultLabels": true },
+    {
+      "type": 15,
+      "label": "\u6d4b\u91cf\u8ddd\u79bb",
+      "showResultLabels": true,
+      "measureMode": 0,
+      "useSearchROI": true,
+      "searchROIs": [
+        { "startX": 160.0, "startY": 150.0, "endX": 160.0, "endY": 150.0, "type": 1 },
+        { "startX": 470.0, "startY": 150.0, "endX": 470.0, "endY": 150.0, "type": 1 }
+      ],
+      "measurement": { "mode": 0, "calibrationEnabled": true, "scaleX": 0.1, "scaleY": 0.1, "toleranceEnabled": false },
+      "judgement": { "enabled": false, "stopOnFailure": false }
+    },
+    {
+      "type": 15,
+      "label": "\u6d4b\u91cf\u89d2\u5ea6",
+      "showResultLabels": true,
+      "measureMode": 2,
+      "useSearchROI": true,
+      "searchROIs": [
+        { "startX": 120.0, "startY": 260.0, "endX": 520.0, "endY": 260.0, "type": 2 },
+        { "startX": 120.0, "startY": 420.0, "endX": 520.0, "endY": 420.0, "type": 2 }
+      ],
+      "measurement": { "mode": 2, "calibrationEnabled": false, "toleranceEnabled": false },
+      "judgement": { "enabled": false, "stopOnFailure": false }
+    },
+    {
+      "type": 15,
+      "label": "\u6d4b\u91cf\u5706\u76f4\u5f84",
+      "showResultLabels": true,
+      "measureMode": 3,
+      "useSearchROI": true,
+      "searchROIs": [ { "startX": 315.0, "startY": 315.0, "endX": 375.0, "endY": 315.0, "type": 3 } ],
+      "measurement": { "mode": 3, "caliperCount": 32, "fitMethod": 1, "fitInlierThreshold": 2.0, "calibrationEnabled": true, "scaleX": 0.1, "scaleY": 0.1, "toleranceEnabled": false },
+      "judgement": { "enabled": false, "stopOnFailure": false }
+    },
+    {
+      "type": 15,
+      "label": "\u6d4b\u91cf\u76f4\u7ebf\u62df\u5408",
+      "showResultLabels": true,
+      "measureMode": 5,
+      "useSearchROI": true,
+      "searchROIs": [ { "startX": 80.0, "startY": 80.0, "endX": 550.0, "endY": 550.0, "type": 0 } ],
+      "measurement": { "mode": 5, "caliperCount": 24, "searchLength": 35.0, "projectionWidth": 5.0, "edgeThreshold": 10.0, "subpixel": true, "fitMethod": 1, "minimumValidCalipers": 3, "calibrationEnabled": false, "toleranceEnabled": false },
+      "judgement": { "enabled": false, "stopOnFailure": false }
+    }
+  ]
+}

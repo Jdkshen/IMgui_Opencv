@@ -2,6 +2,7 @@
 
 #include "BlobTool.h"
 #include "ColorAnalyzer.h"
+#include "DifferenceTool.h"
 #include "EdgeTool.h"
 #include "MorphologyTool.h"
 #include "MeasurementTool.h"
@@ -99,6 +100,8 @@ namespace
             ToolRegistry::RegisterName(14, "Barcode");
             ToolRegistry::Register(15, []() -> std::unique_ptr<ITool> { return std::make_unique<MeasurementTool>(); });
             ToolRegistry::RegisterName(15, "Measurement");
+            ToolRegistry::Register(16, []() -> std::unique_ptr<ITool> { return std::make_unique<DifferenceTool>(); });
+            ToolRegistry::RegisterName(16, "Difference");
         }
     };
 

@@ -109,6 +109,7 @@ json ResultToJson(const ToolResult& result)
     json j;
     j["toolName"] = result.toolName;
     j["sourceToolIndex"] = result.sourceToolIndex;
+    j["sourceToolId"] = result.sourceToolId;
     j["success"] = result.success;
     j["skipped"] = result.skipped;
     j["message"] = result.message;
@@ -124,9 +125,14 @@ json ResultToJson(const ToolResult& result)
     {
         json region;
         region["bbox"] = RectToJson(r.bbox);
+        region["center"] = {{"x", r.center.x}, {"y", r.center.y}};
         region["area"] = r.area;
         region["score"] = r.score;
         region["angle"] = r.angle;
+        region["width"] = r.width;
+        region["height"] = r.height;
+        region["circularity"] = r.circularity;
+        region["aspectRatio"] = r.aspectRatio;
         region["label"] = r.label;
         region["contour"] = json::array();
         for (const auto& p : r.contour)

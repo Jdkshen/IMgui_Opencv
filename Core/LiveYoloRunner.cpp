@@ -1,6 +1,7 @@
 #include "LiveYoloRunner.h"
 
 #include "ImageState.h"
+#include "RealtimeDetectionState.h"
 #include "ROIState.h"
 #include "ToolChainState.h"
 #include "VideoCapture.h"
@@ -128,8 +129,7 @@ void Update()
     {
         ToolChainState::SetYoloLiveDetect(false);
         ToolChainState::SetYoloLiveInstanceIndex(-1);
-        g_YoloShowOverlay = false;
-        g_YoloOverlays.clear();
+        RealtimeDetectionState::Clear();
         gContext.ClearUnifiedResults();
         return;
     }
@@ -218,10 +218,11 @@ void Update()
     }
     else
     {
-        totalMs = g_YoloDetailTotalMs > 0.0f ? g_YoloDetailTotalMs : measuredFrameMs;
-        preMs = g_YoloDetailPreMs;
-        infMs = g_YoloDetailInfMs;
-        postMs = g_YoloDetailPostMs;
+        const auto& detectorStats = RealtimeDetectionState::Stats();
+        totalMs = detectorStats.totalMs > 0.0f ? detectorStats.totalMs : measuredFrameMs;
+        preMs = detectorStats.preprocessMs;
+        infMs = detectorStats.inferenceMs;
+        postMs = detectorStats.postprocessMs;
     }
     ToolChainState::SetYoloLiveFrameMs(totalMs);
 
@@ -255,8 +256,8 @@ void Update()
 
     for (auto& o : objs)
         o.className = "[" + s_LiveModelTag + "] " + o.className;
-    g_YoloOverlays = std::move(objs);
-    g_YoloShowOverlay = true;
+    RealtimeDetectionState::SetObjects(std::move(objs));
+    RealtimeDetectionState::SetOverlayVisible(true);
 
     ToolResult tr;
     const char* resultBaseName = liveType == 11 ? "YOLO OpenCV 5.0" : "YOLO";
@@ -264,8 +265,10 @@ void Update()
         ? ToolInstanceLogName(resultBaseName, tools[idx].label)
         : std::string(resultBaseName);
     tr.sourceToolIndex = idx;
+    if (idx >= 0 && idx < static_cast<int>(tools.size()))
+        tr.sourceToolId = tools[idx].toolId;
     tr.success = true;
-    for (const auto& o : g_YoloOverlays)
+    for (const auto& o : RealtimeDetectionState::Objects())
     {
         ToolResult::Detection d;
         d.box = o.box;

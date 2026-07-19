@@ -3,25 +3,67 @@
 #endif
 
 #include "RecipeManager.h"
-#include "DX12Context.h"
 #include "FrameSourceState.h"
 #include "FrameNavigation.h"
 #include "ROIState.h"
 #include "TemplateState.h"
 #include "ToolChainState.h"
+#include "ToolController.h"
 #include "../Log/LogSystem.h"
 #include "../Algorithm/ThresholdTool.h"
-#include "../Algorithm/TemplateMatch.h"
 #include "../Algorithm/MultiColorFinder.h"
 
 #include <windows.h>
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string_view>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
+
+nlohmann::json RecipeToolInstance::ToJson() const
+{
+    return toolJson_.is_object() ? toolJson_ : nlohmann::json::object();
+}
+
+void RecipeToolInstance::LoadToolJson(const nlohmann::json& json)
+{
+    toolJson_ = json.is_object() ? json : nlohmann::json::object();
+    ToolInstance compatibility;
+    compatibility.LoadRecipeJson(toolJson_);
+    if (!compatibility.useSearchROI && !compatibility.searchROIs.empty())
+    {
+        compatibility.useSearchROI = compatibility.yoloUseROI ||
+            compatibility.lineUseROI || compatibility.mcfUseROI ||
+            compatibility.colorUseROI || !compatibility.lineSaveROIs.empty();
+        toolJson_["useSearchROI"] = compatibility.useSearchROI;
+    }
+}
+
+void RecipeToolInstance::CaptureFrom(const ToolInstance& source)
+{
+    toolJson_ = source.ToRecipeJson();
+    templateImage = source.type == 6 ? source.shpTplImage.clone() : source.templateImg.clone();
+    if (templateImage.empty())
+        templateImage = source.type == 6 ? source.templateImg.clone() : source.shpTplImage.clone();
+    differenceReferenceImage = source.differenceReferenceImage.clone();
+    multiColorReferenceImage = source.mcfRefImage.clone();
+}
+
+ToolInstance RecipeToolInstance::CreateToolInstance() const
+{
+    ToolInstance target;
+    target.LoadRecipeJson(toolJson_);
+    target.ClearRuntimeState();
+    target.templateImg = templateImage.clone();
+    if (target.type == 6)
+        target.shpTplImage = templateImage.clone();
+    target.differenceReferenceImage = differenceReferenceImage.clone();
+    target.mcfRefImage = multiColorReferenceImage.clone();
+    return target;
+}
 
 namespace RecipeManager
 {
@@ -58,10 +100,17 @@ namespace RecipeManager
         return utf8;
     }
 
-    static std::string ParentDirOf(const std::string &path)
+    static std::string RecipeAssetOutputPath(const std::string& recipePath,
+                                              const std::string& assetPath)
     {
-        size_t slash = path.find_last_of("\\/");
-        return slash != std::string::npos ? path.substr(0, slash + 1) : std::string();
+        if (assetPath.empty())
+            return {};
+        namespace fs = std::filesystem;
+        fs::path asset(Utf8ToWide(assetPath));
+        if (asset.is_absolute())
+            return WideToUtf8(asset.lexically_normal().wstring());
+        const fs::path recipe(Utf8ToWide(recipePath));
+        return WideToUtf8((recipe.parent_path() / asset).lexically_normal().wstring());
     }
 
     static bool WriteTextUtf8File(const std::string &path, const std::string &content)
@@ -174,13 +223,6 @@ namespace RecipeManager
         return out;
     }
 
-    static std::string NormalizeBinaryStringForJson(const std::string &value)
-    {
-        if (value.empty() || IsLikelyBase64(value))
-            return value;
-        return Base64Encode(reinterpret_cast<const unsigned char *>(value.data()), value.size());
-    }
-
     static bool WriteImageFile(const std::string &path, const cv::Mat &image)
     {
         if (image.empty())
@@ -266,221 +308,18 @@ namespace RecipeManager
         json &tools = j["tools"] = json::array();
         for (const auto &t : data.tools)
         {
-            json tj;
-            tj["type"] = t.type;
-            tj["label"] = t.label;
-            tj["showResultLabels"] = t.showResultLabels;
-            tj["inputSourceMode"] = t.inputSourceMode;
-            tj["resultRoiMode"] = t.resultRoiMode;
-            tj["resultRoiSourceTool"] = t.resultRoiSourceTool;
-            tj["resultRoiIndex"] = t.resultRoiIndex;
-            tj["resultRoiMissingPolicy"] = t.resultRoiMissingPolicy;
-            tj["fixture"] = {
-                {"enabled", t.fixture.enabled},
-                {"sourceToolIndex", t.fixture.sourceToolIndex},
-                {"resultIndex", t.fixture.resultIndex},
-                {"referenceX", t.fixture.referenceOrigin.x},
-                {"referenceY", t.fixture.referenceOrigin.y},
-                {"referenceAngle", t.fixture.referenceAngleDegrees},
-                {"failOnMissing", t.fixture.failOnMissing}
-            };
-            tj["judgement"] = {
-                {"enabled", t.judgement.enabled},
-                {"stopOnFailure", t.judgement.stopOnFailure},
-                {"minResultCount", t.judgement.minResultCount},
-                {"maxResultCount", t.judgement.maxResultCount},
-                {"minScore", t.judgement.minScore},
-                {"minArea", t.judgement.minArea},
-                {"maxArea", t.judgement.maxArea},
-                {"requiredText", t.judgement.requiredText},
-                {"textMatchMode", t.judgement.textMatchMode},
-                {"textCaseSensitive", t.judgement.textCaseSensitive}
-            };
+            json tj = t.ToJson();
             tj["templateFile"] = t.templateFile;
-            tj["hasTemplateROI"] = t.hasTemplateROI;
-            tj["templateROI"] = {{"startX", t.templateROI.startX}, {"startY", t.templateROI.startY}, {"endX", t.templateROI.endX}, {"endY", t.templateROI.endY}, {"type", t.templateROI.type}};
-            tj["enableRotation"] = t.enableRotation;
-            tj["rotationStart"] = t.rotationStart;
-            tj["rotationEnd"] = t.rotationEnd;
-            tj["rotationStep"] = t.rotationStep;
-            tj["maxResults"] = t.maxResults;
-            tj["matchThreshold"] = t.matchThreshold;
-            tj["maxImageDim"] = t.maxImageDim;
-            tj["nmsThreshold"] = t.nmsThreshold;
-            tj["searchMode"] = t.searchMode;
-            tj["tplGray"] = t.tplGray;
-            tj["tplBinary"] = t.tplBinary;
-            tj["tplBinThresh"] = t.tplBinThresh;
-            tj["tplEdge"] = t.tplEdge;
-            tj["tplEdgeLow"] = t.tplEdgeLow;
-            tj["tplEdgeHigh"] = t.tplEdgeHigh;
-            tj["imgUseGray"] = t.imgUseGray;
-            tj["imgEnableThreshold"] = t.imgEnableThreshold;
-            tj["imgThreshold"] = t.imgThreshold;
-            tj["cannyLow"] = t.cannyLow;
-            tj["cannyHigh"] = t.cannyHigh;
-            tj["edgeUseGray"] = t.edgeUseGray;
-            tj["dbgUseGray"] = t.dbgUseGray;
-            tj["dbgEnableBlur"] = t.dbgEnableBlur;
-            tj["dbgBlurSize"] = t.dbgBlurSize;
-            tj["dbgEnableThresh"] = t.dbgEnableThresh;
-            tj["dbgThreshold"] = t.dbgThreshold;
-            tj["dbgEnableCanny"] = t.dbgEnableCanny;
-            tj["dbgCannyLow"] = t.dbgCannyLow;
-            tj["dbgCannyHigh"] = t.dbgCannyHigh;
-            tj["blobMinArea"] = t.blobMinArea;
-            tj["blobMaxArea"] = t.blobMaxArea;
-            tj["useSearchROI"] = t.useSearchROI;
-
-            // YOLO 参数
-            tj["yoloModelPath"] = t.yoloModelPath;
-            tj["yoloClassesPath"] = t.yoloClassesPath;
-            tj["yoloConfThreshold"] = t.yoloConfThreshold;
-            tj["yoloNmsThreshold"] = t.yoloNmsThreshold;
-            tj["yoloUseROI"] = t.yoloUseROI;
-            tj["yoloUseGPU"] = t.yoloUseGPU;
-            tj["cntUseGray"] = t.cntUseGray;
-            tj["cntBlurSize"] = t.cntBlurSize;
-            tj["cntThreshMode"] = t.cntThreshMode;
-            tj["cntThreshValue"] = t.cntThreshValue;
-            tj["cntAdaptBlock"] = t.cntAdaptBlock;
-            tj["cntInvert"] = t.cntInvert;
-            tj["cntRetrMode"] = t.cntRetrMode;
-            tj["cntApproxMethod"] = t.cntApproxMethod;
-            tj["cntMinArea"] = t.cntMinArea;
-            tj["cntMaxContours"] = t.cntMaxContours;
-            tj["cntFilterConvex"] = t.cntFilterConvex;
-            tj["cntApproxEps"] = t.cntApproxEps;
-            tj["cntLineThick"] = t.cntLineThick;
-            tj["cntShowLabels"] = t.cntShowLabels;
-            tj["cntFillContours"] = t.cntFillContours;
-            tj["cntMatchROI"] = t.cntMatchROI;
-            tj["cntMatchThresh"] = t.cntMatchThresh;
-            tj["shpBlurSize"] = t.shpBlurSize;
-            tj["shpTplRetr"] = t.shpTplRetr;
-            tj["shpTplMinArea"] = t.shpTplMinArea;
-            tj["shpMinScore"] = t.shpMinScore;
-            tj["shpShapeScore"] = t.shpShapeScore;
-            tj["shpLineThick"] = t.shpLineThick;
-            tj["shpMethod"] = t.shpMethod;
-            tj["shpShowLabels"] = t.shpShowLabels;
-            tj["shpMaxResults"] = t.shpMaxResults;
-            tj["shpTplGray"] = t.shpTplGray;
-            tj["shpTplBinary"] = t.shpTplBinary;
-            tj["shpTplBinThresh"] = t.shpTplBinThresh;
-            tj["shpTplBlur"] = t.shpTplBlur;
-            tj["shpTplBlurK"] = t.shpTplBlurK;
-            tj["shpTplInvert"] = t.shpTplInvert;
-            tj["lineCannyLow"] = t.lineCannyLow;
-            tj["lineCannyHigh"] = t.lineCannyHigh;
-            tj["lineMinLength"] = t.lineMinLength;
-            tj["lineMaxGap"] = t.lineMaxGap;
-            tj["lineMinAngle"] = t.lineMinAngle;
-            tj["lineMaxAngle"] = t.lineMaxAngle;
-            tj["lineThickness"] = t.lineThickness;
-            tj["lineMaxLines"] = t.lineMaxLines;
-            tj["lineShowLabels"] = t.lineShowLabels;
-            tj["lineUseROI"] = t.lineUseROI;
-            tj["morphOpType"] = t.morphOpType;
-            tj["morphKernelSize"] = t.morphKernelSize;
-            tj["morphKernelShape"] = t.morphKernelShape;
-            tj["morphIterations"] = t.morphIterations;
-            tj["morphUseGray"] = t.morphUseGray;
-            tj["colorSpace"] = t.colorSpace;
-            tj["colorHistBins"] = t.colorHistBins;
-            tj["colorShowHist"] = t.colorShowHist;
-            tj["colorUseROI"] = t.colorUseROI;
-            tj["colorHistHeight"] = t.colorHistHeight;
-            tj["mcfUseROI"] = t.mcfUseROI;
-            tj["mcfMaxResults"] = t.mcfMaxResults;
-            tj["mcfMinDist"] = t.mcfMinDist;
-            tj["mcfCrossSize"] = t.mcfCrossSize;
-            tj["mcfCrossThick"] = t.mcfCrossThick;
-            tj["mcfAnchorX"] = t.mcfAnchorX;
-            tj["mcfAnchorY"] = t.mcfAnchorY;
-            tj["mcfImgGray"] = t.mcfImgGray;
-            tj["mcfImgBinary"] = t.mcfImgBinary;
-            tj["mcfImgBinThresh"] = t.mcfImgBinThresh;
-            tj["mcfRoiX"] = t.mcfRoiX;
-            tj["mcfRoiY"] = t.mcfRoiY;
-            tj["mcfRoiW"] = t.mcfRoiW;
-            tj["mcfRoiH"] = t.mcfRoiH;
-            tj["mcfRefImageBase64"] = NormalizeBinaryStringForJson(t.mcfRefImageBase64);
+            tj["differenceReferenceFile"] = t.differenceReferenceFile;
             tj["mcfPointsJson"] = t.mcfPointsJson;
-            tj["ocrDetModelPath"] = t.ocrDetModelPath;
-            tj["ocrDetParamPath"] = t.ocrDetParamPath;
-            tj["ocrRecModelPath"] = t.ocrRecModelPath;
-            tj["ocrRecParamPath"] = t.ocrRecParamPath;
-            tj["ocrDictionaryPath"] = t.ocrDictionaryPath;
-            tj["ocrMinConfidence"] = t.ocrMinConfidence;
-            tj["ocrMaxItems"] = t.ocrMaxItems;
-            tj["ocrInputSize"] = t.ocrInputSize;
-            tj["ocrMaxCandidates"] = t.ocrMaxCandidates;
-            tj["ocrMinBoxArea"] = t.ocrMinBoxArea;
-            tj["ocrMinBoxHeight"] = t.ocrMinBoxHeight;
-            tj["ocrRoiPadding"] = t.ocrRoiPadding;
-            tj["ocrFastMode"] = t.ocrFastMode;
-            tj["ocrDetectOnly"] = t.ocrDetectOnly;
-            tj["ocrUseROI"] = t.ocrUseROI;
-            tj["qrUseROI"] = t.qrUseROI;
-            tj["qrDetectMulti"] = t.qrDetectMulti;
-            tj["qrEnhance"] = t.qrEnhance;
-            tj["qrMinSize"] = t.qrMinSize;
-            tj["qrShowText"] = t.qrShowText;
-            tj["qrEngine"] = t.qrEngine;
-            tj["qrFormatMask"] = t.qrFormatMask;
-            tj["qrFilterDuplicates"] = t.qrFilterDuplicates;
-            tj["measureMode"] = t.measureMode;
-            tj["measureMmPerPixel"] = t.measureMmPerPixel;
-            tj["measureCalibrationPixels"] = t.measureCalibrationPixels;
-            tj["measureCalibrationMm"] = t.measureCalibrationMm;
-            tj["measureToleranceEnabled"] = t.measureToleranceEnabled;
-            tj["measureNominal"] = t.measureNominal;
-            tj["measureToleranceMinus"] = t.measureToleranceMinus;
-            tj["measureTolerancePlus"] = t.measureTolerancePlus;
-            std::vector<double> measureHomography(
-                t.measureCalibration.pixelToWorldHomography.val,
-                t.measureCalibration.pixelToWorldHomography.val + 9);
-            tj["measurement"] = {
-                {"mode", t.measureMode}, {"caliperCount", t.measureCaliperCount},
-                {"searchLength", t.measureSearchLength}, {"projectionWidth", t.measureProjectionWidth},
-                {"smoothingSigma", t.measureSmoothingSigma}, {"edgeThreshold", t.measureEdgeThreshold},
-                {"minPairDistance", t.measureMinPairDistance}, {"edgePolarity", t.measureEdgePolarity},
-                {"subpixel", t.measureSubpixel}, {"fitMethod", t.measureFitMethod},
-                {"fitInlierThreshold", t.measureFitInlierThreshold},
-                {"minimumValidCalipers", t.measureMinimumValidCalipers},
-                {"minimumConfidence", t.measureMinimumConfidence},
-                {"legacyMmPerPixel", t.measureMmPerPixel},
-                {"calibrationEnabled", t.measureCalibration.enabled},
-                {"scaleX", t.measureCalibration.scaleX}, {"scaleY", t.measureCalibration.scaleY},
-                {"pixelOriginX", t.measureCalibration.pixelOrigin.x},
-                {"pixelOriginY", t.measureCalibration.pixelOrigin.y},
-                {"worldOriginX", t.measureCalibration.worldOrigin.x},
-                {"worldOriginY", t.measureCalibration.worldOrigin.y},
-                {"homographyEnabled", t.measureCalibration.homographyEnabled},
-                {"homography", measureHomography},
-                {"distortionEnabled", t.measureCalibration.distortionEnabled},
-                {"fx", t.measureCalibration.fx}, {"fy", t.measureCalibration.fy},
-                {"cx", t.measureCalibration.cx}, {"cy", t.measureCalibration.cy},
-                {"k1", t.measureCalibration.k1}, {"k2", t.measureCalibration.k2},
-                {"p1", t.measureCalibration.p1}, {"p2", t.measureCalibration.p2},
-                {"k3", t.measureCalibration.k3},
-                {"toleranceEnabled", t.measureToleranceEnabled}, {"nominal", t.measureNominal},
-                {"toleranceMinus", t.measureToleranceMinus}, {"tolerancePlus", t.measureTolerancePlus}
-            };
-
-            // 搜索 ROI 子数组
-            json &srois = tj["searchROIs"] = json::array();
-            for (const auto &r : t.searchROIs)
+            tj["mcfRefImageBase64"] = "";
+            if (!t.multiColorReferenceImage.empty())
             {
-                srois.push_back({{"startX", r.startX}, {"startY", r.startY}, {"endX", r.endX}, {"endY", r.endY}, {"type", r.type}});
+                std::vector<uchar> encoded;
+                if (cv::imencode(".png", t.multiColorReferenceImage, encoded))
+                    tj["mcfRefImageBase64"] = Base64Encode(encoded);
             }
-            json &lineRois = tj["lineSaveROIs"] = json::array();
-            for (const auto &r : t.lineSaveROIs)
-            {
-                lineRois.push_back({{"startX", r.startX}, {"startY", r.startY}, {"endX", r.endX}, {"endY", r.endY}, {"type", r.type}});
-            }
-            tools.push_back(tj);
+            tools.push_back(std::move(tj));
         }
 
         // 写入文件
@@ -505,34 +344,30 @@ namespace RecipeManager
                 LogSystem::Add(LOG_INFO, "Template image saved: %s", tplPath.c_str());
         }
 
-        // Save per-tool template images.
+        // Save asset payloads captured in RecipeData. Save no longer reads live tool state.
         for (size_t ti = 0; ti < data.tools.size(); ti++)
         {
             const auto &t = data.tools[ti];
-            std::string tplPath(filepath);
-            size_t slash = tplPath.find_last_of("\\/");
             const std::string tplFile = t.templateFile.empty()
                 ? data.name + "_tpl" + std::to_string(ti) + ".png"
                 : t.templateFile;
-            tplPath = (slash != std::string::npos)
-                          ? tplPath.substr(0, slash + 1) + tplFile
-                          : tplFile;
-
+            const std::string tplPath = RecipeAssetOutputPath(filepath, tplFile);
             if (t.templateFile.empty())
             {
                 DeleteFileW(Utf8ToWide(tplPath).c_str());
-                continue;
+            }
+            else if (!t.templateImage.empty())
+            {
+                if (WriteImageFile(tplPath, t.templateImage))
+                    LogSystem::Add(LOG_INFO, "Tool template saved: %s", tplPath.c_str());
             }
 
-            const auto& tools = ToolChainState::ReadOnlyTools();
-            if (ti < tools.size())
+            const std::string differencePath = RecipeAssetOutputPath(
+                filepath, t.differenceReferenceFile);
+            if (!differencePath.empty() && !t.differenceReferenceImage.empty() &&
+                WriteImageFile(differencePath, t.differenceReferenceImage))
             {
-                const auto& inst = tools[ti];
-                cv::Mat tpl = (inst.type == 6) ? inst.shpTplImage : inst.templateImg;
-                if (tpl.empty())
-                    tpl = (inst.type == 6) ? inst.templateImg : inst.shpTplImage;
-                if (WriteImageFile(tplPath, tpl))
-                    LogSystem::Add(LOG_INFO, "Tool template saved: %s", tplPath.c_str());
+                LogSystem::Add(LOG_INFO, "Difference reference saved: %s", t.differenceReferenceFile.c_str());
             }
         }
 
@@ -542,6 +377,44 @@ namespace RecipeManager
 
     // ===================== Load =====================
     static std::string g_LastRecipePath;
+
+    static std::string ResolveRecipeAssetPath(const std::string& value)
+    {
+        if (value.empty())
+            return {};
+
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        fs::path requested(Utf8ToWide(value));
+        if (requested.is_absolute())
+            return WideToUtf8(requested.lexically_normal().wstring());
+
+        std::vector<fs::path> roots;
+        if (!g_LastRecipePath.empty())
+        {
+            fs::path recipeDir = fs::path(Utf8ToWide(g_LastRecipePath)).parent_path();
+            for (int depth = 0; !recipeDir.empty() && depth < 8; ++depth)
+            {
+                roots.push_back(recipeDir);
+                fs::path parent = recipeDir.parent_path();
+                if (parent == recipeDir)
+                    break;
+                recipeDir = std::move(parent);
+            }
+        }
+        roots.push_back(fs::current_path(ec));
+
+        for (const fs::path& root : roots)
+        {
+            if (root.empty())
+                continue;
+            fs::path candidate = (root / requested).lexically_normal();
+            ec.clear();
+            if (fs::exists(candidate, ec))
+                return WideToUtf8(candidate.wstring());
+        }
+        return WideToUtf8(requested.lexically_normal().wstring());
+    }
 
     bool Load(const char *filepath, RecipeData &data)
     {
@@ -633,266 +506,40 @@ namespace RecipeManager
             for (const auto &tj : j["tools"])
             {
                 RecipeToolInstance t;
-                t.type = tj.value("type", 0);
-                t.label = tj.value("label", "");
-                t.showResultLabels = tj.value("showResultLabels", true);
-                t.inputSourceMode = tj.value("inputSourceMode", 2);
-                t.resultRoiMode = tj.value("resultRoiMode", 0);
-                t.resultRoiSourceTool = tj.value("resultRoiSourceTool", -1);
-                t.resultRoiIndex = tj.value("resultRoiIndex", 0);
-                t.resultRoiMissingPolicy = tj.value("resultRoiMissingPolicy", 0);
-                if (tj.contains("fixture") && tj["fixture"].is_object())
-                {
-                    const auto& fixture = tj["fixture"];
-                    t.fixture.enabled = fixture.value("enabled", false);
-                    t.fixture.sourceToolIndex = fixture.value("sourceToolIndex", -1);
-                    t.fixture.resultIndex = fixture.value("resultIndex", 0);
-                    t.fixture.referenceOrigin.x = fixture.value("referenceX", 0.0f);
-                    t.fixture.referenceOrigin.y = fixture.value("referenceY", 0.0f);
-                    t.fixture.referenceAngleDegrees = fixture.value("referenceAngle", 0.0f);
-                    t.fixture.failOnMissing = fixture.value("failOnMissing", true);
-                }
-                if (tj.contains("judgement") && tj["judgement"].is_object())
-                {
-                    const auto& judgement = tj["judgement"];
-                    t.judgement.enabled = judgement.value("enabled", false);
-                    t.judgement.stopOnFailure = judgement.value("stopOnFailure", false);
-                    t.judgement.minResultCount = judgement.value("minResultCount", 1);
-                    t.judgement.maxResultCount = judgement.value("maxResultCount", -1);
-                    t.judgement.minScore = judgement.value("minScore", -1.0f);
-                    t.judgement.minArea = judgement.value("minArea", -1.0f);
-                    t.judgement.maxArea = judgement.value("maxArea", -1.0f);
-                    t.judgement.requiredText = judgement.value("requiredText", "");
-                    t.judgement.textMatchMode = judgement.value("textMatchMode", 0);
-                    t.judgement.textCaseSensitive = judgement.value("textCaseSensitive", false);
-                }
+                t.LoadToolJson(tj);
                 t.templateFile = tj.value("templateFile", "");
-                t.hasTemplateROI = tj.value("hasTemplateROI", false);
-                if (tj.contains("templateROI") && tj["templateROI"].is_object())
-                {
-                    const auto &r = tj["templateROI"];
-                    t.templateROI.startX = r.value("startX", 0.0f);
-                    t.templateROI.startY = r.value("startY", 0.0f);
-                    t.templateROI.endX = r.value("endX", 0.0f);
-                    t.templateROI.endY = r.value("endY", 0.0f);
-                    t.templateROI.type = r.value("type", 0);
-                }
-                t.enableRotation = tj.value("enableRotation", false);
-                t.rotationStart = tj.value("rotationStart", -45);
-                t.rotationEnd = tj.value("rotationEnd", 45);
-                t.rotationStep = tj.value("rotationStep", 1);
-                t.maxResults = tj.value("maxResults", 5);
-                t.matchThreshold = tj.value("matchThreshold", 0.7f);
-                t.maxImageDim = tj.value("maxImageDim", 1000);
-                t.nmsThreshold = tj.value("nmsThreshold", 0.3f);
-                t.searchMode = tj.value("searchMode", 0);
-                t.tplGray = tj.value("tplGray", false);
-                t.tplBinary = tj.value("tplBinary", false);
-                t.tplBinThresh = tj.value("tplBinThresh", 128);
-                t.tplEdge = tj.value("tplEdge", false);
-                t.tplEdgeLow = tj.value("tplEdgeLow", 50);
-                t.tplEdgeHigh = tj.value("tplEdgeHigh", 150);
-                t.imgUseGray = tj.value("imgUseGray", false);
-                t.imgEnableThreshold = tj.value("imgEnableThreshold", false);
-                t.imgThreshold = tj.value("imgThreshold", 128);
-                t.cannyLow = tj.value("cannyLow", 50);
-                t.cannyHigh = tj.value("cannyHigh", 150);
-                t.edgeUseGray = tj.value("edgeUseGray", false);
-                t.dbgUseGray = tj.value("dbgUseGray", false);
-                t.dbgEnableBlur = tj.value("dbgEnableBlur", false);
-                t.dbgBlurSize = tj.value("dbgBlurSize", 5);
-                t.dbgEnableThresh = tj.value("dbgEnableThresh", false);
-                t.dbgThreshold = tj.value("dbgThreshold", 128);
-                t.dbgEnableCanny = tj.value("dbgEnableCanny", false);
-                t.dbgCannyLow = tj.value("dbgCannyLow", 50);
-                t.dbgCannyHigh = tj.value("dbgCannyHigh", 150);
-                t.blobMinArea = tj.value("blobMinArea", 100);
-                t.blobMaxArea = tj.value("blobMaxArea", 10000);
-                t.useSearchROI = tj.value("useSearchROI", false);
-
-                // YOLO 参数
-                t.yoloModelPath = tj.value("yoloModelPath", "");
-                t.yoloClassesPath = tj.value("yoloClassesPath", "");
-                t.yoloConfThreshold = tj.value("yoloConfThreshold", 0.5f);
-                t.yoloNmsThreshold = tj.value("yoloNmsThreshold", 0.4f);
-                t.yoloUseROI = tj.value("yoloUseROI", false);
-                t.yoloUseGPU = tj.value("yoloUseGPU", false);
-                t.cntUseGray = tj.value("cntUseGray", true);
-                t.cntBlurSize = tj.value("cntBlurSize", 5);
-                t.cntThreshMode = tj.value("cntThreshMode", 0);
-                t.cntThreshValue = tj.value("cntThreshValue", 128);
-                t.cntAdaptBlock = tj.value("cntAdaptBlock", 11);
-                t.cntInvert = tj.value("cntInvert", false);
-                t.cntRetrMode = tj.value("cntRetrMode", 0);
-                t.cntApproxMethod = tj.value("cntApproxMethod", 1);
-                t.cntMinArea = tj.value("cntMinArea", 100.0f);
-                t.cntMaxContours = tj.value("cntMaxContours", 500);
-                t.cntFilterConvex = tj.value("cntFilterConvex", false);
-                t.cntApproxEps = tj.value("cntApproxEps", 0.02f);
-                t.cntLineThick = tj.value("cntLineThick", 2);
-                t.cntShowLabels = tj.value("cntShowLabels", true);
-                t.cntFillContours = tj.value("cntFillContours", false);
-                t.cntMatchROI = tj.value("cntMatchROI", false);
-                t.cntMatchThresh = tj.value("cntMatchThresh", 0.1f);
-                t.shpBlurSize = tj.value("shpBlurSize", 5);
-                t.shpTplRetr = tj.value("shpTplRetr", 0);
-                t.shpTplMinArea = tj.value("shpTplMinArea", 30.0f);
-                t.shpMinScore = tj.value("shpMinScore", 0.5f);
-                t.shpShapeScore = tj.value("shpShapeScore", 0.1f);
-                t.shpLineThick = tj.value("shpLineThick", 2);
-                t.shpMethod = tj.value("shpMethod", 0);
-                t.shpShowLabels = tj.value("shpShowLabels", true);
-                t.shpMaxResults = tj.value("shpMaxResults", 1);
-                t.shpTplGray = tj.value("shpTplGray", false);
-                t.shpTplBinary = tj.value("shpTplBinary", false);
-                t.shpTplBinThresh = tj.value("shpTplBinThresh", 128);
-                t.shpTplBlur = tj.value("shpTplBlur", false);
-                t.shpTplBlurK = tj.value("shpTplBlurK", 5);
-                t.shpTplInvert = tj.value("shpTplInvert", false);
-                t.lineCannyLow = tj.value("lineCannyLow", 50);
-                t.lineCannyHigh = tj.value("lineCannyHigh", 150);
-                t.lineMinLength = tj.value("lineMinLength", 100.0f);
-                t.lineMaxGap = tj.value("lineMaxGap", 20.0f);
-                t.lineMinAngle = tj.value("lineMinAngle", 0.0f);
-                t.lineMaxAngle = tj.value("lineMaxAngle", 180.0f);
-                t.lineThickness = tj.value("lineThickness", 2);
-                t.lineMaxLines = tj.value("lineMaxLines", 1);
-                t.lineShowLabels = tj.value("lineShowLabels", true);
-                t.lineUseROI = tj.value("lineUseROI", false);
-                t.morphOpType = tj.value("morphOpType", 0);
-                t.morphKernelSize = tj.value("morphKernelSize", 3);
-                t.morphKernelShape = tj.value("morphKernelShape", 0);
-                t.morphIterations = tj.value("morphIterations", 1);
-                t.morphUseGray = tj.value("morphUseGray", false);
-                t.colorSpace = tj.value("colorSpace", 0);
-                t.colorHistBins = tj.value("colorHistBins", 32);
-                t.colorShowHist = tj.value("colorShowHist", true);
-                t.colorUseROI = tj.value("colorUseROI", false);
-                t.colorHistHeight = tj.value("colorHistHeight", 100);
-                t.mcfUseROI = tj.value("mcfUseROI", false);
-                t.mcfMaxResults = tj.value("mcfMaxResults", 1);
-                t.mcfMinDist = tj.value("mcfMinDist", 5.0f);
-                t.mcfCrossSize = tj.value("mcfCrossSize", 10);
-                t.mcfCrossThick = tj.value("mcfCrossThick", 2);
-                t.mcfAnchorX = tj.value("mcfAnchorX", 0);
-                t.mcfAnchorY = tj.value("mcfAnchorY", 0);
-                t.mcfImgGray = tj.value("mcfImgGray", false);
-                t.mcfImgBinary = tj.value("mcfImgBinary", false);
-                t.mcfImgBinThresh = tj.value("mcfImgBinThresh", 128);
-                t.mcfRoiX = tj.value("mcfRoiX", 0);
-                t.mcfRoiY = tj.value("mcfRoiY", 0);
-                t.mcfRoiW = tj.value("mcfRoiW", 0);
-                t.mcfRoiH = tj.value("mcfRoiH", 0);
-                t.mcfRefImageBase64 = tj.value("mcfRefImageBase64", "");
+                t.differenceReferenceFile = tj.value("differenceReferenceFile", "");
                 t.mcfPointsJson = tj.value("mcfPointsJson", "");
-                t.ocrDetModelPath = tj.value("ocrDetModelPath", "models\\ppocrv6\\PP_OCRv6_tiny_det.ncnn.bin");
-                t.ocrDetParamPath = tj.value("ocrDetParamPath", "models\\ppocrv6\\PP_OCRv6_tiny_det.ncnn.param");
-                t.ocrRecModelPath = tj.value("ocrRecModelPath", "models\\ppocrv6\\PP_OCRv6_tiny_rec.ncnn.bin");
-                t.ocrRecParamPath = tj.value("ocrRecParamPath", "models\\ppocrv6\\PP_OCRv6_tiny_rec.ncnn.param");
-                t.ocrDictionaryPath = tj.value("ocrDictionaryPath", "models\\ppocrv6\\ppocr_keys_v6_tiny.txt");
-                t.ocrMinConfidence = tj.value("ocrMinConfidence", 0.30f);
-                t.ocrMaxItems = tj.value("ocrMaxItems", 8);
-                t.ocrInputSize = tj.value("ocrInputSize", 512);
-                t.ocrMaxCandidates = tj.value("ocrMaxCandidates", 220);
-                t.ocrMinBoxArea = tj.value("ocrMinBoxArea", 0);
-                t.ocrMinBoxHeight = tj.value("ocrMinBoxHeight", 0);
-                t.ocrRoiPadding = tj.value("ocrRoiPadding", 24);
-                t.ocrFastMode = tj.value("ocrFastMode", true);
-                t.ocrDetectOnly = tj.value("ocrDetectOnly", false);
-                t.ocrUseROI = tj.value("ocrUseROI", true);
-                t.qrUseROI = tj.value("qrUseROI", true);
-                t.qrDetectMulti = tj.value("qrDetectMulti", true);
-                t.qrEnhance = tj.value("qrEnhance", true);
-                t.qrMinSize = tj.value("qrMinSize", 24);
-                t.qrShowText = tj.value("qrShowText", true);
-                t.qrEngine = tj.value("qrEngine", 0);
-                t.qrFormatMask = tj.value("qrFormatMask", static_cast<std::uint32_t>(BarcodeFormatAll));
-                t.qrFilterDuplicates = tj.value("qrFilterDuplicates", true);
-                t.measureMode = tj.value("measureMode", 0);
-                t.measureMmPerPixel = tj.value("measureMmPerPixel", 0.0f);
-                t.measureCalibrationPixels = tj.value("measureCalibrationPixels", 100.0f);
-                t.measureCalibrationMm = tj.value("measureCalibrationMm", 10.0f);
-                t.measureToleranceEnabled = tj.value("measureToleranceEnabled", false);
-                t.measureNominal = tj.value("measureNominal", 0.0f);
-                t.measureToleranceMinus = tj.value("measureToleranceMinus", 0.0f);
-                t.measureTolerancePlus = tj.value("measureTolerancePlus", 0.0f);
-                if (tj.contains("measurement") && tj["measurement"].is_object())
+
+                const std::string mcfImageValue = tj.value("mcfRefImageBase64", "");
+                if (!mcfImageValue.empty())
                 {
-                    const auto& measurement = tj["measurement"];
-                    t.measureMode = std::clamp(measurement.value("mode", t.measureMode), 0, 7);
-                    t.measureCaliperCount = measurement.value("caliperCount", 16);
-                    t.measureSearchLength = measurement.value("searchLength", 30.0f);
-                    t.measureProjectionWidth = measurement.value("projectionWidth", 5.0f);
-                    t.measureSmoothingSigma = measurement.value("smoothingSigma", 1.0f);
-                    t.measureEdgeThreshold = measurement.value("edgeThreshold", 12.0f);
-                    t.measureMinPairDistance = measurement.value("minPairDistance", 3.0f);
-                    t.measureEdgePolarity = measurement.value("edgePolarity", 0);
-                    t.measureSubpixel = measurement.value("subpixel", true);
-                    t.measureFitMethod = measurement.value("fitMethod", 1);
-                    t.measureFitInlierThreshold = measurement.value("fitInlierThreshold", 1.5f);
-                    t.measureMinimumValidCalipers = measurement.value("minimumValidCalipers", 3);
-                    t.measureMinimumConfidence = measurement.value("minimumConfidence", 0.0f);
-                    t.measureMmPerPixel = measurement.value("legacyMmPerPixel", t.measureMmPerPixel);
-                    t.measureCalibration.enabled = measurement.value("calibrationEnabled", false);
-                    t.measureCalibration.scaleX = measurement.value("scaleX", 1.0);
-                    t.measureCalibration.scaleY = measurement.value("scaleY", 1.0);
-                    t.measureCalibration.pixelOrigin.x = measurement.value("pixelOriginX", 0.0);
-                    t.measureCalibration.pixelOrigin.y = measurement.value("pixelOriginY", 0.0);
-                    t.measureCalibration.worldOrigin.x = measurement.value("worldOriginX", 0.0);
-                    t.measureCalibration.worldOrigin.y = measurement.value("worldOriginY", 0.0);
-                    t.measureCalibration.homographyEnabled = measurement.value("homographyEnabled", false);
-                    const auto homography = measurement.value("homography", std::vector<double>());
-                    if (homography.size() == 9)
-                        std::copy(homography.begin(), homography.end(),
-                            t.measureCalibration.pixelToWorldHomography.val);
-                    t.measureCalibration.distortionEnabled = measurement.value("distortionEnabled", false);
-                    t.measureCalibration.fx = measurement.value("fx", 1.0);
-                    t.measureCalibration.fy = measurement.value("fy", 1.0);
-                    t.measureCalibration.cx = measurement.value("cx", 0.0);
-                    t.measureCalibration.cy = measurement.value("cy", 0.0);
-                    t.measureCalibration.k1 = measurement.value("k1", 0.0);
-                    t.measureCalibration.k2 = measurement.value("k2", 0.0);
-                    t.measureCalibration.p1 = measurement.value("p1", 0.0);
-                    t.measureCalibration.p2 = measurement.value("p2", 0.0);
-                    t.measureCalibration.k3 = measurement.value("k3", 0.0);
-                    t.measureToleranceEnabled = measurement.value("toleranceEnabled", t.measureToleranceEnabled);
-                    t.measureNominal = measurement.value("nominal", t.measureNominal);
-                    t.measureToleranceMinus = measurement.value("toleranceMinus", t.measureToleranceMinus);
-                    t.measureTolerancePlus = measurement.value("tolerancePlus", t.measureTolerancePlus);
+                    std::vector<uchar> buffer = Base64Decode(mcfImageValue);
+                    if (buffer.empty())
+                        buffer.assign(mcfImageValue.begin(), mcfImageValue.end());
+                    t.multiColorReferenceImage = cv::imdecode(buffer, cv::IMREAD_COLOR);
                 }
 
-                // 搜索 ROI 子数组
-                if (tj.contains("searchROIs") && tj["searchROIs"].is_array())
+                if (!t.templateFile.empty())
                 {
-                    for (const auto &r : tj["searchROIs"])
-                    {
-                        RecipeROI rr;
-                        rr.startX = r.value("startX", 0.0f);
-                        rr.startY = r.value("startY", 0.0f);
-                        rr.endX = r.value("endX", 0.0f);
-                        rr.endY = r.value("endY", 0.0f);
-                        rr.type = r.value("type", 0);
-                        t.searchROIs.push_back(rr);
-                    }
+                    const std::string templatePath = ResolveRecipeAssetPath(t.templateFile);
+                    t.templateImage = ReadImageFile(templatePath, cv::IMREAD_COLOR);
+                    if (!t.templateImage.empty())
+                        LogSystem::Add(LOG_INFO, "Tool template loaded: %s (%dx%d)",
+                            templatePath.c_str(), t.templateImage.cols, t.templateImage.rows);
                 }
-                if (tj.contains("lineSaveROIs") && tj["lineSaveROIs"].is_array())
+                if (!t.differenceReferenceFile.empty())
                 {
-                    for (const auto &r : tj["lineSaveROIs"])
-                    {
-                        RecipeROI rr;
-                        rr.startX = r.value("startX", 0.0f);
-                        rr.startY = r.value("startY", 0.0f);
-                        rr.endX = r.value("endX", 0.0f);
-                        rr.endY = r.value("endY", 0.0f);
-                        rr.type = r.value("type", 0);
-                        t.lineSaveROIs.push_back(rr);
-                    }
+                    const std::string differencePath = ResolveRecipeAssetPath(
+                        t.differenceReferenceFile);
+                    t.differenceReferenceImage = ReadImageFile(differencePath, cv::IMREAD_COLOR);
+                    if (!t.differenceReferenceImage.empty())
+                        LogSystem::Add(LOG_INFO, "Difference reference loaded: %s (%dx%d)",
+                            differencePath.c_str(), t.differenceReferenceImage.cols,
+                            t.differenceReferenceImage.rows);
                 }
-                if (!t.useSearchROI && !t.searchROIs.empty())
-                {
-                    t.useSearchROI = t.yoloUseROI || t.lineUseROI || t.mcfUseROI || t.colorUseROI || !t.lineSaveROIs.empty();
-                }
-                data.tools.push_back(t);
+
+                data.tools.push_back(std::move(t));
             }
         }
 
@@ -909,7 +556,6 @@ namespace RecipeManager
             if (!tpl.empty())
             {
                 TemplateState::FrozenTemplate() = tpl;
-                TemplateState::ShowPreview() = true;
                 LogSystem::Add(LOG_INFO, "Template image loaded: %s", tplPath.c_str());
             }
         }
@@ -954,36 +600,6 @@ namespace RecipeManager
         if (!currentSourcePath.empty())
             d.imagePath = currentSourcePath;
 
-        // Legacy top-level fields are derived from Core tool instances for old recipe readers.
-        for (const auto& tool : ToolChainState::ReadOnlyTools())
-        {
-            if (tool.type == 3)
-            {
-                d.threshold.useGray = tool.dbgUseGray;
-                d.threshold.thresholdValue = tool.dbgThreshold;
-                d.threshold.cannyLow = tool.dbgCannyLow;
-                d.threshold.cannyHigh = tool.dbgCannyHigh;
-                d.threshold.pipeBlur = tool.dbgEnableBlur;
-                d.threshold.pipeThreshold = tool.dbgEnableThresh;
-                d.threshold.pipeCanny = tool.dbgEnableCanny;
-                d.threshold.pipeBlurSize = tool.dbgBlurSize;
-                d.threshold.pipeThresholdVal = tool.dbgThreshold;
-                d.threshold.pipeCannyLow = tool.dbgCannyLow;
-                d.threshold.pipeCannyHigh = tool.dbgCannyHigh;
-            }
-            else if (tool.type == 1)
-            {
-                d.tmMatch.searchMode = tool.searchMode;
-                d.tmMatch.maxResults = tool.maxResults;
-                d.tmMatch.maxImageDim = tool.maxImageDim;
-                d.tmMatch.matchThreshold = tool.matchThreshold;
-                d.tmMatch.enableRotation = tool.enableRotation;
-                d.tmMatch.rotationStart = tool.rotationStart;
-                d.tmMatch.rotationEnd = tool.rotationEnd;
-                d.tmMatch.rotationStep = tool.rotationStep;
-            }
-        }
-
         // ROI
         d.rois.clear();
         for (const auto &roi : ROIState::ReadOnlyItems())
@@ -1001,225 +617,29 @@ namespace RecipeManager
 
         // 工具实例
         d.tools.clear();
-        LogSystem::Add(LOG_INFO, "[Capture] g_ToolInstances: %zu",
+        LogSystem::Add(LOG_INFO, "[Capture] Core tool instances: %zu",
                        ToolChainState::ReadOnlyTools().size());
         for (size_t ti = 0; ti < ToolChainState::ReadOnlyTools().size(); ti++)
         {
             const auto &src = ToolChainState::ReadOnlyTools()[ti];
             RecipeToolInstance t;
-            t.type = src.type;
-            t.label = src.label;
-            t.showResultLabels = src.showResultLabels;
-            t.inputSourceMode = src.inputSourceMode;
-            t.resultRoiMode = src.resultRoiMode;
-            t.resultRoiSourceTool = src.resultRoiSourceTool;
-            t.resultRoiIndex = src.resultRoiIndex;
-            t.resultRoiMissingPolicy = src.resultRoiMissingPolicy;
-            t.fixture = src.fixture;
-            t.judgement = src.judgement;
+            t.CaptureFrom(src);
             if (!src.templateImg.empty() || !src.shpTplImage.empty())
                 t.templateFile = d.name + "_tpl" + std::to_string(ti) + ".png";
-            t.hasTemplateROI = src.hasTemplateROI;
-            if (src.hasTemplateROI)
-            {
-                t.templateROI.startX = src.templateROI.start.x;
-                t.templateROI.startY = src.templateROI.start.y;
-                t.templateROI.endX = src.templateROI.end.x;
-                t.templateROI.endY = src.templateROI.end.y;
-                t.templateROI.type = src.templateROI.type;
-            }
+            if (!src.differenceReferenceImage.empty())
+                t.differenceReferenceFile = d.name + "_diff_ref_" + std::to_string(ti) + ".png";
 
-            t.enableRotation = src.enableRotation;
-            t.rotationStart = src.rotationStart;
-            t.rotationEnd = src.rotationEnd;
-            t.rotationStep = src.rotationStep;
-            t.maxResults = src.maxResults;
-            t.matchThreshold = src.matchThreshold;
-            t.maxImageDim = src.maxImageDim;
-            t.nmsThreshold = src.nmsThreshold;
-            t.searchMode = src.searchMode;
-            t.tplGray = src.tplGray;
-            t.tplBinary = src.tplBinary;
-            t.tplBinThresh = src.tplBinThresh;
-            t.tplEdge = src.tplEdge;
-            t.tplEdgeLow = src.tplEdgeLow;
-            t.tplEdgeHigh = src.tplEdgeHigh;
-            t.imgUseGray = src.imgUseGray;
-            t.imgEnableThreshold = src.imgEnableThreshold;
-            t.imgThreshold = src.imgThreshold;
-            t.cannyLow = src.cannyLow;
-            t.cannyHigh = src.cannyHigh;
-            t.edgeUseGray = src.edgeUseGray;
-            t.dbgUseGray = src.dbgUseGray;
-            t.dbgEnableBlur = src.dbgEnableBlur;
-            t.dbgBlurSize = src.dbgBlurSize;
-            t.dbgEnableThresh = src.dbgEnableThresh;
-            t.dbgThreshold = src.dbgThreshold;
-            t.dbgEnableCanny = src.dbgEnableCanny;
-            t.dbgCannyLow = src.dbgCannyLow;
-            t.dbgCannyHigh = src.dbgCannyHigh;
-            t.blobMinArea = src.blobMinArea;
-            t.blobMaxArea = src.blobMaxArea;
-            t.useSearchROI = src.useSearchROI;
-
-            // YOLO 参数
-            t.yoloModelPath = src.yoloModelPath;
-            t.yoloClassesPath = src.yoloClassesPath;
-            t.yoloConfThreshold = src.yoloConfThreshold;
-            t.yoloNmsThreshold = src.yoloNmsThreshold;
-            t.yoloUseROI = src.yoloUseROI;
-            t.yoloUseGPU = src.yoloUseGPU;
-            t.cntUseGray = src.cntUseGray;
-            t.cntBlurSize = src.cntBlurSize;
-            t.cntThreshMode = src.cntThreshMode;
-            t.cntThreshValue = src.cntThreshValue;
-            t.cntAdaptBlock = src.cntAdaptBlock;
-            t.cntInvert = src.cntInvert;
-            t.cntRetrMode = src.cntRetrMode;
-            t.cntApproxMethod = src.cntApproxMethod;
-            t.cntMinArea = src.cntMinArea;
-            t.cntMaxContours = src.cntMaxContours;
-            t.cntFilterConvex = src.cntFilterConvex;
-            t.cntApproxEps = src.cntApproxEps;
-            t.cntLineThick = src.cntLineThick;
-            t.cntShowLabels = src.cntShowLabels;
-            t.cntFillContours = src.cntFillContours;
-            t.cntMatchROI = src.cntMatchROI;
-            t.cntMatchThresh = src.cntMatchThresh;
-            t.shpBlurSize = src.shpBlurSize;
-            t.shpTplRetr = src.shpTplRetr;
-            t.shpTplMinArea = src.shpTplMinArea;
-            t.shpMinScore = src.shpMinScore;
-            t.shpShapeScore = src.shpShapeScore;
-            t.shpLineThick = src.shpLineThick;
-            t.shpMethod = src.shpMethod;
-            t.shpShowLabels = src.shpShowLabels;
-            t.shpMaxResults = src.shpMaxResults;
-            t.shpTplGray = src.shpTplGray;
-            t.shpTplBinary = src.shpTplBinary;
-            t.shpTplBinThresh = src.shpTplBinThresh;
-            t.shpTplBlur = src.shpTplBlur;
-            t.shpTplBlurK = src.shpTplBlurK;
-            t.shpTplInvert = src.shpTplInvert;
-            t.lineCannyLow = src.lineCannyLow;
-            t.lineCannyHigh = src.lineCannyHigh;
-            t.lineMinLength = src.lineMinLength;
-            t.lineMaxGap = src.lineMaxGap;
-            t.lineMinAngle = src.lineMinAngle;
-            t.lineMaxAngle = src.lineMaxAngle;
-            t.lineThickness = src.lineThickness;
-            t.lineMaxLines = src.lineMaxLines;
-            t.lineShowLabels = src.lineShowLabels;
-            t.lineUseROI = src.lineUseROI;
-            t.morphOpType = src.morphOpType;
-            t.morphKernelSize = src.morphKernelSize;
-            t.morphKernelShape = src.morphKernelShape;
-            t.morphIterations = src.morphIterations;
-            t.morphUseGray = src.morphUseGray;
-            t.colorSpace = src.colorSpace;
-            t.colorHistBins = src.colorHistBins;
-            t.colorShowHist = src.colorShowHist;
-            t.colorUseROI = src.colorUseROI;
-            t.colorHistHeight = src.colorHistHeight;
-            t.mcfRoiX = src.mcfRoiX;
-            t.mcfRoiY = src.mcfRoiY;
-            t.mcfRoiW = src.mcfRoiW;
-            t.mcfRoiH = src.mcfRoiH;
-            t.ocrDetModelPath = src.ocrDetModelPath;
-            t.ocrDetParamPath = src.ocrDetParamPath;
-            t.ocrRecModelPath = src.ocrRecModelPath;
-            t.ocrRecParamPath = src.ocrRecParamPath;
-            t.ocrDictionaryPath = src.ocrDictionaryPath;
-            t.ocrMinConfidence = src.ocrMinConfidence;
-            t.ocrMaxItems = src.ocrMaxItems;
-            t.ocrInputSize = src.ocrInputSize;
-            t.ocrMaxCandidates = src.ocrMaxCandidates;
-            t.ocrMinBoxArea = src.ocrMinBoxArea;
-            t.ocrMinBoxHeight = src.ocrMinBoxHeight;
-            t.ocrRoiPadding = src.ocrRoiPadding;
-            t.ocrFastMode = src.ocrFastMode;
-            t.ocrDetectOnly = src.ocrDetectOnly;
-            t.ocrUseROI = src.ocrUseROI;
-            t.qrUseROI = src.qrUseROI;
-            t.qrDetectMulti = src.qrDetectMulti;
-            t.qrEnhance = src.qrEnhance;
-            t.qrMinSize = src.qrMinSize;
-            t.qrShowText = src.qrShowText;
-            t.qrEngine = src.qrEngine;
-            t.qrFormatMask = src.qrFormatMask;
-            t.qrFilterDuplicates = src.qrFilterDuplicates;
-            t.measureMode = src.measureMode;
-            t.measureCaliperCount = src.measureCaliperCount;
-            t.measureSearchLength = src.measureSearchLength;
-            t.measureProjectionWidth = src.measureProjectionWidth;
-            t.measureSmoothingSigma = src.measureSmoothingSigma;
-            t.measureEdgeThreshold = src.measureEdgeThreshold;
-            t.measureMinPairDistance = src.measureMinPairDistance;
-            t.measureEdgePolarity = src.measureEdgePolarity;
-            t.measureSubpixel = src.measureSubpixel;
-            t.measureFitMethod = src.measureFitMethod;
-            t.measureFitInlierThreshold = src.measureFitInlierThreshold;
-            t.measureMinimumValidCalipers = src.measureMinimumValidCalipers;
-            t.measureMinimumConfidence = src.measureMinimumConfidence;
-            t.measureMmPerPixel = src.measureMmPerPixel;
-            t.measureCalibration = src.measureCalibration;
-            t.measureCalibrationPixels = src.measureCalibrationPixels;
-            t.measureCalibrationMm = src.measureCalibrationMm;
-            t.measureToleranceEnabled = src.measureToleranceEnabled;
-            t.measureNominal = src.measureNominal;
-            t.measureToleranceMinus = src.measureToleranceMinus;
-            t.measureTolerancePlus = src.measureTolerancePlus;
-
-            for (const auto &roi : src.searchROIs)
-            {
-                RecipeROI r;
-                r.startX = roi.start.x;
-                r.startY = roi.start.y;
-                r.endX = roi.end.x;
-                r.endY = roi.end.y;
-                r.type = roi.type;
-                t.searchROIs.push_back(r);
-            }
-            for (const auto &roi : src.lineSaveROIs)
-            {
-                RecipeROI r;
-                r.startX = roi.start.x;
-                r.startY = roi.start.y;
-                r.endX = roi.end.x;
-                r.endY = roi.end.y;
-                r.type = roi.type;
-                t.lineSaveROIs.push_back(r);
-            }
-
-            // 多点找色 type==10
             if (src.type == 10)
             {
-                t.mcfUseROI      = src.mcfUseROI;
-                t.mcfMaxResults  = src.mcfMaxResults;
-                t.mcfMinDist     = src.mcfMinDist;
-                t.mcfCrossSize   = src.mcfCrossSize;
-                t.mcfCrossThick  = src.mcfCrossThick;
-                t.mcfAnchorX     = src.mcfAnchorX;
-                t.mcfAnchorY     = src.mcfAnchorY;
-                t.mcfImgGray     = src.mcfImgGray;
-                t.mcfImgBinary   = src.mcfImgBinary;
-                t.mcfImgBinThresh= src.mcfImgBinThresh;
-                // 参考图 base64
-                if (!src.mcfRefImage.empty())
-                {
-                    std::vector<uchar> buf;
-                    if (cv::imencode(".png", src.mcfRefImage, buf))
-                        t.mcfRefImageBase64 = Base64Encode(buf);
-                }
-                // 颜色点 JSON
                 if (src.toolImpl)
                 {
-                    auto* mf = dynamic_cast<MultiColorFinder*>(src.toolImpl);
-                    if (mf) t.mcfPointsJson = mf->Save().dump();
+                    auto* finder = dynamic_cast<MultiColorFinder*>(src.toolImpl);
+                    if (finder)
+                        t.mcfPointsJson = finder->Save().dump();
                 }
             }
 
-            d.tools.push_back(t);
+            d.tools.push_back(std::move(t));
         }
 
         return d;
@@ -1229,7 +649,7 @@ namespace RecipeManager
     void Apply(const RecipeData &data)
     {
         if (!data.imagePath.empty())
-            FrameNavigation::RequestImagePath(data.imagePath);
+            FrameNavigation::RequestImagePath(ResolveRecipeAssetPath(data.imagePath));
 
         // ROI
         ROIState::Items().clear();
@@ -1243,7 +663,8 @@ namespace RecipeManager
         }
 
         // 工具实例
-        ToolChainState::Tools().clear();
+        ToolController::OnToolChainChanged();
+        ToolChainState::ClearTools();
         LogSystem::Add(LOG_INFO, "[Apply] restoring tools: %zu", data.tools.size());
         if (data.tools.empty())
         {
@@ -1257,246 +678,60 @@ namespace RecipeManager
             threshold.dbgEnableCanny = data.threshold.pipeCanny;
             threshold.dbgCannyLow = data.threshold.pipeCannyLow;
             threshold.dbgCannyHigh = data.threshold.pipeCannyHigh;
-            ToolChainState::Tools().push_back(std::move(threshold));
+            ToolChainState::AddTool(std::move(threshold));
         }
         for (size_t ti = 0; ti < data.tools.size(); ti++)
         {
             const auto &t = data.tools[ti];
-            ToolInstance it;
-            it.type = t.type;
-            it.label = t.label;
-            it.showResultLabels = t.showResultLabels;
-            it.inputSourceMode = t.inputSourceMode;
-            it.resultRoiMode = t.resultRoiMode;
-            it.resultRoiSourceTool = t.resultRoiSourceTool;
-            it.resultRoiIndex = t.resultRoiIndex;
-            it.resultRoiMissingPolicy = t.resultRoiMissingPolicy;
-            it.fixture = t.fixture;
-            it.judgement = t.judgement;
-            it.hasTemplateROI = t.hasTemplateROI;
-            if (t.hasTemplateROI)
-            {
-                it.templateROI.start = ImVec2(t.templateROI.startX, t.templateROI.startY);
-                it.templateROI.end = ImVec2(t.templateROI.endX, t.templateROI.endY);
-                it.templateROI.type = t.templateROI.type;
-            }
-            it.enableRotation = t.enableRotation;
-            it.rotationStart = t.rotationStart;
-            it.rotationEnd = t.rotationEnd;
-            it.rotationStep = t.rotationStep;
-            it.maxResults = t.maxResults;
-            it.matchThreshold = t.matchThreshold;
-            it.maxImageDim = t.maxImageDim;
-            it.nmsThreshold = t.nmsThreshold;
-            it.searchMode = t.searchMode;
-            it.tplGray = t.tplGray;
-            it.tplBinary = t.tplBinary;
-            it.tplBinThresh = t.tplBinThresh;
-            it.tplEdge = t.tplEdge;
-            it.tplEdgeLow = t.tplEdgeLow;
-            it.tplEdgeHigh = t.tplEdgeHigh;
-            it.imgUseGray = t.imgUseGray;
-            it.imgEnableThreshold = t.imgEnableThreshold;
-            it.imgThreshold = t.imgThreshold;
-            it.cannyLow = t.cannyLow;
-            it.cannyHigh = t.cannyHigh;
-            it.edgeUseGray = t.edgeUseGray;
-            it.dbgUseGray = t.dbgUseGray;
-            it.dbgEnableBlur = t.dbgEnableBlur;
-            it.dbgBlurSize = t.dbgBlurSize;
-            it.dbgEnableThresh = t.dbgEnableThresh;
-            it.dbgThreshold = t.dbgThreshold;
-            it.dbgEnableCanny = t.dbgEnableCanny;
-            it.dbgCannyLow = t.dbgCannyLow;
-            it.dbgCannyHigh = t.dbgCannyHigh;
-            it.blobMinArea = t.blobMinArea;
-            it.blobMaxArea = t.blobMaxArea;
-            it.useSearchROI = t.useSearchROI;
+            ToolInstance it = t.CreateToolInstance();
 
-            // YOLO 参数
-            it.yoloModelPath = t.yoloModelPath;
-            it.yoloClassesPath = t.yoloClassesPath;
-            it.yoloConfThreshold = t.yoloConfThreshold;
-            it.yoloNmsThreshold = t.yoloNmsThreshold;
-            it.yoloUseROI = t.yoloUseROI;
-            it.yoloUseGPU = t.yoloUseGPU;
-            it.cntUseGray = t.cntUseGray;
-            it.cntBlurSize = t.cntBlurSize;
-            it.cntThreshMode = t.cntThreshMode;
-            it.cntThreshValue = t.cntThreshValue;
-            it.cntAdaptBlock = t.cntAdaptBlock;
-            it.cntInvert = t.cntInvert;
-            it.cntRetrMode = t.cntRetrMode;
-            it.cntApproxMethod = t.cntApproxMethod;
-            it.cntMinArea = t.cntMinArea;
-            it.cntMaxContours = t.cntMaxContours;
-            it.cntFilterConvex = t.cntFilterConvex;
-            it.cntApproxEps = t.cntApproxEps;
-            it.cntLineThick = t.cntLineThick;
-            it.cntShowLabels = t.cntShowLabels;
-            it.cntFillContours = t.cntFillContours;
-            it.cntMatchROI = t.cntMatchROI;
-            it.cntMatchThresh = t.cntMatchThresh;
-            it.shpBlurSize = t.shpBlurSize;
-            it.shpTplRetr = t.shpTplRetr;
-            it.shpTplMinArea = t.shpTplMinArea;
-            it.shpMinScore = t.shpMinScore;
-            it.shpShapeScore = t.shpShapeScore;
-            it.shpLineThick = t.shpLineThick;
-            it.shpMethod = t.shpMethod;
-            it.shpShowLabels = t.shpShowLabels;
-            it.shpMaxResults = t.shpMaxResults;
-            it.shpTplGray = t.shpTplGray;
-            it.shpTplBinary = t.shpTplBinary;
-            it.shpTplBinThresh = t.shpTplBinThresh;
-            it.shpTplBlur = t.shpTplBlur;
-            it.shpTplBlurK = t.shpTplBlurK;
-            it.shpTplInvert = t.shpTplInvert;
-            it.lineCannyLow = t.lineCannyLow;
-            it.lineCannyHigh = t.lineCannyHigh;
-            it.lineMinLength = t.lineMinLength;
-            it.lineMaxGap = t.lineMaxGap;
-            it.lineMinAngle = t.lineMinAngle;
-            it.lineMaxAngle = t.lineMaxAngle;
-            it.lineThickness = t.lineThickness;
-            it.lineMaxLines = t.lineMaxLines;
-            it.lineShowLabels = t.lineShowLabels;
-            it.lineUseROI = t.lineUseROI;
-            it.morphOpType = t.morphOpType;
-            it.morphKernelSize = t.morphKernelSize;
-            it.morphKernelShape = t.morphKernelShape;
-            it.morphIterations = t.morphIterations;
-            it.morphUseGray = t.morphUseGray;
-            it.colorSpace = t.colorSpace;
-            it.colorHistBins = t.colorHistBins;
-            it.colorShowHist = t.colorShowHist;
-            it.colorUseROI = t.colorUseROI;
-            it.colorHistHeight = t.colorHistHeight;
-            it.mcfRoiX = t.mcfRoiX;
-            it.mcfRoiY = t.mcfRoiY;
-            it.mcfRoiW = t.mcfRoiW;
-            it.mcfRoiH = t.mcfRoiH;
-            it.ocrDetModelPath = t.ocrDetModelPath;
-            it.ocrDetParamPath = t.ocrDetParamPath;
-            it.ocrRecModelPath = t.ocrRecModelPath;
-            it.ocrRecParamPath = t.ocrRecParamPath;
-            it.ocrDictionaryPath = t.ocrDictionaryPath;
-            it.ocrMinConfidence = t.ocrMinConfidence;
-            it.ocrMaxItems = t.ocrMaxItems;
-            it.ocrInputSize = t.ocrInputSize;
-            it.ocrMaxCandidates = t.ocrMaxCandidates;
-            it.ocrMinBoxArea = t.ocrMinBoxArea;
-            it.ocrMinBoxHeight = t.ocrMinBoxHeight;
-            it.ocrRoiPadding = t.ocrRoiPadding;
-            it.ocrFastMode = t.ocrFastMode;
-            it.ocrDetectOnly = t.ocrDetectOnly;
-            it.ocrUseROI = t.ocrUseROI;
-            it.qrUseROI = t.qrUseROI;
-            it.qrDetectMulti = t.qrDetectMulti;
-            it.qrEnhance = t.qrEnhance;
-            it.qrMinSize = t.qrMinSize;
-            it.qrShowText = t.qrShowText;
-            it.qrEngine = t.qrEngine;
-            it.qrFormatMask = t.qrFormatMask;
-            it.qrFilterDuplicates = t.qrFilterDuplicates;
-            it.measureMode = t.measureMode;
-            it.measureCaliperCount = t.measureCaliperCount;
-            it.measureSearchLength = t.measureSearchLength;
-            it.measureProjectionWidth = t.measureProjectionWidth;
-            it.measureSmoothingSigma = t.measureSmoothingSigma;
-            it.measureEdgeThreshold = t.measureEdgeThreshold;
-            it.measureMinPairDistance = t.measureMinPairDistance;
-            it.measureEdgePolarity = t.measureEdgePolarity;
-            it.measureSubpixel = t.measureSubpixel;
-            it.measureFitMethod = t.measureFitMethod;
-            it.measureFitInlierThreshold = t.measureFitInlierThreshold;
-            it.measureMinimumValidCalipers = t.measureMinimumValidCalipers;
-            it.measureMinimumConfidence = t.measureMinimumConfidence;
-            it.measureMmPerPixel = t.measureMmPerPixel;
-            it.measureCalibration = t.measureCalibration;
-            it.measureCalibrationPixels = t.measureCalibrationPixels;
-            it.measureCalibrationMm = t.measureCalibrationMm;
-            it.measureToleranceEnabled = t.measureToleranceEnabled;
-            it.measureNominal = t.measureNominal;
-            it.measureToleranceMinus = t.measureToleranceMinus;
-            it.measureTolerancePlus = t.measureTolerancePlus;
+            it.yoloModelPath = ResolveRecipeAssetPath(it.yoloModelPath);
+            it.yoloClassesPath = ResolveRecipeAssetPath(it.yoloClassesPath);
+            it.ocrDetModelPath = ResolveRecipeAssetPath(it.ocrDetModelPath);
+            it.ocrDetParamPath = ResolveRecipeAssetPath(it.ocrDetParamPath);
+            it.ocrRecModelPath = ResolveRecipeAssetPath(it.ocrRecModelPath);
+            it.ocrRecParamPath = ResolveRecipeAssetPath(it.ocrRecParamPath);
+            it.ocrDictionaryPath = ResolveRecipeAssetPath(it.ocrDictionaryPath);
 
-            // 多点找色 type==10
-            if (t.type == 10)
+            if (it.type == 10)
             {
-                it.mcfUseROI      = t.mcfUseROI;
-                it.mcfMaxResults  = t.mcfMaxResults;
-                it.mcfMinDist     = t.mcfMinDist;
-                it.mcfCrossSize   = t.mcfCrossSize;
-                it.mcfCrossThick  = t.mcfCrossThick;
-                it.mcfAnchorX     = t.mcfAnchorX;
-                it.mcfAnchorY     = t.mcfAnchorY;
-                it.mcfImgGray     = t.mcfImgGray;
-                it.mcfImgBinary   = t.mcfImgBinary;
-                it.mcfImgBinThresh= t.mcfImgBinThresh;
-                // 恢复参考图
-                if (!t.mcfRefImageBase64.empty())
-                {
-                    std::vector<uchar> buf = Base64Decode(t.mcfRefImageBase64);
-                    if (buf.empty())
-                        buf.assign(t.mcfRefImageBase64.begin(), t.mcfRefImageBase64.end());
-                    it.mcfRefImage = cv::imdecode(buf, cv::IMREAD_COLOR);
-                }
-                // 恢复颜色点
                 if (!t.mcfPointsJson.empty())
                 {
-                    it.toolImpl = ITool::Create(10).release();
-                    if (it.toolImpl)
+                    const json points = json::parse(t.mcfPointsJson, nullptr, false);
+                    if (!points.is_discarded())
                     {
-                        auto j = nlohmann::json::parse(t.mcfPointsJson);
-                        auto* mf = dynamic_cast<MultiColorFinder*>(it.toolImpl);
-                        if (mf) mf->Load(j);
+                        it.toolImpl = ITool::Create(10).release();
+                        if (auto* finder = dynamic_cast<MultiColorFinder*>(it.toolImpl))
+                            finder->Load(points);
+                    }
+                    else
+                    {
+                        LogSystem::Add(LOG_WARN, "Multi-color recipe points JSON is invalid");
                     }
                 }
             }
 
-            // 搜索 ROI
-            for (const auto &r : t.searchROIs)
-            {
-                ROI roi;
-                roi.start = ImVec2(r.startX, r.startY);
-                roi.end = ImVec2(r.endX, r.endY);
-                roi.type = r.type;
-                it.searchROIs.push_back(roi);
-            }
-            for (const auto &r : t.lineSaveROIs)
-            {
-                ROI roi;
-                roi.start = ImVec2(r.startX, r.startY);
-                roi.end = ImVec2(r.endX, r.endY);
-                roi.type = r.type;
-                it.lineSaveROIs.push_back(roi);
-            }
-
-            // Load template image
-            if (!t.templateFile.empty() && !g_LastRecipePath.empty())
-            {
-                size_t slash = g_LastRecipePath.find_last_of("\\/");
-                std::string tplPath = (slash != std::string::npos)
-                                          ? g_LastRecipePath.substr(0, slash + 1) + t.templateFile
-                                          : t.templateFile;
-                it.templateImg = ReadImageFile(tplPath, cv::IMREAD_COLOR);
-                if (!it.templateImg.empty())
-                {
-                    LogSystem::Add(LOG_INFO, "Tool template loaded: %s (%dx%d)", tplPath.c_str(),
-                                   it.templateImg.cols, it.templateImg.rows);
-                    // 形状匹配使用 shpTplImage（深拷贝）
-                    if (it.type == 6)
-                    {
-                        it.shpTplImage = it.templateImg.clone();
-                        LogSystem::Add(LOG_INFO, "Shape template synced: %dx%d", it.shpTplImage.cols, it.shpTplImage.rows);
-                    }
-                }
-            }
-
-            ToolChainState::Tools().push_back(it);
+            ToolChainState::AddTool(std::move(it));
         }
 
+        ToolChainState::EnsureToolIds();
+        for (ToolInstance& tool : ToolChainState::Tools())
+        {
+            if (tool.resultRoiSourceToolId == 0 &&
+                tool.resultRoiSourceTool >= 0 &&
+                tool.resultRoiSourceTool < static_cast<int>(ToolChainState::ReadOnlyTools().size()))
+            {
+                tool.resultRoiSourceToolId =
+                    ToolChainState::ReadOnlyTools()[tool.resultRoiSourceTool].toolId;
+            }
+            if (tool.fixture.sourceToolId == 0 &&
+                tool.fixture.sourceToolIndex >= 0 &&
+                tool.fixture.sourceToolIndex < static_cast<int>(ToolChainState::ReadOnlyTools().size()))
+            {
+                tool.fixture.sourceToolId =
+                    ToolChainState::ReadOnlyTools()[tool.fixture.sourceToolIndex].toolId;
+            }
+        }
         ToolChainState::MoveOriginalToolToFront();
 
         LogSystem::Add(LOG_INFO, "[Apply] recipe applied: %s (tools: %zu)", data.name.c_str(), data.tools.size());

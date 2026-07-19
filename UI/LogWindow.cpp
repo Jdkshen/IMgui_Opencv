@@ -1,5 +1,7 @@
-#include "../Windows_imgui.h"
 #include "LogWindow.h"
+#include "DockSpaceHost.h"
+#include "../Core/ThemeManager.h"
+#include "../include/imgui/imgui.h"
 #include "../Log/LogSystem.h"
 
 namespace UI

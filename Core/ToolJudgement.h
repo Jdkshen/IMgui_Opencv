@@ -13,6 +13,10 @@ struct ToolJudgementSettings
     float minScore = -1.0f;
     float minArea = -1.0f;
     float maxArea = -1.0f;
+    bool measurementRangeEnabled = false;
+    std::string measurementName;
+    double minMeasurement = 0.0;
+    double maxMeasurement = 0.0;
     std::string requiredText;
     int textMatchMode = 0; // 0=contains, 1=equals
     bool textCaseSensitive = false;

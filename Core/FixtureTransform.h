@@ -4,6 +4,7 @@
 #include "../Algorithm/ToolResult.h"
 
 #include <vector>
+#include <cstdint>
 
 struct FixturePose
 {
@@ -16,6 +17,7 @@ struct FixtureSettings
 {
     bool enabled = false;
     int sourceToolIndex = -1;
+    std::uint64_t sourceToolId = 0;
     int resultIndex = 0;
     cv::Point2f referenceOrigin;
     float referenceAngleDegrees = 0.0f;

@@ -170,7 +170,7 @@ type 0-11、13 工具统一走一条结果通路；type 12 原图由 `ToolContro
 Tool -> ToolResult -> gContext.unifiedResults -> DrawUnifiedResults()
 ```
 
-实时 YOLO 也发布到 `gContext.unifiedResults`，同时保留 `g_YoloOverlays` 仅用于视频偏移补偿。
+实时 YOLO 也发布到 `gContext.unifiedResults`，视频偏移和实时状态由 `RealtimeDetectionState` 管理。
 
 旧容器 `g_ContourOverlays` / `g_ShapeContourOverlays` / `g_LineOverlays` 及 `g_UnifiedResults` 影子状态已删除。
 
@@ -234,7 +234,8 @@ Tool -> ToolResult -> gContext.unifiedResults -> DrawUnifiedResults()
 |------|----------|------|
 | 程序入口 | `Windows_imgui.cpp` | 主循环、窗口、DX12、ImGui 初始化与逐帧驱动 |
 | 公共头聚合 | `Windows_imgui.h` | 汇总主要模块头文件 |
-| 统一上下文 | `Core/VisionContext.h` | 图像、ROI、模板、结果、视图状态的统一容器 |
+| 统一上下文 | `Core/VisionContext.h` | 图像、ROI、模板和结果的统一容器 |
+| 图像视图状态 | `Core/ImageViewState.h` | 缩放、平移、画布位置和网格设置 |
 | 工具调度 | `Core/ToolController.h/.cpp` | 执行模式、队列、单步/批量控制 |
 | 工具执行 | `Core/ToolExecutor.h/.cpp` | type 0-11、13 分发到 ITool，type 12 原图由 ToolController 特殊处理 |
 | 图像显示 | `UI/ImageViewer.h/.cpp` | 图片/视频显示、缩放平移、叠加绘制 |

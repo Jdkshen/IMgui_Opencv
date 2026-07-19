@@ -1,5 +1,6 @@
-#include "../Windows_imgui.h"
 #include "AppTitleBar.h"
+#include "../Core/AppRuntimeState.h"
+#include "../include/imgui/imgui.h"
 
 namespace UI
 {
@@ -86,6 +87,7 @@ float GetAppTitleBarHeight()
 
 void ShowAppTitleBar()
 {
+    HWND window = AppRuntimeState::WindowHandle();
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     const float height = GetAppTitleBarHeight();
 
@@ -141,14 +143,14 @@ void ShowAppTitleBar()
         const float buttonH = height;
         ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - buttonW * 3.0f, 0.0f));
         if (TitleIconButton("##title_minimize", TitleButtonIcon::Minimize, ImVec2(buttonW, buttonH), ImGui::GetColorU32(ImGuiCol_HeaderHovered)))
-            ::ShowWindow(g_hWnd, SW_MINIMIZE);
+            ::ShowWindow(window, SW_MINIMIZE);
         ImGui::SameLine(0.0f, 0.0f);
-        const TitleButtonIcon maxIcon = ::IsZoomed(g_hWnd) ? TitleButtonIcon::Restore : TitleButtonIcon::Maximize;
+        const TitleButtonIcon maxIcon = ::IsZoomed(window) ? TitleButtonIcon::Restore : TitleButtonIcon::Maximize;
         if (TitleIconButton("##title_maximize", maxIcon, ImVec2(buttonW, buttonH), ImGui::GetColorU32(ImGuiCol_HeaderHovered)))
-            ::ShowWindow(g_hWnd, ::IsZoomed(g_hWnd) ? SW_RESTORE : SW_MAXIMIZE);
+            ::ShowWindow(window, ::IsZoomed(window) ? SW_RESTORE : SW_MAXIMIZE);
         ImGui::SameLine(0.0f, 0.0f);
         if (TitleIconButton("##title_close", TitleButtonIcon::Close, ImVec2(buttonW, buttonH), IM_COL32(210, 50, 55, 210)))
-            ::PostMessageW(g_hWnd, WM_CLOSE, 0, 0);
+            ::PostMessageW(window, WM_CLOSE, 0, 0);
     }
     ImGui::End();
 

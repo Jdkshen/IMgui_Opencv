@@ -50,8 +50,6 @@ public:
 };
 
 // 全局状态（UI 显示用）
-extern float g_McfLastTimeMs;
-extern int   g_McfLastCount;
 
 // 实时预处理显示（UI勾选灰度/二值化时立即更新主图）
 void McfApplyPreview(bool useGray, bool useBinary, int binThresh, const cv::Mat& src);

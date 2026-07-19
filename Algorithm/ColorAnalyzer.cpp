@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-extern ImVec4 color;
 
 namespace ColorAnalyzer
 {
@@ -67,7 +66,7 @@ namespace ColorAnalyzer
         g_AnalyzeTimeMs = std::chrono::duration<float, std::milli>(t1 - t0).count();
         g_LastResult = r;
         static const char *cs[] = {"BGR", "HSV", "Lab", "YCbCr", "Gray"};
-        LogSystem::Add(LOG_INFO, color, "Color[%s]:R=%.1f±%.1f G=%.1f±%.1f B=%.1f±%.1f|%.3fms", cs[colorSpace], r.meanR, r.stdR, r.meanG, r.stdG, r.meanB, r.stdB, g_AnalyzeTimeMs);
+        LogSystem::Add(LOG_INFO, "Color[%s]:R=%.1f±%.1f G=%.1f±%.1f B=%.1f±%.1f|%.3fms", cs[colorSpace], r.meanR, r.stdR, r.meanG, r.stdG, r.meanB, r.stdB, g_AnalyzeTimeMs);
         return r;
     }
     cv::Mat DrawHistogram(const cv::Mat & /*img*/, const ColorResult &r, const Params &p)

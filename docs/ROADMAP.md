@@ -1,6 +1,6 @@
 # 开发路线
 
-> 当前版本: 2026-06-28 | 13 个 ITool 工具 | type 0-11、13 ITool | type 12 原图特殊工具 | 后续按“稳定平台 -> 工业工具 -> 执行链路 -> 发布 -> 平台化”推进
+> 当前版本: 2026-07-19 | 已覆盖 type 0-16（type 12 为原图特殊工具）| 后续按“稳定性 -> 架构收尾 -> 工业能力 -> 工具链体验 -> 发布”推进
 
 ---
 
@@ -38,36 +38,37 @@
 | ② | **ToolResult 统一** | ✅ 已完成 — `ToolResult { measurements, regions, detections, lines, texts, debugImage }` 替代各工具独立结构 |
 | ③ | **ROI 升级** | ✅ 已完成 — `ROI_TYPE_RECT/POINT/LINE/CIRCLE/POLYGON` 5 种几何类型 + 按类型可视化 |
 | ④ | **Recipe 版本化** | ✅ 已完成 — `"version": 1` |
-| ⑤ | **VisionContext** | ✅ 已完成 — `struct VisionContext { image, rois, frozenTemplate, unifiedResults, zoom/pan }` 统一上下文 |
+| ⑤ | **VisionContext** | ✅ 已完成 — `struct VisionContext { image, rois, frozenTemplate, unifiedResults }` 统一算法上下文，视图变换由 `ImageViewState` 管理 |
 | ⑥ | **ToolExecutor/ToolController 拆分** | ✅ 已完成 — 执行/调度逻辑已从 ToolsWindow 拆到 Core，UI 文件仍保留参数面板代码 |
 
-## 第三阶段 进行中 — 稳定平台
+## 第三阶段 ✅ 稳定平台基线
 
 | # | 功能 | 状态 |
 |---|------|------|
 | 1 | 结果导出 | ✅ 已完成 — 导出 `ToolResult` 的 detections、regions、lines、texts、measurements 到 JSON |
-| 2 | 配方加载后自动执行 | 🔲 加载配方和图片/模板后，一键或自动执行全部工具 |
+| 2 | 配方加载后自动执行 | ✅ 案例配方可解析相对资源路径，并由回归测试加载图片后执行工具链 |
 | 3 | 运行报告 | ✅ 已完成 — 全部执行后可生成 Markdown 报告，包含工具名、耗时、结果数量、OK/FAIL |
 
-## 第四阶段 🔲 工业常用工具
+## 第四阶段 进行中 — 工业常用工具
 
 | # | 工具 | 说明 |
 |---|------|------|
-| 1 | 尺寸测量 | 点到点距离、线段长度、圆直径、角度、ROI 宽高 |
-| 2 | Blob 分析增强 | 面积、中心点、外接矩形、圆度、长宽比、筛选条件、OK/NG 阈值 |
-| 3 | 二维码/条码识别 | 先接 OpenCV `QRCodeDetector`；条码后续可接 ZXing-cpp |
-| 4 | 图像差分 | 参考图 vs 当前图，`absdiff + threshold + morphology + 差异高亮` |
+| 1 | 尺寸测量 | ✅ 已有点到点距离、线段长度、圆直径、角度、卡尺、拟合和标定；继续完善现场向导 |
+| 2 | Blob 分析增强 | ✅ 已增加圆度、长宽比、方向、轮廓、质心和筛选条件；继续补完整公差判定 |
+| 3 | 二维码/条码识别 | ✅ 已接入 ZXing-cpp 码制过滤和重复过滤；继续补稳定性和性能测试 |
+| 4 | 图像差分 | ✅ type 16，参考图、`absdiff + threshold + morphology`、差异区域和差异高亮 |
 | 5 | OCR 识别 | ✅ 已接入 — PP-OCRv6 tiny + NCNN；后续可继续优化模型、字典和性能 |
 
-## 第五阶段 🔲 执行链路升级
+## 第五阶段 进行中 — 执行链路升级
 
 | # | 任务 | 说明 |
 |---|------|------|
-| 1 | OK/NG 状态 | 每个工具输出统一 OK/NG 状态和失败原因 |
-| 2 | 失败停止 | 全部执行时支持任一工具 NG 后停止后续工具 |
-| 3 | 工具启用/禁用 | 工具实例支持跳过执行但保留参数 |
-| 4 | 复制/粘贴参数 | 支持复制单个工具参数到同类工具 |
+| 1 | OK/NG 状态 | ✅ `ToolResultStatus { Pass, Fail, Error }` 和判定原因已统一 |
+| 2 | 失败停止 | ✅ 支持配方中配置失败停止，并记录停止工具 |
+| 3 | 工具启用/禁用 | ✅ 工具实例支持跳过执行但保留参数，结果标记为 skipped Pass |
+| 4 | 复制工具实例 | ✅ Core 复制 API 生成新 toolId，复制参数并清空运行时状态；公共卡片提供入口 |
 | 5 | 工具分组/折叠 | 大量工具时便于管理流程 |
+| 6 | 运行前检查 | ✅ 统一检查图片、绑定 ROI、模板、参考图、YOLO/OCR 模型，以及上游/循环依赖 |
 
 ## 第六阶段 🔲 工程发布
 
@@ -92,11 +93,11 @@
 
 | 优先级 | 阶段 | 先做任务 |
 |---|------|------|
-| P0 | 稳定平台 | 配方加载后自动执行；继续完善导出格式和运行报告 |
-| P1 | 工业常用工具 | 尺寸测量 -> Blob 分析增强 -> 二维码/条码 -> 图像差分；OCR 已先行接入，后续优化 |
-| P2 | 执行链路升级 | OK/NG -> 失败停止 -> 启用/禁用 -> 复制/粘贴参数 -> 分组/折叠 |
-| P3 | 工程发布 | runtime.zip -> GitHub Release -> BUILD 文档 |
-| P4 | 平台化 | 节点编辑器 -> 插件系统 -> 工业相机 -> 工业通讯 |
+| P0 | 稳定性 | 原图删除、输入源一致性、完整案例回归；✅ 已完成基线 |
+| P1 | 架构收尾 | ✅ 稳定 toolId、ImageViewer/Core 边界、ROIEditorState、TemplateMatch 去全局和 RecipeManager 组合 DTO 已完成；继续收窄 ToolsWindow 可写状态访问 |
+| P2 | 工业能力 | Blob 增强 -> 图像差分 -> 标定向导 -> Fixture 可视化 -> SPC/批次统计 |
+| P3 | 工具链体验 | ✅ 启用/禁用、复制、分组筛选、依赖可视化/循环校验和批量公共参数已完成 |
+| P4 | 工程发布与设备 | CI/runtime.zip -> GitHub Release -> 相机 -> PLC/Modbus/OPC UA |
 
 ---
 

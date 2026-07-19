@@ -1,7 +1,10 @@
-#include "../Windows_imgui.h"
 #include "Sidebar.h"
+#include "DockSpaceHost.h"
 #include "ImageViewer.h"
 #include "ROIManager.h"
+#include "../Core/ThemeManager.h"
+#include "../Core/ROIState.h"
+#include "../include/imgui/imgui.h"
 #include "../Log/LogSystem.h"
 
 namespace UI
@@ -58,12 +61,13 @@ namespace UI
 
         if (ImGui::Button("清除当前类型 ROI", ImVec2(-1, 0)))
         {
-            gROIs.erase(
-                std::remove_if(gROIs.begin(), gROIs.end(),
+            auto& rois = ROIState::Items();
+            rois.erase(
+                std::remove_if(rois.begin(), rois.end(),
                                [](const ROI &r)
                                { return r.type == gCurrentROIType; }),
-                gROIs.end());
-            gSelectedROI = -1;
+                rois.end());
+            ROIState::SetSelectedIndex(-1);
             gActiveHandle = HANDLE_NONE;
         }
 
@@ -85,7 +89,7 @@ namespace UI
         {
             if (strlen(inputBuf) > 0)
             {
-                LogSystem::Add(LOG_INFO, color, "自定义: %s", inputBuf);
+                LogSystem::Add(LOG_INFO, "自定义: %s", inputBuf);
                 inputBuf[0] = '\0';
             }
         }

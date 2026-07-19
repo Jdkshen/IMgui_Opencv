@@ -73,31 +73,48 @@
       <Filter>include\imgui</Filter>
     </ClInclude>
     <ClInclude Include="Core\AsyncImageLoader.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\AppRuntimeState.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\DetectionTypes.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\AudioPlayer.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\BarcodeBenchmark.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\CalibrationModel.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\CalibrationFitter.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\VideoCapture.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\RecipeManager.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\FrameNavigation.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\FixtureTransform.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\FrameSourceState.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\ImageViewState.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\HardwareAdapters.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\ModbusTcpAdapter.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\ModbusPlcAdapter.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\OpenCvCameraAdapter.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\HardwareRuntimeService.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\FrameRenderer.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ImageLoadController.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\ImageImportService.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ImageUtils.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ToolJudgement.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\LiveYoloRunner.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ROIState.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\ROIEditorState.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\RealtimeDetectionState.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ROI.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ToolInstance.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\ToolAssetService.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\ToolROIService.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ToolTypes.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\VisionContext.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ToolExecutor.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ToolController.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ToolChainState.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\ToolChainValidator.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\ToolChainPreflight.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ThemeManager.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\DX12Context.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\OpenCVTest.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\OpenFileDialog.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Algorithm\DifferenceTool.h"><Filter>Algorithm</Filter></ClInclude>
     <ClInclude Include="UI\DockSpaceHost.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="UI\ImageViewer.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="UI\LogWindow.h"><Filter>UI</Filter></ClInclude>
@@ -130,6 +147,7 @@
     <ClInclude Include="Core\ResultROIResolver.h">
       <Filter>Core</Filter>
     </ClInclude>
+    <ClInclude Include="Core\InspectionHistory.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Algorithm\MultiColorFinder.h">
       <Filter>Algorithm</Filter>
     </ClInclude>
@@ -152,23 +170,40 @@
     <ClCompile Include="include\imgui\imgui_tables.cpp"><Filter>include\imgui</Filter></ClCompile>
     <ClCompile Include="include\imgui\imgui_widgets.cpp"><Filter>include\imgui</Filter></ClCompile>
     <ClCompile Include="Core\AsyncImageLoader.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\AppRuntimeState.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\RealtimeDetectionState.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\ResultOverlayState.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\AudioPlayer.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\BarcodeBenchmark.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\CalibrationModel.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\CalibrationFitter.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\VideoCapture.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\RecipeManager.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\FrameNavigation.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\FixtureTransform.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\FrameSourceState.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\ImageViewState.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\HardwareAdapters.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\ModbusTcpAdapter.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\ModbusPlcAdapter.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\OpenCvCameraAdapter.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\HardwareRuntimeService.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\FrameRenderer.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ImageLoadController.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\ImageImportService.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\LiveYoloRunner.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ROIState.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\ROIEditorState.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\VisionContext.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ToolExecutor.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\ToolInstance.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\ToolAssetService.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\ToolROIService.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ToolController.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ToolJudgement.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ToolChainState.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\ToolChainValidator.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\ToolChainPreflight.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ThemeManager.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\DX12Context.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\OpenCVTest.cpp"><Filter>Core</Filter></ClCompile>
@@ -206,10 +241,14 @@
     <ClCompile Include="Core\ResultROIResolver.cpp">
       <Filter>Core</Filter>
     </ClCompile>
+    <ClCompile Include="Core\InspectionHistory.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Algorithm\MultiColorFinder.cpp">
       <Filter>Algorithm</Filter>
     </ClCompile>
     <ClCompile Include="Algorithm\ColorAnalyzer.cpp">
+      <Filter>Algorithm</Filter>
+    </ClCompile>
+    <ClCompile Include="Algorithm\DifferenceTool.cpp">
       <Filter>Algorithm</Filter>
     </ClCompile>
     <ClCompile Include="Algorithm\LineDetector.cpp"><Filter>Algorithm</Filter></ClCompile>

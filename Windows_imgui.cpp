@@ -3,6 +3,8 @@
 #include "Windows_imgui.h"
 #include "resource.h"
 #include "Core/ImageLoadController.h"
+#include "Core/ImageState.h"
+#include "Core/AppRuntimeState.h"
 #include "Core/LiveYoloRunner.h"
 #include "Core/FrameRenderer.h"
 #include "Core/VisionContext.h"
@@ -22,8 +24,6 @@
 // 全局变量定义（只能这里写一次）
 // =========================
 
-HWND g_hWnd = nullptr;	 // 主窗口句柄（主题切换用）
-float g_DPIScale = 1.0f; // DPI 缩放（主题切换时复用）
 
 // 全局或主循环前定义
 static ImVec4 clear_color = ImVec4(
@@ -34,7 +34,6 @@ static ImVec4 clear_color = ImVec4(
 
 // 前向声明
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
-extern cv::Mat &gOriginalImage;
 
 // =========================
 // 程序入口点
@@ -51,7 +50,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	// 使进程支持DPI感知，获取主监视器的缩放比例
 	ImGui_ImplWin32_EnableDpiAwareness();
 	float main_scale = ImGui_ImplWin32_GetDpiScaleForMonitor(::MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY));
-	g_DPIScale = main_scale;
+	AppRuntimeState::SetDpiScale(main_scale);
 
 	// ===== 阶段2：创建应用程序窗口 =====
 	HINSTANCE appInstance = GetModuleHandle(nullptr);
@@ -69,7 +68,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		winH = screenH;
 	DWORD windowStyle = WS_OVERLAPPEDWINDOW;
 	HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"IMgui_Opencv Vision", windowStyle, 100, 20, winW, winH, nullptr, nullptr, wc.hInstance, nullptr);
-	g_hWnd = hwnd;
+	AppRuntimeState::SetWindowHandle(hwnd);
 	{
 		const DWORD cornerPreferenceRound = 2; // DWMWCP_ROUND on Windows 11.
 		::DwmSetWindowAttribute(hwnd, static_cast<DWMWINDOWATTRIBUTE>(33), &cornerPreferenceRound, sizeof(cornerPreferenceRound));
@@ -202,10 +201,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		UI::ShowStatsWindow();				  // 性能统计窗口
 		UI::ShowOpenCV();					  // 图片显示窗口
 		UI::ShowToolsWindow();				  // 工具窗口（ROI管理+算法入口）
-		ThresholdTool::ShowThresholdWindow(); // 阈值调试/图像处理窗口
-		TemplateMatch::ShowWindow();		  // 模板匹配调试窗口
-		TemplateMatch::ShowTemplateEditor();  // 模板编辑弹窗
-		TemplateMatch::CheckAsyncResult();	  // 收尾异步匹配结果
 
 		// ----- 6.4 渲染 Dear ImGui 绘制数据 -----
 		ImGui::Render();
@@ -246,16 +241,16 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		// =========================
 		// ⭐ GPU上传（阈值处理/图像管线产出的结果上传到显存）
 		// =========================
-		if (gNeedUpload)
+        if (ImageState::NeedUploadRef())
 		{
 			UploadToDX12(
 				g_pd3dDevice,
 				g_pd3dCommandList,
 				&gTexture,
-				gPendingUpload,
+                ImageState::PendingUploadRef(),
 				DXGI_FORMAT_R8G8B8A8_UNORM,
 				gSrvCpuHandle);
-			gNeedUpload = false;
+            ImageState::NeedUploadRef() = false;
 		}
 
 		// ----- 6.6 渲染管线：状态切换 + 绘制 + 呈现 -----

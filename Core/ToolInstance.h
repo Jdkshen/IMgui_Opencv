@@ -1,14 +1,17 @@
 #pragma once
 
 #include <string>
+#include <cstdint>
 #include <vector>
 
 #include <opencv2/core/mat.hpp>
+#include <nlohmann/json.hpp>
 
 #include "ROI.h"
 #include "BarcodeTypes.h"
 #include "FixtureTransform.h"
 #include "CalibrationModel.h"
+#include "CalibrationFitter.h"
 #include "ToolJudgement.h"
 #include "../Algorithm/ITool.h"
 
@@ -17,17 +20,30 @@
 // =====================================================
 struct ToolInstance
 {
-    int type = 0;                // 0=边缘检测 1=模板匹配 2=Blob分析 3=阈值调试 4=YOLO 5=轮廓 6=形状 7=直线 12=原图 13=OCR 14=二维码
+    int type = 0;                // 0-16 工具类型，12=原图
+    std::uint64_t toolId = 0;    // 稳定实例身份，0 表示尚未分配
+    bool enabled = true;         // 工具链执行开关，禁用时保留参数和结果位置
     std::string label;           // 用户标签，空时显示原工具名
     bool showResultLabels = true;
+    bool skipIfModelMissing = false; // OCR/YOLO 模型缺失时跳过而不是阻止整条链
+    std::string groupName;       // 工具链分组名称，空表示默认组
+    bool collapsed = false;      // 工具卡片是否折叠
     ToolJudgementSettings judgement;
     int resultRoiMode = 0;        // 0=disabled, 1=Nth result, 2=all results
     int resultRoiSourceTool = -1;
+    std::uint64_t resultRoiSourceToolId = 0;
     int resultRoiIndex = 0;
     int resultRoiMissingPolicy = 0; // 0=skip, 1=fail
+    std::string resultRoiCategory;
+    int resultRoiClassId = -1;
+    float resultRoiMinScore = -1.0f;
+    float resultRoiMinArea = -1.0f;
+    int resultRoiSortMode = 0;
+    bool resultRoiSortDescending = true;
     FixtureSettings fixture;
     int inputSourceMode = 2;     // 0=上一步原图, 1=上一步处理图, 2=原图工具输出
     cv::Mat templateImg;         // 该实例的模板图像数据
+    bool showTemplatePreview = true;
     bool hasTemplateROI = false; // 是否保存了模板ROI
     ROI templateROI;             // 该实例专属模板ROI
     bool useSearchROI = false;   // 是否使用本工具绑定的查找区域
@@ -77,6 +93,25 @@ struct ToolInstance
     // ---- Blob分析参数（type==2） ----
     int blobMinArea = 100;
     int blobMaxArea = 10000;
+    int blobThresholdMode = 0; // 0=Otsu, 1=手动
+    int blobThreshold = 128;
+    bool blobInvert = false;
+    int blobConnectivity = 8;
+    float blobMinCircularity = 0.0f;
+    float blobMaxCircularity = 1.0f;
+    float blobMinAspectRatio = 0.0f;
+    float blobMaxAspectRatio = 100.0f;
+    bool blobShowLabels = true;
+
+    // ---- 图像差分参数（type==16） ----
+    cv::Mat differenceReferenceImage;
+    int differenceThreshold = 30;
+    int differenceMinArea = 20;
+    int differenceBlurSize = 0;
+    int differenceMorphKernelSize = 3;
+    int differenceMorphIterations = 1;
+    bool differenceInvert = false;
+    bool differenceShowLabels = true;
 
     // ---- YOLO检测参数（type==4） ----
     std::string yoloModelPath;      // ONNX 模型路径
@@ -191,11 +226,19 @@ struct ToolInstance
     float measureToleranceMinus = 0.0f;
     float measureTolerancePlus = 0.0f;
     CalibrationModel measureCalibration;
+    std::vector<CalibrationSample> measureCalibrationSamples;
+    double measureCalibrationRmsError = 0.0;
+    double measureCalibrationMaxError = 0.0;
+    std::string measureCalibrationFitMessage;
 
     // ---- 新架构：ITool 接口指针（为空时回退旧逻辑） ----
     ITool* toolImpl = nullptr;
     ToolResult lastResult;       // 运行时缓存，不保存到配方
     bool hasLastResult = false;
+
+    nlohmann::json ToRecipeJson() const;
+    void LoadRecipeJson(const nlohmann::json& json);
+    void ClearRuntimeState();
 };
 
 inline std::string ToolInstanceTitle(const char* baseName, const std::string& label)

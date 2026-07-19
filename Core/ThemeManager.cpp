@@ -1,7 +1,6 @@
 #include "ThemeManager.h"
+#include "AppRuntimeState.h"
 #include <fstream>
-
-extern HWND g_hWnd; // 主窗口句柄（Windows_imgui.cpp）
 
 int g_CurrentTheme = 0;
 const char *g_ThemeNames[] = {"夜间", "白天"};
@@ -15,23 +14,24 @@ namespace
 
     void ApplyNativeTitleBarTheme(int theme)
     {
-        if (!g_hWnd)
+        HWND window = AppRuntimeState::WindowHandle();
+        if (!window)
             return;
 
         const BOOL dark = (theme == 0);
-        DwmSetWindowAttribute(g_hWnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+        DwmSetWindowAttribute(window, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
 
         const DWORD cornerPreferenceRound = 2; // DWMWCP_ROUND on Windows 11.
-        DwmSetWindowAttribute(g_hWnd, static_cast<DWMWINDOWATTRIBUTE>(kDwmWindowCornerPreference),
+        DwmSetWindowAttribute(window, static_cast<DWMWINDOWATTRIBUTE>(kDwmWindowCornerPreference),
                               &cornerPreferenceRound, sizeof(cornerPreferenceRound));
 
         const COLORREF caption = dark ? RGB(35, 38, 43) : RGB(173, 184, 199);
         const COLORREF text = dark ? RGB(226, 230, 236) : RGB(32, 40, 52);
         const COLORREF border = dark ? RGB(53, 58, 66) : RGB(145, 157, 174);
 
-        DwmSetWindowAttribute(g_hWnd, static_cast<DWMWINDOWATTRIBUTE>(kDwmCaptionColor), &caption, sizeof(caption));
-        DwmSetWindowAttribute(g_hWnd, static_cast<DWMWINDOWATTRIBUTE>(kDwmTextColor), &text, sizeof(text));
-        DwmSetWindowAttribute(g_hWnd, static_cast<DWMWINDOWATTRIBUTE>(kDwmBorderColor), &border, sizeof(border));
+        DwmSetWindowAttribute(window, static_cast<DWMWINDOWATTRIBUTE>(kDwmCaptionColor), &caption, sizeof(caption));
+        DwmSetWindowAttribute(window, static_cast<DWMWINDOWATTRIBUTE>(kDwmTextColor), &text, sizeof(text));
+        DwmSetWindowAttribute(window, static_cast<DWMWINDOWATTRIBUTE>(kDwmBorderColor), &border, sizeof(border));
     }
 }
 

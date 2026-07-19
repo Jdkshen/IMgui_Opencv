@@ -1,5 +1,5 @@
 #pragma once
-#include "../Windows_imgui.h"
+#include "../include/imgui/imgui.h"
 
 // Icon macros (UTF-8 encoded Unicode glyphs)
 #define ICON_PLAY "\xE2\x96\xB6"    // U+25B6

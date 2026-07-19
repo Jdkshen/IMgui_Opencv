@@ -1,4 +1,5 @@
 #include "FrameNavigation.h"
+#include "VideoCapture.h"
 
 #include <utility>
 
@@ -76,4 +77,33 @@ bool ConsumePendingImagePath(std::string& path)
     s_PendingImagePath.clear();
     return true;
 }
+
+bool OpenVideoSource(const std::string& path)
+{
+    return VideoCapture::OpenVideo(path);
+}
+
+bool OpenCameraSource(int index)
+{
+    return VideoCapture::OpenCamera(index);
+}
+
+PlaybackState CurrentPlayback()
+{
+    PlaybackState state;
+    state.open = VideoCapture::IsOpen();
+    state.playing = VideoCapture::IsPlaying();
+    state.camera = VideoCapture::IsCamera();
+    state.looping = VideoCapture::IsLooping();
+    state.frameCount = VideoCapture::GetFrameCount();
+    state.currentFrame = VideoCapture::GetCurrentFrame();
+    state.fps = VideoCapture::GetFPS();
+    return state;
+}
+
+void TogglePlayback() { VideoCapture::TogglePlay(); }
+void StopPlayback() { VideoCapture::Stop(); }
+void ClosePlayback() { VideoCapture::Close(); }
+void SeekPlaybackFrame(int frame) { VideoCapture::SeekFrame(frame); }
+void SetPlaybackLoop(bool loop) { VideoCapture::SetLoop(loop); }
 }

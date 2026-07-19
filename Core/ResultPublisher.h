@@ -1,6 +1,6 @@
 #pragma once
-#include "../Algorithm/YOLODetector.h"
 #include "../Core/VisionContext.h"
+#include "../Core/RealtimeDetectionState.h"
 
 #include <utility>
 
@@ -10,10 +10,7 @@
 inline void ClearAllResults()
 {
     gContext.ClearUnifiedResults();
-    extern std::vector<struct DetectedObject> g_YoloOverlays;
-    extern bool g_YoloShowOverlay;
-    g_YoloOverlays.clear();
-    g_YoloShowOverlay = false;
+    RealtimeDetectionState::Clear();
 }
 
 inline void PublishUnifiedResult(ToolResult result)

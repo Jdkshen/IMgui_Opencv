@@ -176,6 +176,30 @@ std::string OpenFileDialogWithFilter(const wchar_t *filter, const wchar_t *title
 }
 
 // ========================================
+// 通用保存文件对话框
+// ========================================
+std::string SaveFileDialogWithFilter(const wchar_t *filter, const wchar_t *title,
+    const wchar_t *defaultExtension)
+{
+    wchar_t filename[MAX_PATH] = {};
+
+    OPENFILENAMEW ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = nullptr;
+    ofn.lpstrFile = filename;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrFilter = filter;
+    ofn.lpstrTitle = title;
+    ofn.lpstrDefExt = defaultExtension;
+    ofn.nFilterIndex = 1;
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
+
+    if (GetSaveFileNameW(&ofn))
+        return WideToUtf8(filename);
+    return "";
+}
+
+// ========================================
 // 打开文件夹选择对话框（使用 IFileDialog）
 // 返回 Unicode 路径转 UTF-8
 // ========================================

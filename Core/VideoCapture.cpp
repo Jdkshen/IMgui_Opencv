@@ -3,13 +3,15 @@
 #include "FrameNavigation.h"
 #include "FrameSourceState.h"
 #include "ImageUtils.h"
+#include "ImageState.h"
 #include "OpenCVTest.h"
 #include "ROIState.h"
 #include "ToolChainState.h"
+#include "RealtimeDetectionState.h"
+#include "TemplateState.h"
 #include "VisionContext.h"
 #include "AudioPlayer.h"
 #include "../Algorithm/ThresholdTool.h"
-#include "../Algorithm/TemplateMatch.h"
 #include "../Algorithm/YOLODetector.h"
 #include "../Log/LogSystem.h"
 
@@ -128,7 +130,7 @@ namespace VideoCapture
         ReadFrame();
         FrameNavigation::FitImageToWindow();
         ROIState::ClearInteraction();
-        TemplateMatch::Clear();
+TemplateState::ClearResults();
 
         // 打开音频流（如果有的话）
         AudioPlayer::Open(path);
@@ -162,7 +164,7 @@ namespace VideoCapture
         ReadFrame();
         FrameNavigation::FitImageToWindow();
         ROIState::ClearInteraction();
-        TemplateMatch::Clear();
+TemplateState::ClearResults();
         Play(); // 摄像头自动开始播放
 
         return true;
@@ -191,9 +193,8 @@ namespace VideoCapture
             ToolChainState::SetYoloLiveInstanceIndex(-1);
             FrameSourceState::Clear();
             ROIState::ClearInteraction();
-            TemplateMatch::Clear();
-            g_YoloShowOverlay = false;
-            g_YoloOverlays.clear();
+            TemplateState::ClearResults();
+            RealtimeDetectionState::Clear();
             gContext.ClearUnifiedResults();
 
             LogSystem::Add(LOG_INFO, "视频/摄像头已关闭");
@@ -305,8 +306,8 @@ namespace VideoCapture
         cv::Mat rgba;
         SafeConvertToRGBA(frame, rgba);
 
-        gPendingUpload = rgba;
-        gNeedUpload = true;
+        ImageState::PendingUploadRef() = rgba;
+        ImageState::NeedUploadRef() = true;
 
         return true;
     }

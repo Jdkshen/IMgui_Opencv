@@ -9,6 +9,17 @@
 // =====================================================
 namespace FrameNavigation
 {
+    struct PlaybackState
+    {
+        bool open = false;
+        bool playing = false;
+        bool camera = false;
+        bool looping = false;
+        int frameCount = 0;
+        int currentFrame = 0;
+        double fps = 0.0;
+    };
+
     const std::vector<std::string>& ImageList();          // 图片路径列表
     std::vector<std::string>& ImageListRef();
     int CurrentImageIndex();                               // 当前图片索引
@@ -22,4 +33,13 @@ namespace FrameNavigation
     void RequestImagePath(std::string path);
     bool ConsumeFitRequest();
     bool ConsumePendingImagePath(std::string& path);
+
+    bool OpenVideoSource(const std::string& path);
+    bool OpenCameraSource(int index = 0);
+    PlaybackState CurrentPlayback();
+    void TogglePlayback();
+    void StopPlayback();
+    void ClosePlayback();
+    void SeekPlaybackFrame(int frame);
+    void SetPlaybackLoop(bool loop);
 }

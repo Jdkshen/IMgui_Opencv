@@ -1,12 +1,17 @@
-#include "../Windows_imgui.h"
 #include "../Core/OpenFileDialog.h"
+#include "DockSpaceHost.h"
+#include "ToolsWindow.h"
+#include "../Core/ThemeManager.h"
+#include "../Core/VisionContext.h"
 #include "../Core/RecipeManager.h"
+#include "../Core/TemplateState.h"
 #include "../Core/FrameSourceState.h"
 #include "../Core/ImageState.h"
 #include "../Core/ResultExporter.h"
 #include "../Core/ToolChainState.h"
 #include "../Core/ToolController.h"
 #include "../Log/LogSystem.h"
+#include "../include/imgui/imgui_internal.h"
 #include <shellapi.h>
 
 // =========================
@@ -78,7 +83,6 @@ bool g_ShowSidebar = true;
 bool g_ShowStats = true;
 bool g_ShowOpenCV = true;
 bool g_ShowTools = true;
-ImVec4 color = ImVec4(0.2f, 0.8f, 1.0f, 1.0f);
 
 namespace UI
 {
@@ -131,7 +135,7 @@ namespace UI
         if (ResultExporter::ExportResultsJson(path.c_str(), snapshot))
         {
             g_LastExportPath = path;
-            LogSystem::Add(LOG_INFO, color, "结果已导出: %s", path.c_str());
+            LogSystem::Add(LOG_INFO, "结果已导出: %s", path.c_str());
         }
         else
             LogSystem::Add(LOG_ERROR, "结果导出失败: %s", path.c_str());
@@ -153,7 +157,7 @@ namespace UI
         if (ResultExporter::ExportRunReportMarkdown(path.c_str(), snapshot))
         {
             g_LastExportPath = path;
-            LogSystem::Add(LOG_INFO, color, "运行报告已导出: %s", path.c_str());
+            LogSystem::Add(LOG_INFO, "运行报告已导出: %s", path.c_str());
         }
         else
             LogSystem::Add(LOG_ERROR, "运行报告导出失败: %s", path.c_str());
@@ -186,7 +190,7 @@ namespace UI
         }
 
         g_PendingAutoRunAfterRecipeLoad = true;
-        LogSystem::Add(LOG_INFO, color, "配方加载后自动执行：等待图片就绪");
+        LogSystem::Add(LOG_INFO, "配方加载后自动执行：等待图片就绪");
     }
 
     static void ApplyLoadedRecipe(const RecipeData& data)
@@ -206,7 +210,7 @@ namespace UI
 
         g_PendingAutoRunAfterRecipeLoad = false;
         ToolController::RequestRunAll(false);
-        LogSystem::Add(LOG_INFO, color, "配方加载后自动执行：已开始");
+        LogSystem::Add(LOG_INFO, "配方加载后自动执行：已开始");
     }
 
     static bool DeleteRecipeFilesByName(const std::string& name)
@@ -269,7 +273,7 @@ namespace UI
     {
         bool deleted = DeleteRecipeFilesByName(g_CurrentRecipeName);
         if (deleted)
-            LogSystem::Add(LOG_INFO, color, "Recipe deleted: %s", g_CurrentRecipeName);
+            LogSystem::Add(LOG_INFO, "Recipe deleted: %s", g_CurrentRecipeName);
         else
             LogSystem::Add(LOG_WARN, "Recipe delete failed or not found: %s", g_CurrentRecipeName);
         return deleted;
@@ -278,14 +282,14 @@ namespace UI
     static void ClearRecipeRuntimeState(const char* reason)
     {
         ToolController::Reset();
-        TemplateMatch::Clear();
-        g_ActiveToolIndex = -1;
-        g_YoloLiveDetect = false;
-        g_YoloLiveInstanceIdx = -1;
+TemplateState::ClearResults();
+        ToolChainState::SetActiveIndex(-1);
+        ToolChainState::SetYoloLiveDetect(false);
+        ToolChainState::SetYoloLiveInstanceIndex(-1);
 
         RecipeData empty;
         RecipeManager::Apply(empty);
-        LogSystem::Add(LOG_INFO, color, "%s", reason);
+        LogSystem::Add(LOG_INFO, "%s", reason);
     }
 
     static bool RecipeNameExists(const std::vector<std::string>& recipes, const std::string& name)
@@ -339,7 +343,7 @@ namespace UI
         }
 
         DeleteRecipeFilesByName(oldName);
-        LogSystem::Add(LOG_INFO, color, "Recipe renamed: %s -> %s", oldName.c_str(), g_CurrentRecipeName);
+            LogSystem::Add(LOG_INFO, "Recipe renamed: %s -> %s", oldName.c_str(), g_CurrentRecipeName);
         return true;
     }
 
@@ -401,7 +405,7 @@ namespace UI
         if (!recipeName.empty())
             SetCurrentRecipeName(recipeName);
         ApplyLoadedRecipe(data);
-        LogSystem::Add(LOG_INFO, color, "Recipe opened: %s", path.c_str());
+            LogSystem::Add(LOG_INFO, "Recipe opened: %s", path.c_str());
     }
 
     static void NewCurrentRecipe()
@@ -417,7 +421,7 @@ namespace UI
         ClearRecipeRuntimeState("Recipe UI cleared for new recipe");
 
         if (SaveCurrentRecipe())
-            LogSystem::Add(LOG_INFO, color, "New recipe created: %s", g_CurrentRecipeName);
+            LogSystem::Add(LOG_INFO, "New recipe created: %s", g_CurrentRecipeName);
     }
 
     static float ClampFloat(float v, float minV, float maxV)

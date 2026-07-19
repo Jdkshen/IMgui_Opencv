@@ -16,6 +16,13 @@ namespace ROIState
     int SelectedIndex();                     // 当前选中 ROI 索引（只读）
     void SetSelectedIndex(int index);        // 设置选中索引
 
+    bool IsValidIndex(int index);
+    ROI* MutableAt(int index);
+    const ROI* At(int index);
+    int Add(ROI roi, bool select = true);
+    bool RemoveAt(int index);
+    int FindIndexByRuntimeId(std::uint64_t runtimeId);
+
     // 在给定 ROI 列表中智能选择索引：优先保持当前选中，否则选第一个
     int SelectIndexFor(const std::vector<ROI>& rois);
 

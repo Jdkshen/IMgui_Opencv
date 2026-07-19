@@ -1,10 +1,6 @@
 ﻿#pragma once
 #include "framework.h"
 
-extern float g_DPIScale;          // DPI 缩放比例
-
-extern HWND g_hWnd;
-
 #include "imgui/imconfig.h"
 #include "imgui/imgui.h"
 #include "imgui/imgui_impl_win32.h"
@@ -42,7 +38,6 @@ extern HWND g_hWnd;
 
 // 算法模块
 #include "Algorithm/ThresholdTool.h"
-#include "Algorithm/TemplateMatch.h"
 
 
 

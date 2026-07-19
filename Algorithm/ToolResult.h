@@ -13,6 +13,7 @@
 #endif
 
 #include <string>
+#include <cstdint>
 #include <vector>
 #include <opencv2/core/mat.hpp>
 #include <opencv2/core/types.hpp>
@@ -43,6 +44,7 @@ struct ToolResult
     // ===== 基础状态 =====
     std::string toolName;
     int sourceToolIndex = -1;
+    std::uint64_t sourceToolId = 0;
     bool success = true;
     bool skipped = false;
     std::string message;
@@ -57,9 +59,14 @@ struct ToolResult
     struct Region {
         std::vector<cv::Point> contour;  // 轮廓顶点
         cv::Rect bbox;                   // 包围盒
+        cv::Point2f center;              // 几何中心/质心
         float area = 0;                  // 面积
         float score = 0;                 // 匹配分数
         float angle = 0;                 // 定位角度（度），供 Fixture 使用
+        float width = 0;                 // 结果宽度
+        float height = 0;                // 结果高度
+        float circularity = 0;           // 圆度，4πA/P²
+        float aspectRatio = 0;           // 长宽比
         std::string label;
     };
     std::vector<Region> regions;

@@ -4,7 +4,7 @@
 
 // =====================================================
 // ImageLoadController — 图片加载调度器
-// 每帧调用 Update()，协调 pendingPath → 异步加载 → GPU 上传的全流程
+// 每帧调用 Update()，协调 FrameNavigation/显式请求 → 异步加载 → GPU 上传
 // =====================================================
 namespace ImageLoadController
 {

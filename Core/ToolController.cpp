@@ -3,12 +3,15 @@
 #include "FrameNavigation.h"
 #include "ImageState.h"
 #include "ImageUtils.h"
+#include "ROIState.h"
+#include "TemplateState.h"
 #include "ToolChainState.h"
+#include "RealtimeDetectionState.h"
+#include "ToolChainPreflight.h"
 #include "ToolJudgement.h"
 #include "VisionContext.h"
 #include "../Log/LogSystem.h"
 #include "../Algorithm/YOLODetector.h"
-#include "../Algorithm/TemplateMatch.h"
 #include <opencv2/opencv.hpp>
 
 namespace ToolController
@@ -33,6 +36,74 @@ namespace ToolController
     static std::chrono::high_resolution_clock::time_point s_batchStart;
     static std::chrono::high_resolution_clock::time_point s_nextLoopRunAt;
     static constexpr float kLoopMinIntervalMs = 150.0f;
+
+    static bool ValidateToolChainForRun()
+    {
+        const ToolChainPreflightResult validation = ToolChainPreflight::Check(
+            ToolChainState::ReadOnlyTools(), ImageState::HasImage(),
+            ROIState::ReadOnlyItems().size());
+        if (validation.valid())
+            return true;
+
+        for (const ToolChainPreflightIssue& issue : validation.issues)
+        {
+            if (issue.toolIndex >= 0)
+                LogSystem::Add(LOG_ERROR, "运行前检查失败 [%d]: %s",
+                    issue.toolIndex + 1, issue.message.c_str());
+            else
+                LogSystem::Add(LOG_ERROR, "运行前检查失败: %s", issue.message.c_str());
+        }
+        return false;
+    }
+
+    static const cv::Mat& OriginalOrCurrent()
+    {
+        return !ImageState::Original().empty() ? ImageState::Original() : ImageState::Current();
+    }
+
+    static const cv::Mat& SelectBatchInput(const ToolInstance& tool)
+    {
+        if (tool.inputSourceMode == 1 && !s_lastOutputImage.empty())
+            return s_lastOutputImage;
+        if (tool.inputSourceMode == 2)
+        {
+            if (!s_originalToolOutputImage.empty())
+                return s_originalToolOutputImage;
+            return OriginalOrCurrent();
+        }
+        if (!s_lastInputImage.empty())
+            return s_lastInputImage;
+        return OriginalOrCurrent();
+    }
+
+    static const cv::Mat& SelectStandaloneInput(const ToolInstance& tool)
+    {
+        // 单工具执行没有可重放的“上一步”。处理图模式使用当前显示图，
+        // 其余两种模式统一回退到 ImageState 保存的原图。
+        if (tool.inputSourceMode == 1 && !ImageState::Current().empty())
+            return ImageState::Current();
+        return OriginalOrCurrent();
+    }
+
+    static void ApplyInputImage(const cv::Mat& selectedInput, bool requestUpload)
+    {
+        if (selectedInput.empty())
+            return;
+
+        auto& currentImage = ImageState::CurrentRef();
+        if (selectedInput.data != currentImage.data)
+            selectedInput.copyTo(currentImage);
+        if (!requestUpload)
+            return;
+
+        cv::Mat rgba;
+        SafeConvertToRGBA(currentImage, rgba);
+        if (!rgba.empty())
+        {
+            ImageState::PendingUploadRef() = rgba;
+            ImageState::NeedUploadRef() = true;
+        }
+    }
 
     static bool RestoreBatchOriginal()
     {
@@ -59,11 +130,10 @@ namespace ToolController
         }
         s_lastInputImage = s_originalImage.clone();
         s_lastOutputImage = s_originalImage.clone();
-        s_originalToolOutputImage = s_originalImage.clone();
-        TemplateMatch::Clear();
-        gContext.ClearUnifiedResults();
-        g_YoloOverlays.clear();
-        g_YoloShowOverlay = false;
+         s_originalToolOutputImage = s_originalImage.clone();
+         TemplateState::ClearResults();
+         gContext.ClearUnifiedResults();
+         RealtimeDetectionState::Clear();
         LogSystem::Add(LOG_INFO, ImVec4(0,1,0.5f,1), "原图: 已恢复本轮原图");
         return true;
     }
@@ -83,6 +153,24 @@ namespace ToolController
 
         EnsureToolTimesSize();
         auto& it = tools[idx];
+        if (!it.enabled)
+        {
+            ToolResult skipped;
+            const char* baseName = it.type == 12 ? "原图" : ToolRegistry::GetName(it.type);
+            skipped.toolName = ToolInstanceLogName(baseName, it.label);
+            skipped.sourceToolIndex = idx;
+            skipped.sourceToolId = it.toolId;
+            skipped.success = true;
+            skipped.skipped = true;
+            skipped.status = ToolResultStatus::Pass;
+            skipped.message = "工具已禁用";
+            it.lastResult = skipped;
+            it.hasLastResult = true;
+            gContext.unifiedResults.push_back(std::move(skipped));
+            s_stepTimeMs = 0.0f;
+            s_toolTimesMs[idx] = 0.0f;
+            return false;
+        }
         auto t0 = std::chrono::high_resolution_clock::now();
         bool dirty = (it.type == 12) ? RestoreBatchOriginal() : ToolExecutor::Execute(it.type, it);
         auto t1 = std::chrono::high_resolution_clock::now();
@@ -100,9 +188,21 @@ namespace ToolController
         s_originalToolOutputImage = s_originalImage;
     }
 
-    void RequestRun(int toolIndex) { s_queue.push(toolIndex); }
+    void RequestRun(int toolIndex)
+    {
+        if (toolIndex < 0 || toolIndex >= static_cast<int>(ToolChainState::ReadOnlyTools().size()))
+            return;
+        if (!ValidateToolChainForRun())
+            return;
+        s_queue.push(toolIndex);
+    }
 
     void RequestRunAll(bool loop) {
+        if (!ValidateToolChainForRun())
+        {
+            s_mode = Mode::Idle;
+            return;
+        }
         s_mode = Mode::Running; s_isStep = false;
         s_currentIndex = 0; s_stepCursor = 0; s_loop = loop;
         s_stepTimeMs = s_batchTotalMs = 0;
@@ -118,6 +218,8 @@ namespace ToolController
     }
 
     void RequestStepNext() {
+        if (!ValidateToolChainForRun())
+            return;
         if (s_stepCursor >= (int)ToolChainState::ReadOnlyTools().size()) { s_stepCursor = 0; s_stepTimeMs = 0; }
         if (s_stepCursor == 0) { ResetBatchImagesFromSource(!ImageState::Original().empty() ? ImageState::Original() : ImageState::Current()); s_imageDirty = false; }
         s_isStep = true;
@@ -133,7 +235,13 @@ namespace ToolController
             int idx = s_queue.front(); s_queue.pop();
             if (idx >= 0 && idx < (int)ToolChainState::ReadOnlyTools().size())
             {
+                auto& tool = ToolChainState::Tools()[idx];
+                const cv::Mat& selectedInput = SelectStandaloneInput(tool);
+                ApplyInputImage(selectedInput, false);
+                s_lastInputImage = selectedInput;
                 ExecuteToolAt(idx);
+                if (!ImageState::Current().empty())
+                    s_lastOutputImage = ImageState::Current();
             }
         }
 
@@ -147,27 +255,11 @@ namespace ToolController
             return;
 
         auto& it = tools[s_currentIndex];
-        const bool usePreviousOutput = (it.inputSourceMode == 1 && !s_lastOutputImage.empty());
-        const bool useOriginalToolOutput = (it.inputSourceMode == 2 && !s_originalToolOutputImage.empty());
-        const cv::Mat& selectedInput = usePreviousOutput ? s_lastOutputImage
-                                     : useOriginalToolOutput ? s_originalToolOutputImage
-                                     : s_lastInputImage;
+        const cv::Mat& selectedInput = SelectBatchInput(it);
         if (!selectedInput.empty())
         {
-            auto& currentImage = ImageState::CurrentRef();
-            if (selectedInput.data != currentImage.data)
-                selectedInput.copyTo(currentImage);
+            ApplyInputImage(selectedInput, s_isStep);
             s_lastInputImage = selectedInput;
-            if (s_isStep)
-            {
-                cv::Mat rgba;
-                SafeConvertToRGBA(currentImage, rgba);
-                if (!rgba.empty())
-                {
-                    ImageState::PendingUploadRef() = rgba;
-                    ImageState::NeedUploadRef() = true;
-                }
-            }
         }
 
         if (!s_isStep && !s_batchTimerStarted) {
@@ -261,6 +353,40 @@ namespace ToolController
     }
     void SetRuntimeMode(bool enabled) { s_runtimeMode = enabled; }
     bool IsRuntimeMode() { return s_runtimeMode; }
+
+    static void ClearRuntimeCaches()
+    {
+        Reset();
+        s_originalImage.release();
+        s_originalVersion = -1;
+        s_lastInputImage.release();
+        s_lastOutputImage.release();
+        s_originalToolOutputImage.release();
+        s_imageDirty = false;
+
+        for (ToolInstance& tool : ToolChainState::Tools())
+        {
+            tool.lastResult = ToolResult{};
+            tool.hasLastResult = false;
+        }
+        gContext.ClearUnifiedResults();
+        TemplateState::ClearResults();
+        RealtimeDetectionState::Clear();
+        ToolChainState::SetYoloLiveDetect(false);
+        ToolChainState::SetYoloLiveInstanceIndex(-1);
+        ToolChainState::SetYoloLastTimeMs(0.0f);
+        ToolChainState::SetYoloLiveFrameMs(0.0f);
+    }
+
+    void OnToolChainChanged()
+    {
+        ClearRuntimeCaches();
+    }
+
+    void OnInputImageChanged()
+    {
+        ClearRuntimeCaches();
+    }
 
     void Reset() { s_mode = Mode::Idle; s_currentIndex = -1; s_stepCursor = 0; s_isStep = false; s_queue = {}; s_loop = false; s_batchTimerStarted = false; s_nextLoopRunAt = std::chrono::high_resolution_clock::now(); s_toolTimesMs.clear(); s_stepTimeMs = 0; s_batchTotalMs = 0; }
 }

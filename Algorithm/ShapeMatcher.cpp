@@ -7,7 +7,6 @@
 #include <mutex>
 #include <algorithm>
 #include <cmath>
-extern ImVec4 color;
 namespace ShapeMatcher
 {
     float g_MatchTimeMs = 0;
@@ -147,7 +146,7 @@ namespace ShapeMatcher
         auto tplCont = tplContours.empty() ? ExtractTemplates(tplImg, p) : tplContours;
         if (tplCont.empty())
         {
-            LogSystem::Add(LOG_WARN, color, "形状匹配:未提取到模板轮廓");
+            LogSystem::Add(LOG_WARN, "形状匹配:未提取到模板轮廓");
             return {};
         }
 
@@ -169,7 +168,7 @@ namespace ShapeMatcher
         }
         if (s.empty() || t.empty() || s.type() != t.type() || s.cols < t.cols || s.rows < t.rows)
         {
-            LogSystem::Add(LOG_WARN, color, "形状匹配:搜索区域小于模板或图像类型不一致 search=%dx%d tpl=%dx%d", s.cols, s.rows, t.cols, t.rows);
+            LogSystem::Add(LOG_WARN, "形状匹配:搜索区域小于模板或图像类型不一致 search=%dx%d tpl=%dx%d", s.cols, s.rows, t.cols, t.rows);
             return {};
         }
         cv::Mat res;
@@ -285,7 +284,7 @@ namespace ShapeMatcher
             else
                 nr++;
         }
-        LogSystem::Add(LOG_INFO, color, "ShapeMatcher[%s]:%d个(绿%d红%d)|%.3fms|tpl=%dx%d|minScore=%.2f shapeThres=%.3f candidates=%d", kMethodNames[p.shapeMethod], g_MatchCount, ng, nr, g_MatchTimeMs, tg.cols, tg.rows, p.minScore, p.minShapeScore, (int)cand.size());
+            LogSystem::Add(LOG_INFO, "ShapeMatcher[%s]:%d个(绿%d红%d)|%.3fms|tpl=%dx%d|minScore=%.2f shapeThres=%.3f candidates=%d", kMethodNames[p.shapeMethod], g_MatchCount, ng, nr, g_MatchTimeMs, tg.cols, tg.rows, p.minScore, p.minShapeScore, (int)cand.size());
         return fn;
     }
     cv::Mat DrawMatches(cv::Mat &img, const std::vector<ShapeMatch> &ms, const Params &p)

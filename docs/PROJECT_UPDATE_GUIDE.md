@@ -99,7 +99,7 @@ gNeedUpload = true;
    - 文件路径
    - 配方同名 PNG
    - Base64
-5. 更新 `RecipeToolInstance`。
+5. 优先更新 `ToolInstance::ToRecipeJson()` / `LoadRecipeJson()`；只有配方资源文件兼容字段才更新 `RecipeToolInstance`。
 
 ## 工程文件同步
 
@@ -118,7 +118,7 @@ gNeedUpload = true;
 
 ```powershell
 rg -n "ToolRegistry::Register|g_ToolRegistry|ToolExecutor::Execute" Algorithm UI Core
-rg -n "RecipeToolInstance|Capture\\(|Apply\\(|Save\\(|Load\\(" Core\\RecipeManager.*
+rg -n "ToolInstance::ToRecipeJson|LoadRecipeJson|RecipeToolInstance|Capture\\(|Apply\\(|Save\\(|Load\\(" Core\\RecipeManager.* Core\\ToolInstance.*
 rg -n "ClInclude Include=|ClCompile Include=" Windows_imgui.vcxproj
 rg -n "5 个工具|5 种已接入|传统执行|专用执行|OpenCV 4.12|新增工具从 `11`|新增工具从 `13`" README.md docs -g *.md
 ```

@@ -1,10 +1,10 @@
-#include "../Windows_imgui.h"
 #include "ROIManager.h"
 #include "../Core/DX12Context.h"
 #include "../Core/ROIState.h"
+#include "../Core/ImageViewState.h"
+#include "../Core/RealtimeDetectionState.h"
 #include "../Core/VisionContext.h"
 #include "../Log/LogSystem.h"
-#include "../Algorithm/TemplateMatch.h"
 #include "../Algorithm/YOLODetector.h"
 #include "../Algorithm/ITool.h"
 #include "../Algorithm/ContourDetector.h"
@@ -14,91 +14,53 @@
 namespace UI
 {
 
-    // =====================================================
-    // ROI 全局变量定义
-    // =====================================================
-    std::vector<ROI>& gROIs = ROIState::Items();
-    bool gDrawingROI = false;
-    ImVec2 gROIStart;
-    int& gSelectedROI = ROIState::SelectedIndexRef();
-    bool gDraggingROI = false;
-    ImVec2 gLastMousePos;
-    HandleType gActiveHandle = HANDLE_NONE;
-    int gHoveredROI = -1;
-    int gCurrentROIType = ROI_TYPE_RECT;
-
-    namespace
-    {
-        std::vector<int> s_roiDrawSequence;
-        std::vector<ROI> s_roiDrawSequenceROIs;
-        int s_roiDrawSequenceStep = 0;
-        std::uint64_t s_nextRuntimeROIId = 1;
-    }
+namespace
+{
+float& gZoom = ImageViewState::Zoom();
+ImVec2& gPan = ImageViewState::Pan();
+ImVec2& imageScreenPos = ImageViewState::ImageScreenPos();
+std::vector<ROI>& s_rois = ROIState::Items();
+int& s_selectedROI = ROIState::SelectedIndexRef();
+}
 
     void BeginROIDrawSequence(std::initializer_list<int> roiTypes)
     {
-        s_roiDrawSequence.assign(roiTypes.begin(), roiTypes.end());
-        s_roiDrawSequenceROIs.clear();
-        s_roiDrawSequenceStep = 0;
-        gDrawingROI = false;
-        if (!s_roiDrawSequence.empty())
-            gCurrentROIType = s_roiDrawSequence.front();
+        ROIEditorState::BeginDrawSequence(roiTypes);
     }
 
     std::uint64_t EnsureROIRuntimeId(ROI& roi)
     {
-        if (roi.runtimeId == 0)
-            roi.runtimeId = s_nextRuntimeROIId++;
-        return roi.runtimeId;
+        return ROIEditorState::EnsureRuntimeId(roi);
     }
 
     void CancelROIDrawSequence()
     {
-        s_roiDrawSequence.clear();
-        s_roiDrawSequenceROIs.clear();
-        s_roiDrawSequenceStep = 0;
-        gDrawingROI = false;
+        ROIEditorState::CancelDrawSequence();
     }
 
     bool IsROIDrawSequenceActive()
     {
-        return s_roiDrawSequenceStep >= 0 &&
-            s_roiDrawSequenceStep < static_cast<int>(s_roiDrawSequence.size());
+        return ROIEditorState::IsDrawSequenceActive();
     }
 
     int ROIDrawSequenceStep()
     {
-        return IsROIDrawSequenceActive() ? s_roiDrawSequenceStep : -1;
+        return ROIEditorState::DrawSequenceStep();
     }
 
     int ROIDrawSequenceCount()
     {
-        return static_cast<int>(s_roiDrawSequence.size());
+        return ROIEditorState::DrawSequenceCount();
     }
 
     void AdvanceROIDrawSequence(const ROI& completedROI)
     {
-        if (!IsROIDrawSequenceActive() ||
-            s_roiDrawSequence[s_roiDrawSequenceStep] != completedROI.type)
-            return;
-
-        s_roiDrawSequenceROIs.push_back(completedROI);
-        ++s_roiDrawSequenceStep;
-        if (IsROIDrawSequenceActive())
-            gCurrentROIType = s_roiDrawSequence[s_roiDrawSequenceStep];
-        else
-            gDrawingROI = false;
+        ROIEditorState::AdvanceDrawSequence(completedROI);
     }
 
     bool ConsumeCompletedROIDrawSequence(std::vector<ROI>& completedROIs)
     {
-        if (IsROIDrawSequenceActive() || s_roiDrawSequence.empty() ||
-            s_roiDrawSequenceROIs.size() != s_roiDrawSequence.size())
-            return false;
-
-        completedROIs = s_roiDrawSequenceROIs;
-        CancelROIDrawSequence();
-        return true;
+        return ROIEditorState::ConsumeCompletedDrawSequence(completedROIs);
     }
 
     // =====================================================
@@ -156,11 +118,11 @@ namespace UI
         ImVec2 error(b.x - mouse.x, b.y - mouse.y);
         float dist = sqrtf(error.x * error.x + error.y * error.y);
 
-        LogSystem::Add(LOG_INFO, color, "reproject=(%.6f,%.6f) len=%.6f", error.x, error.y, dist);
+        LogSystem::Add(LOG_INFO, "reproject=(%.6f,%.6f) len=%.6f", error.x, error.y, dist);
 
-        for (int i = 0; i < (int)gROIs.size(); i++)
+        for (int i = 0; i < (int)s_rois.size(); i++)
         {
-            const auto &roi = gROIs[i];
+            const auto &roi = s_rois[i];
             const char* tname = "?";
             switch (roi.type) {
             case ROI_TYPE_RECT: tname = "Rect"; break;
@@ -170,13 +132,13 @@ namespace UI
             case ROI_TYPE_POLYGON: tname = "Polygon"; break;
             }
             if (roi.type == ROI_TYPE_POINT)
-                LogSystem::Add(LOG_INFO, color, "ROI[%d] %s pos=(%.1f,%.1f)",
+                LogSystem::Add(LOG_INFO, "ROI[%d] %s pos=(%.1f,%.1f)",
                                i, tname, roi.start.x, roi.start.y);
             else if (roi.type == ROI_TYPE_CIRCLE)
-                LogSystem::Add(LOG_INFO, color, "ROI[%d] %s center=(%.1f,%.1f) r=%.1f",
+                LogSystem::Add(LOG_INFO, "ROI[%d] %s center=(%.1f,%.1f) r=%.1f",
                                i, tname, roi.start.x, roi.start.y, roi.CircleRadius());
             else if (roi.type == ROI_TYPE_POLYGON)
-                LogSystem::Add(LOG_INFO, color, "ROI[%d] %s pts=%zu",
+                LogSystem::Add(LOG_INFO, "ROI[%d] %s pts=%zu",
                                i, tname, roi.points.size());
             else
             {
@@ -184,7 +146,7 @@ namespace UI
                 float y1 = (std::min)(roi.start.y, roi.end.y);
                 float x2 = (std::max)(roi.start.x, roi.end.x);
                 float y2 = (std::max)(roi.start.y, roi.end.y);
-                LogSystem::Add(LOG_INFO, color, "ROI[%d] %s rect=(%.1f %.1f %.1f %.1f)",
+                LogSystem::Add(LOG_INFO, "ROI[%d] %s rect=(%.1f %.1f %.1f %.1f)",
                                i, tname, x1, y1, x2 - x1, y2 - y1);
             }
         }
@@ -195,14 +157,9 @@ namespace UI
     // =====================================================
     void ClearROIState()
     {
-        gROIs.clear();
-        gDrawingROI = false;
-        CancelROIDrawSequence();
-        gSelectedROI = -1;
-        gActiveHandle = HANDLE_NONE;
-        gDraggingROI = false;
-        g_YoloOverlays.clear();
-        g_YoloShowOverlay = false;
+        ROIState::ClearInteraction();
+        ROIEditorState::ResetInteraction();
+        RealtimeDetectionState::Clear();
         gContext.ClearUnifiedResults();
         gContext.rois.clear();
         gContext.selectedROI = -1;
@@ -262,7 +219,7 @@ namespace UI
                 if (valid)
                 {
                     EnsureROIRuntimeId(roi);
-                    gROIs.push_back(roi);
+                    ROIState::Add(roi, false);
                     AdvanceROIDrawSequence(roi);
                 }
             }
@@ -297,7 +254,7 @@ namespace UI
             float dy = mouse.y - sp.y;
             if (sqrtf(dx * dx + dy * dy) < HANDLE_SIZE * 2.0f)
             {
-                gSelectedROI = i;
+                s_selectedROI = i;
                 gActiveHandle = type;
                 return true;
             }
@@ -307,13 +264,13 @@ namespace UI
         // 左键点击：检测是否点击到ROI的控制点或内部区域
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
         {
-            gSelectedROI = -1;
+            s_selectedROI = -1;
             gActiveHandle = HANDLE_NONE;
 
             // 先检查当前类型ROI的控制点（8方向+中心）
-            for (int i = 0; i < (int)gROIs.size(); i++)
+            for (int i = 0; i < (int)s_rois.size(); i++)
             {
-                auto &roi = gROIs[i];
+                auto &roi = s_rois[i];
                 if (roi.type != gCurrentROIType)
                     continue;
                 Box box = GetBox(roi);
@@ -339,11 +296,11 @@ namespace UI
             }
 
             // 控制点未命中：从后往前检查内部区域 → 直接进入移动模式
-            if (gSelectedROI < 0)
+            if (s_selectedROI < 0)
             {
-                for (int i = (int)gROIs.size() - 1; i >= 0; i--)
+                for (int i = (int)s_rois.size() - 1; i >= 0; i--)
                 {
-                    auto &roi = gROIs[i];
+                    auto &roi = s_rois[i];
                     float minX = std::min(roi.start.x, roi.end.x);
                     float maxX = std::max(roi.start.x, roi.end.x);
                     float minY = std::min(roi.start.y, roi.end.y);
@@ -352,7 +309,7 @@ namespace UI
                     if (imageMouse.x >= minX && imageMouse.x <= maxX &&
                         imageMouse.y >= minY && imageMouse.y <= maxY)
                     {
-                        gSelectedROI = i;
+                        s_selectedROI = i;
                         gActiveHandle = HANDLE_CENTER; // 框内点击 = 直接移动
                         break;
                     }
@@ -361,18 +318,17 @@ namespace UI
         }
 
         // Delete键：删除选中的ROI
-        if (gSelectedROI >= 0 && ImGui::IsKeyPressed(ImGuiKey_Delete))
+        if (s_selectedROI >= 0 && ImGui::IsKeyPressed(ImGuiKey_Delete))
         {
-            gROIs.erase(gROIs.begin() + gSelectedROI);
-            gSelectedROI = -1;
+            ROIState::RemoveAt(s_selectedROI);
             gActiveHandle = HANDLE_NONE;
             gDraggingROI = false;
         }
 
         // 拖动/缩放：根据当前激活的控制点类型调整ROI
-        if (gActiveHandle != HANDLE_NONE && gSelectedROI >= 0)
+        if (gActiveHandle != HANDLE_NONE && s_selectedROI >= 0)
         {
-            auto &roi = gROIs[gSelectedROI];
+            auto &roi = s_rois[s_selectedROI];
 
             if (gActiveHandle == HANDLE_CENTER)
             {
@@ -406,10 +362,10 @@ namespace UI
         }
 
         // ===== 绘制所有ROI（按类型区分形状） =====
-        for (int i = 0; i < (int)gROIs.size(); i++)
+        for (int i = 0; i < (int)s_rois.size(); i++)
         {
-            auto &roi = gROIs[i];
-            bool selected = (i == gSelectedROI);
+            auto &roi = s_rois[i];
+            bool selected = (i == s_selectedROI);
             ImU32 col = GetROIColor(roi.type, selected);
             float thick = selected ? 2.5f : 2.0f;
 

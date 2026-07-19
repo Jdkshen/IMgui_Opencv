@@ -4,7 +4,6 @@
 #include "../Log/LogSystem.h"
 #include <opencv2/geometry.hpp>
 #include <chrono>
-extern ImVec4 color;
 namespace ContourDetector
 {
     float g_ContourTimeMs = 0;
@@ -92,7 +91,7 @@ namespace ContourDetector
         g_ContourCount = 0;
         if (img.empty())
         {
-            LogSystem::Add(LOG_ERROR, color, "Contour:空图");
+            LogSystem::Add(LOG_ERROR, "Contour:空图");
             return {};
         }
         auto t1 = clock::now();
@@ -103,7 +102,7 @@ namespace ContourDetector
             const auto &rois = ROIState::ReadOnlyItems();
             if (rois.empty())
             {
-                LogSystem::Add(LOG_WARN, color, "Contour:请先框选ROI");
+            LogSystem::Add(LOG_WARN, "Contour:请先框选ROI");
                 return {};
             }
             int ri = ROIState::SelectedIndex() >= 0 ? ROIState::SelectedIndex() : 0;
@@ -116,10 +115,10 @@ namespace ContourDetector
             auto templates = Find(crop, p, cv::Point(roi.x, roi.y));
             if (templates.empty())
             {
-                LogSystem::Add(LOG_WARN, color, "Contour:ROI内未找到轮廓");
+            LogSystem::Add(LOG_WARN, "Contour:ROI内未找到轮廓");
                 return {};
             }
-            LogSystem::Add(LOG_INFO, color, "Contour:ROI提取%zu个模板", templates.size());
+            LogSystem::Add(LOG_INFO, "Contour:ROI提取%zu个模板", templates.size());
             // 全图找所有轮廓
             auto all = Find(img, p);
             // matchShapes 匹配
@@ -172,7 +171,7 @@ namespace ContourDetector
             for (auto &c : res)
                 if (c.matchScore < p.matchThreshold)
                     gm++;
-            LogSystem::Add(LOG_INFO, color, "Contour:ROI匹配|%zu模板->%d结果(绿%d红%d)|%.3fms", templates.size(), g_ContourCount - templates.size(), gm, g_ContourCount - templates.size() - gm, g_ContourTimeMs);
+            LogSystem::Add(LOG_INFO, "Contour:ROI匹配|%zu模板->%d结果(绿%d红%d)|%.3fms", templates.size(), g_ContourCount - templates.size(), gm, g_ContourCount - templates.size() - gm, g_ContourTimeMs);
         }
         else
         {
@@ -183,7 +182,7 @@ namespace ContourDetector
             { return std::chrono::duration<float, std::milli>(b - a).count(); };
             g_ContourTimeMs = ms(t0, t2);
             g_ContourCount = (int)res.size();
-            LogSystem::Add(LOG_INFO, color, "轮廓:%d个|%.3fms", g_ContourCount, g_ContourTimeMs);
+            LogSystem::Add(LOG_INFO, "轮廓:%d个|%.3fms", g_ContourCount, g_ContourTimeMs);
         }
         return res;
     }

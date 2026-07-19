@@ -65,6 +65,16 @@ float LargestArea(const ToolResult& result)
         largest = (std::max)(largest, static_cast<float>(item.box.area()));
     return largest;
 }
+
+const ToolResult::Measurement* FindMeasurement(const ToolResult& result, const std::string& name)
+{
+    const auto found = std::find_if(result.measurements.begin(), result.measurements.end(),
+        [&name](const ToolResult::Measurement& measurement)
+        {
+            return measurement.name == name;
+        });
+    return found == result.measurements.end() ? nullptr : &*found;
+}
 }
 
 namespace ToolJudgement
@@ -118,6 +128,26 @@ void Evaluate(ToolResult& result, const ToolJudgementSettings& settings)
         AppendReason(result.statusReason, "最大面积低于下限");
     if (settings.maxArea >= 0.0f && area > settings.maxArea)
         AppendReason(result.statusReason, "最大面积高于上限");
+
+    if (settings.measurementRangeEnabled)
+    {
+        const ToolResult::Measurement* measurement = FindMeasurement(result, settings.measurementName);
+        if (!measurement)
+        {
+            AppendReason(result.statusReason, settings.measurementName.empty()
+                ? "未配置测量项"
+                : "未找到测量项: " + settings.measurementName);
+        }
+        else
+        {
+            const double lower = (std::min)(settings.minMeasurement, settings.maxMeasurement);
+            const double upper = (std::max)(settings.minMeasurement, settings.maxMeasurement);
+            if (measurement->value < lower)
+                AppendReason(result.statusReason, settings.measurementName + " 低于下限");
+            if (measurement->value > upper)
+                AppendReason(result.statusReason, settings.measurementName + " 高于上限");
+        }
+    }
 
     if (!settings.requiredText.empty())
     {

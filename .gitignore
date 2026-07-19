@@ -1,4 +1,5 @@
 # Build outputs
+dist/
 x64/
 Win32/
 Debug/

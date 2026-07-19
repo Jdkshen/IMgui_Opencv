@@ -149,19 +149,28 @@ ROI 交互主要在 `UI/ROIManager.cpp` 中完成，包含控制点、拖动、�
 | `ImageState.*` | 当前图、原图和图像版本状态收口 |
 | `ROI.h` / `ROIState.*` | ROI 数据结构和当前 ROI 选择状态 |
 | `FrameSourceState.*` | 单图、图片序列、视频、摄像头帧来源状态 |
-| `FrameNavigation.*` | 图片序列上一张/下一张导航 |
+| `FrameNavigation.*` | 图片序列导航，以及视频/摄像头播放状态快照与控制命令 |
 | `ImageLoadController.*` | 图片加载请求、异步加载回调和上传调度 |
+| `ImageImportService.*` | 单图/递归文件夹导入、导航与输入切换状态清理 |
+| `HardwareAdapters.*` | 工业相机、PLC、Modbus TCP、OPC UA 适配器接口与注册 |
+| `HardwareRuntimeService.*` | 相机帧发布及 OK/NG 到 PLC/Modbus/OPC UA 的运行协调 |
+| `OpenCvCameraAdapter.*` | UVC、摄像头索引和 OpenCV 视频流 URL 的通用相机实现 |
+| `ModbusTcpAdapter.*` | Winsock Modbus TCP 01/03/05/06 客户端与协议校验 |
+| `ModbusPlcAdapter.*` | PLC 标签到 Modbus 线圈/寄存器及工程量的映射 |
 | `LiveYoloRunner.*` | 实时 YOLO 推理调度和耗时统计 |
 | `FrameRenderer.*` | 每帧渲染提交和渲染资源收尾 |
-| `VisionContext.*` | 统一视觉上下文，保存图片、ROI、模板、结果和视图状态 |
+| `VisionContext.*` | 统一视觉上下文，保存图片、ROI、模板和结果 |
+| `ImageViewState.*` | Core-owned image zoom, pan, canvas position, and grid settings |
 | `ToolInstance.h` / `ToolTypes.h` | 工具实例参数、类型常量和工具名称 |
 | `ToolChainState.*` | 工具链输入/输出图像状态 |
+| `ToolROIService.*` | 工具搜索 ROI 与测量 ROI 的编辑、恢复、同步、回滚和删除 |
+| `ResultOverlayState.*` | 统一结果、实时检测和 Fixture 叠加层查询与显示策略 |
 | `ToolExecutor.*` | 统一工具执行入口，按工具类型分发 |
 | `ToolController.*` | 工具执行调度器，支持单个、全部、单步和循环执行 |
 | `ResultPublisher.h` | 结果发布相关声明 |
 | `ResultExporter.*` | JSON 结果、PNG 结果截图和 Markdown 运行报告导出 |
 | `ImageUtils.h` | 图像格式转换和安全上传辅助 |
-| `LegacyAppState.h` / `UIStateBridge.h` | 旧全局状态过渡桥，隔离 UI/Core 迁移期依赖 |
+| `ToolChainPreflight.*` / `ToolChainValidator.*` | 运行前资源检查、依赖校验和循环依赖检测 |
 
 ### VisionContext
 
@@ -179,7 +188,6 @@ ROI 交互主要在 `UI/ROIManager.cpp` 中完成，包含控制点、拖动、�
 | `selectedROI` | 当前选中的 ROI |
 | `frozenTemplate` | 当前冻结模板 |
 | `unifiedResults` | 统一工具输出 |
-| `zoom/pan/canvasSize/imageScreenPos` | 图像视图状态 |
 
 全局实例是：
 
@@ -187,7 +195,8 @@ ROI 交互主要在 `UI/ROIManager.cpp` 中完成，包含控制点、拖动、�
 extern VisionContext gContext;
 ```
 
-它的作用是减少算法接口对零散全局变量的依赖。当前 type 0-11、13 已通过 ITool 执行，但部分处理链路仍会同步 `gImage`、`gPendingUpload`、`gNeedUpload` 等运行状态。
+它为工具执行提供统一上下文。图像状态由 `ImageState` 管理，工具通过
+`VisionContext` 读取输入并通过 `ToolResult` 发布结果，不再同步旧的图像全局变量。
 
 ### ToolController
 
@@ -378,7 +387,7 @@ flowchart LR
 ```text
 文件选择 / 文件夹浏览
     -> AsyncImageLoader / OpenCVTest
-    -> cv::Mat gImage / gOriginalImage
+    -> ImageState::Current() / ImageState::Original()
     -> SafeConvertToRGBA()
     -> DX12 纹理上传
     -> UI::ShowOpenCV() 显示
@@ -390,7 +399,7 @@ flowchart LR
 视频文件 / 摄像头
     -> VideoCapture::Update()
     -> 当前帧 cv::Mat
-    -> gImage / GPU 上传
+    -> ImageState::Current() / GPU 上传
     -> ImageViewer 显示
     -> 可选 YOLO 实时检测
 ```
@@ -413,7 +422,7 @@ flowchart LR
 ```text
 当前工具实例 + ROI + 模板 + 输入来源 + 参数
     -> RecipeManager::Capture()
-    -> RecipeData / RecipeToolInstance
+    -> RecipeData / ToolInstance JSON + recipe asset compatibility
     -> JSON .recipe 文件
     -> RecipeManager::Load()
     -> RecipeManager::Apply()
@@ -429,7 +438,8 @@ flowchart LR
 | 结构 | 用途 |
 | --- | --- |
 | `RecipeData` | 一个完整配方 |
-| `RecipeToolInstance` | 单个工具实例的序列化参数 |
+| `RecipeToolInstance` | ToolInstance JSON 与模板/差分/找色资产快照 |
+| `ToolInstance::ToRecipeJson()` | 单个工具实例的参数序列化主入口 |
 | `RecipeROI` | ROI 序列化 |
 | `RecipeThreshold` | 阈值/图像处理参数 |
 | `RecipeTemplateMatch` | 模板匹配参数 |
@@ -437,7 +447,8 @@ flowchart LR
 配方支持：
 
 - 保存工具列表、每个工具的参数和输入来源 `inputSourceMode`。
-- 保存模板文件名或 Base64 数据。
+- 保存模板/差分文件资产和多点找色 Base64 资产。
+- 保存阶段只读取 `RecipeData` 快照；加载阶段先解析资产，应用阶段不再读取配方资产文件。
 - 保存 ROI。
 - 加载后恢复到当前 UI 和运行环境。
 
@@ -526,16 +537,16 @@ FontManager::InitFonts(main_scale);
 
 1. 在 `Algorithm/` 下新增工具类，实现 `ITool`。
 2. 在 `ITool.cpp` 的自动注册逻辑里注册新的 `type` 和名称。
-3. 在 `UI/ToolsWindow.h` 的 `ToolInstance` 中增加必要参数。
+3. 在 `Core/ToolInstance.h` 中增加必要参数。
 4. 在 `UI/ToolsWindow.cpp` 中增加工具元数据和参数 UI。
 5. 在 `Core/ToolExecutor.cpp` 的 `RunViaITool()` 中同步 `ToolInstance` 参数到工具实例。
-6. 如需保存配方，在 `RecipeToolInstance`、`Capture()`、`Apply()`、`Save()`、`Load()` 中补充序列化字段。
+6. 如需保存工具参数，优先在 `ToolInstance::ToRecipeJson()` / `LoadRecipeJson()` 中补充字段；仅资源文件兼容信息才放入 RecipeManager。
 7. 输出结果尽量使用 `ToolResult`，避免新增散落的全局输出变量。
 
 ## 维护建议
 
-- 继续收敛工具链状态写入，减少 `gImage`、`gPendingUpload`、`gNeedUpload` 等全局状态读写。
-- 将 ROI 基础结构从 `UI/DockSpaceHost.h` 移到 Core 或独立公共头，降低 Algorithm/Core 对 UI 的依赖。
+- 继续将 `ToolsWindow` 的可写工具链访问收敛为 Core 命令/查询 API。
+- 保持 ROI、ToolInstance、工具参数和工具分类位于 Core 公共层，禁止 Algorithm/Core 反向依赖 UI。
 - 修复源码注释编码，统一使用 UTF-8。
 - 清理或隔离大型模型、DLL、测试视频，避免源码仓库持续膨胀。
 - 为 `ToolExecutor` 和 `RecipeManager` 增加小范围测试，避免工具参数迁移时破坏配方兼容性。

@@ -5,6 +5,7 @@
 #include "FixtureTransform.h"
 #include "../Algorithm/BlobTool.h"
 #include "../Algorithm/ColorAnalyzer.h"
+#include "../Algorithm/DifferenceTool.h"
 #include "../Algorithm/ContourDetector.h"
 #include "../Algorithm/EdgeTool.h"
 #include "../Algorithm/LineDetector.h"
@@ -26,6 +27,7 @@
 #include "TemplateState.h"
 #include "ToolChainState.h"
 #include "ToolJudgement.h"
+#include "InspectionHistory.h"
 #include "../Log/LogSystem.h"
 
 #include <algorithm>
@@ -34,6 +36,28 @@
 
 namespace
 {
+bool IsMissingModelMessage(const std::string& message)
+{
+    return message.find("模型") != std::string::npos ||
+        message.find("model") != std::string::npos ||
+        message.find("OCR") != std::string::npos;
+}
+
+void ApplyMissingModelSkipPolicy(const ToolInstance& tool, ToolResult& result)
+{
+    if (!tool.skipIfModelMissing || result.success)
+        return;
+    if ((tool.type == 4 || tool.type == 11 || tool.type == 13) &&
+        IsMissingModelMessage(result.message))
+    {
+        result.success = true;
+        result.skipped = true;
+        result.status = ToolResultStatus::Pass;
+        result.statusReason.clear();
+        result.message = "已跳过：" + (result.message.empty() ? std::string("模型缺失") : result.message);
+    }
+}
+
 struct ToolRunTimings
 {
     float prepareMs = 0.0f;
@@ -94,6 +118,7 @@ bool ToolCanUseSharedInput(const ToolInstance& it)
     case 13: // OCR
     case 14: // QR code
     case 15: // Measurement
+    case 16: // Difference
         return true;
     case 10: // Multi-color finder preprocesses in-place only when gray/binary is enabled.
         return !it.mcfImgGray && !it.mcfImgBinary;
@@ -239,6 +264,19 @@ int FindToolInstanceIndex(const ToolInstance& it)
     return -1;
 }
 
+int ResolveToolSourceIndex(const std::vector<ToolInstance>& tools, int legacyIndex, std::uint64_t stableId)
+{
+    if (stableId != 0)
+    {
+        for (int i = 0; i < static_cast<int>(tools.size()); ++i)
+        {
+            if (tools[i].toolId == stableId)
+                return i;
+        }
+    }
+    return legacyIndex >= 0 && legacyIndex < static_cast<int>(tools.size()) ? legacyIndex : -1;
+}
+
 bool ConvertForCopyTo(const cv::Mat& src, int targetChannels, cv::Mat& dst)
 {
     if (src.empty())
@@ -264,111 +302,6 @@ bool ConvertForCopyTo(const cv::Mat& src, int targetChannels, cv::Mat& dst)
         return false;
     return true;
 }
-
-#if 0 // Historical global-state adapter; replaced by Algorithm/TemplateMatchingTool.
-class TemplateMatchITool final : public ITool
-{
-public:
-    bool enableRotation = false;
-    int rotationStart = -45;
-    int rotationEnd = 45;
-    int rotationStep = 1;
-    int maxResults = 5;
-    float matchThreshold = 0.7f;
-    int maxImageDim = 1000;
-    float nmsThreshold = 0.3f;
-    bool tplGray = false;
-    bool tplBinary = false;
-    int tplBinThresh = 128;
-    bool tplEdge = false;
-    int tplEdgeLow = 50;
-    int tplEdgeHigh = 150;
-    bool imgUseGray = false;
-    bool imgEnableThreshold = false;
-    int imgThreshold = 128;
-    cv::Mat templateImg;
-    bool useSearchROI = false;
-    std::vector<ROI> searchROIs;
-
-    const char* GetName() const override { return "模板匹配"; }
-    int GetType() const override { return 1; }
-    void DrawUI() override {}
-    nlohmann::json Save() const override { return {{"type", 1}}; }
-    void Load(const nlohmann::json&) override {}
-    ToolResult Execute(VisionContext& ctx) override
-    {
-        ToolResult result;
-        result.toolName = GetName();
-        if (ctx.image.empty())
-        {
-            result.success = false;
-            result.message = "请先加载图片";
-            return result;
-        }
-
-        auto& currentImage = ImageState::CurrentRef();
-        ctx.image.copyTo(currentImage);
-        g_TMEnableRotation = enableRotation;
-        g_TMRotationStart = rotationStart; g_TMRotationEnd = rotationEnd;
-        g_TMRotationStep = rotationStep;
-        g_TMMaxResults = maxResults; g_TMMatchThreshold = matchThreshold;
-        g_TMMaxImageDim = maxImageDim; g_NmsThreshold = nmsThreshold;
-        g_TMSearchMode = useSearchROI ? 1 : 0;
-        g_TplGray = tplGray; g_TplBinary = tplBinary; g_TplBinThresh = tplBinThresh;
-        g_TplEdge = tplEdge; g_TplEdgeLow = tplEdgeLow; g_TplEdgeHigh = tplEdgeHigh;
-
-        bool didPreprocess = false;
-        if (imgUseGray || imgEnableThreshold) {
-            if (imgUseGray && currentImage.channels() > 1) {
-                int code = (currentImage.channels() == 4) ? cv::COLOR_BGRA2GRAY : cv::COLOR_BGR2GRAY;
-                cv::cvtColor(currentImage, currentImage, code);
-            }
-            if (imgEnableThreshold) {
-                if (currentImage.channels() > 1) cv::cvtColor(currentImage, currentImage, cv::COLOR_BGR2GRAY);
-                cv::threshold(currentImage, currentImage, imgThreshold, 255, cv::THRESH_BINARY);
-            }
-            didPreprocess = true;
-        }
-
-        TemplateState::FrozenTemplate() = templateImg;
-        auto& globalROIs = ROIState::Items();
-        const auto oldROIs = globalROIs;
-        const int oldSelectedROI = ROIState::SelectedIndex();
-        if (useSearchROI)
-        {
-            globalROIs = !searchROIs.empty() ? searchROIs : ctx.rois;
-            ROIState::SetSelectedIndex(SelectROIIndex(globalROIs));
-        }
-        TemplateMatch::Run();
-        if (useSearchROI)
-        {
-            globalROIs = oldROIs;
-            ROIState::SetSelectedIndex(oldSelectedROI);
-        }
-
-        result.success = true;
-        const int maxShown = std::min(static_cast<int>(gMatchROIs.size()), maxResults);
-        for (int i = 0; i < maxShown; ++i) {
-            const auto& roi = gMatchROIs[i];
-            ToolResult::Region region;
-            const float x1 = std::min(roi.start.x, roi.end.x);
-            const float y1 = std::min(roi.start.y, roi.end.y);
-            const float x2 = std::max(roi.start.x, roi.end.x);
-            const float y2 = std::max(roi.start.y, roi.end.y);
-            region.bbox = cv::Rect(static_cast<int>(x1), static_cast<int>(y1),
-                std::max(1, static_cast<int>(x2 - x1)), std::max(1, static_cast<int>(y2 - y1)));
-            region.score = (i < static_cast<int>(gMatchScores.size())) ? static_cast<float>(gMatchScores[i]) : 0.0f;
-            char label[32];
-            std::snprintf(label, sizeof(label), "#%d %.2f", i + 1, region.score);
-            region.label = label;
-            result.regions.push_back(region);
-        }
-        if (didPreprocess)
-            result.debugImage = currentImage.clone();
-        return result;
-    }
-};
-#endif
 
 class OpenCVYoloITool final : public ITool
 {
@@ -475,6 +408,26 @@ void SyncIToolParams(ToolInstance& it)
         if (auto* bt = dynamic_cast<BlobTool*>(it.toolImpl)) {
             bt->minArea = it.blobMinArea;
             bt->maxArea = it.blobMaxArea;
+            bt->thresholdMode = it.blobThresholdMode;
+            bt->threshold = it.blobThreshold;
+            bt->invert = it.blobInvert;
+            bt->connectivity = it.blobConnectivity;
+            bt->minCircularity = it.blobMinCircularity;
+            bt->maxCircularity = it.blobMaxCircularity;
+            bt->minAspectRatio = it.blobMinAspectRatio;
+            bt->maxAspectRatio = it.blobMaxAspectRatio;
+            bt->showLabels = it.blobShowLabels;
+        }
+    } else if (t == 16) {
+        if (auto* dt = dynamic_cast<DifferenceTool*>(it.toolImpl)) {
+            dt->referenceImage = it.differenceReferenceImage;
+            dt->threshold = it.differenceThreshold;
+            dt->minArea = it.differenceMinArea;
+            dt->blurSize = it.differenceBlurSize;
+            dt->morphKernelSize = it.differenceMorphKernelSize;
+            dt->morphIterations = it.differenceMorphIterations;
+            dt->invert = it.differenceInvert;
+            dt->showLabels = it.differenceShowLabels;
         }
     } else if (t == 3) {
         if (auto* tt = dynamic_cast<ThresholdITool*>(it.toolImpl)) {
@@ -650,8 +603,8 @@ void PublishResult(int type, ToolResult result, float ms)
         LogSystem::Add(LOG_INFO, ImVec4(0, 1, 0.5f, 1),
             "%s: %zu", result.toolName.c_str(), result.lines.size());
     } else if (type == 10) {
-        g_McfLastTimeMs = ms;
-        g_McfLastCount = static_cast<int>(result.regions.size());
+        ToolChainState::SetMcfLastTimeMs(ms);
+        ToolChainState::SetMcfLastCount(static_cast<int>(result.regions.size()));
         LogSystem::Add(LOG_INFO, ImVec4(0, 1, 0.5f, 1),
             "%s: %zu matches, %.3f ms", result.toolName.c_str(), result.regions.size(), ms);
     } else if (type == 11) {
@@ -757,6 +710,7 @@ bool RunViaITool(ToolInstance& it, VisionContext& ctx, ToolRunTimings* timings =
 
     auto t0 = std::chrono::steady_clock::now();
     auto result = it.toolImpl->Execute(ctx);
+    ApplyMissingModelSkipPolicy(it, result);
     auto t1 = std::chrono::steady_clock::now();
     const float ms = std::chrono::duration<float, std::milli>(t1 - t0).count();
     if (timings)
@@ -766,14 +720,15 @@ bool RunViaITool(ToolInstance& it, VisionContext& ctx, ToolRunTimings* timings =
     const std::string baseName = result.toolName.empty() ? it.toolImpl->GetName() : result.toolName;
     result.toolName = ToolInstanceLogName(baseName.c_str(), it.label);
     result.sourceToolIndex = FindToolInstanceIndex(it);
-    ApplyToolLabelToOverlayItems(result, it.label);
+    result.sourceToolId = it.toolId;
+    const std::string overlayLabel = (it.label == baseName) ? std::string() : it.label;
+    ApplyToolLabelToOverlayItems(result, overlayLabel);
     ToolJudgement::Evaluate(result, it.judgement);
+    InspectionHistory::AddResult(result.sourceToolId, result.toolName, result);
 
     const bool dirty = !result.debugImage.empty();
     if (dirty) {
         ImageState::SetDebugImage(result.debugImage);
-        gThresholdMat = ImageState::Current().clone();
-        gTimeTotal = ms;
         result.debugImage.release();
     }
 
@@ -813,12 +768,13 @@ bool RunViaITool(ToolInstance& it)
         ResultROIResolution resolution;
         const auto& tools = ToolChainState::ReadOnlyTools();
         const int currentIndex = FindToolInstanceIndex(it);
-        if (it.resultRoiSourceTool < 0 || it.resultRoiSourceTool >= static_cast<int>(tools.size()) ||
-            it.resultRoiSourceTool == currentIndex)
+        const int resultRoiSourceIndex = ResolveToolSourceIndex(
+            tools, it.resultRoiSourceTool, it.resultRoiSourceToolId);
+        if (resultRoiSourceIndex < 0 || resultRoiSourceIndex == currentIndex)
         {
             resolution.reason = "结果 ROI 的上游工具无效";
         }
-        else if (!tools[it.resultRoiSourceTool].hasLastResult)
+        else if (!tools[resultRoiSourceIndex].hasLastResult)
         {
             resolution.reason = "上游工具尚未产生结果";
         }
@@ -828,8 +784,14 @@ bool RunViaITool(ToolInstance& it)
             request.mode = static_cast<ResultROIMode>(std::clamp(it.resultRoiMode, 0, 2));
             request.resultIndex = (std::max)(0, it.resultRoiIndex);
             request.missingPolicy = static_cast<MissingResultPolicy>(std::clamp(it.resultRoiMissingPolicy, 0, 1));
+            request.category = it.resultRoiCategory;
+            request.classId = it.resultRoiClassId;
+            request.minScore = it.resultRoiMinScore;
+            request.minArea = it.resultRoiMinArea;
+            request.sortMode = it.resultRoiSortMode;
+            request.sortDescending = it.resultRoiSortDescending;
             resolution = ResultROIResolver::Resolve(
-                tools[it.resultRoiSourceTool].lastResult,
+                tools[resultRoiSourceIndex].lastResult,
                 request,
                 gContext.image.size());
         }
@@ -839,6 +801,7 @@ bool RunViaITool(ToolInstance& it)
             ToolResult result;
             result.toolName = ToolInstanceLogName(ToolRegistry::GetName(it.type), it.label);
             result.sourceToolIndex = currentIndex;
+            result.sourceToolId = it.toolId;
             result.success = true;
             result.skipped = it.resultRoiMissingPolicy == static_cast<int>(MissingResultPolicy::Skip);
             result.status = result.skipped ? ToolResultStatus::Pass : ToolResultStatus::Fail;
@@ -861,20 +824,20 @@ bool RunViaITool(ToolInstance& it)
     {
         const auto& tools = ToolChainState::ReadOnlyTools();
         const int currentIndex = FindToolInstanceIndex(it);
+        const int fixtureSourceIndex = ResolveToolSourceIndex(
+            tools, it.fixture.sourceToolIndex, it.fixture.sourceToolId);
         FixturePose currentPose;
         std::string fixtureError;
-        if (it.fixture.sourceToolIndex < 0 ||
-            it.fixture.sourceToolIndex >= static_cast<int>(tools.size()) ||
-            it.fixture.sourceToolIndex == currentIndex)
+        if (fixtureSourceIndex < 0 || fixtureSourceIndex == currentIndex)
         {
             fixtureError = "Fixture 上游工具无效";
         }
-        else if (!tools[it.fixture.sourceToolIndex].hasLastResult)
+        else if (!tools[fixtureSourceIndex].hasLastResult)
         {
             fixtureError = "Fixture 上游工具尚未产生定位结果";
         }
         else if (!FixtureTransform::TryExtractPose(
-            tools[it.fixture.sourceToolIndex].lastResult,
+            tools[fixtureSourceIndex].lastResult,
             (std::max)(0, it.fixture.resultIndex),
             currentPose))
         {
@@ -886,6 +849,7 @@ bool RunViaITool(ToolInstance& it)
             ToolResult result;
             result.toolName = ToolInstanceLogName(ToolRegistry::GetName(it.type), it.label);
             result.sourceToolIndex = currentIndex;
+            result.sourceToolId = it.toolId;
             result.success = true;
             result.skipped = !it.fixture.failOnMissing;
             result.status = result.skipped ? ToolResultStatus::Pass : ToolResultStatus::Fail;

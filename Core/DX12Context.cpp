@@ -1,5 +1,4 @@
 #include "DX12Context.h"
-#include "ImageState.h"
 #include <d3d12.h>
 #include <dxgi1_4.h>
 #include <dxgi1_5.h>
@@ -37,11 +36,6 @@ ID3D12DescriptorHeap *g_pd3dRtvDescHeap = nullptr;       // RTV 描述符堆
 
 D3D12_CPU_DESCRIPTOR_HANDLE gSrvCpuHandle = {};          // SRV 堆起始 CPU 句柄（索引0）
 D3D12_GPU_DESCRIPTOR_HANDLE gSrvGpuHandle = {};          // SRV 堆起始 GPU 句柄（索引0）
-
-std::string pendingPath;                                  // 待加载图片路径
-
-int& gImageWidth  = ImageState::WidthRef();              // 当前图片宽度（引用 ImageState）
-int& gImageHeight = ImageState::HeightRef();             // 当前图片高度（引用 ImageState）
 
 // =========================
 // 初始化辅助 DX12 上下文

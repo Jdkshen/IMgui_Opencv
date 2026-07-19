@@ -7,8 +7,8 @@
 #include "ImageUtils.h"
 #include "OpenCVTest.h"
 #include "ROIState.h"
+#include "TemplateState.h"
 #include "VideoCapture.h"
-#include "../Algorithm/TemplateMatch.h"
 #include "../Log/LogSystem.h"
 
 #include <exception>
@@ -27,9 +27,9 @@ bool s_RequestLoadImage = false; // 是否需要发起异步加载请求
 // =====================================================
 // ImageLoadController::Update
 // 每帧调度流程：
-//   1. 检查 pendingPath（外部模块写入的待加载路径）
-//   2. 若有新路径 → 关闭视频 → 发起 AsyncImageLoader::RequestLoad
-//   3. 轮询 CheckAndProcess → 加载完成时：释放旧纹理 → 设置 FrameSourceState → 上传 GPU
+//   1. 消费 FrameNavigation 或外部模块提交的路径
+//   2. 关闭视频源并发起 AsyncImageLoader::RequestLoad
+//   3. 轮询结果，成功后设置 FrameSourceState 并上传 GPU
 // =====================================================
 namespace ImageLoadController
 {
@@ -37,6 +37,7 @@ void RequestLoad(std::string path)
 {
     if (path.empty())
         return;
+    VideoCapture::Close();
     s_UploadRequest = std::move(path);
     s_RequestLoadImage = true;
 }
@@ -46,15 +47,6 @@ void Update()
     std::string navigationPath;
     if (FrameNavigation::ConsumePendingImagePath(navigationPath))
         RequestLoad(std::move(navigationPath));
-
-    // 1. 检查是否有待加载路径（由外部模块写入 pendingPath）
-    if (!pendingPath.empty())
-    {
-        VideoCapture::Close();              // 关闭当前视频/摄像头
-        s_UploadRequest = pendingPath;       // 记录路径
-        pendingPath.clear();                 // 清空全局标记
-        s_RequestLoadImage = true;           // 标记需要加载
-    }
 
     // 2. 发起异步加载请求
     if (s_RequestLoadImage && !s_UploadRequest.empty())
@@ -98,7 +90,7 @@ void Update()
             // 后处理：适配窗口、清空交互状态、清空模板匹配
             FrameNavigation::FitImageToWindow();
             ROIState::ClearInteraction();
-            TemplateMatch::Clear();
+TemplateState::ClearResults();
         }
         catch (const std::exception& e)
         {

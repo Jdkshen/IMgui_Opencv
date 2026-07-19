@@ -1,0 +1,29 @@
+name: Windows Build
+
+on:
+  push:
+    branches: [ main, master, "codex/**" ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: microsoft/setup-msbuild@v2
+      - name: Build application
+        run: msbuild Windows_imgui.vcxproj /t:Build /p:Configuration=Release /p:Platform=x64 /m:1 /nologo
+      - name: Build regression tests
+        run: msbuild Test\RegressionTests.vcxproj /t:Build /p:Configuration=Release /p:Platform=x64 /m:1 /nologo
+      - name: Run full regression tests
+        run: .\Test\x64\Release\RegressionTests.exe
+      - name: Package runtime
+        shell: pwsh
+        run: .\scripts\package_runtime.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: IMgui-Opencv-runtime
+          path: dist/*.zip
