@@ -182,7 +182,8 @@ void ShowHardwareWindow()
     ImGui::InputInt("端口", &outputPort);
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputText("##output_resource", outputResource, sizeof(outputResource));
-    ImGui::SetItemTooltip(outputType == 2 ? "可选 OPC UA endpoint path" : "Modbus Unit ID (1-247)");
+    ImGui::SetItemTooltip(outputType == 2 ? "可选 OPC UA endpoint path" :
+        "Modbus Unit ID，通常为 1；直连设备也可能使用 0 或 255");
     ImGui::InputInt("连接超时(ms)", &outputTimeoutMs);
 
     if (outputType == 1 || outputType == 2)
@@ -194,6 +195,7 @@ void ShowHardwareWindow()
     if (outputType != 2)
     {
         ImGui::InputInt(outputType == 0 ? "线圈地址" : "映射地址", &outputAddressValue);
+        ImGui::SetItemTooltip("Modbus 协议地址从 0 开始；PLC 显示 00001 时通常填写 0");
         if (outputType == 1)
             ImGui::Checkbox("映射到保持寄存器", &plcHoldingRegister);
     }

@@ -28,9 +28,15 @@ void AppendU16(std::vector<std::uint8_t>& data, std::uint16_t value)
     data.push_back(static_cast<std::uint8_t>(value & 0xff));
 }
 
-std::string SocketError(const char* operation)
+std::string SocketError(const char* operation, int errorCode = WSAGetLastError())
 {
-    return std::string(operation) + " failed, WSA=" + std::to_string(WSAGetLastError());
+    if (errorCode == WSAETIMEDOUT)
+        return std::string(operation) + "超时 (WSA=10060)";
+    if (errorCode == WSAECONNRESET)
+        return std::string(operation) + "失败: 连接被设备重置 (WSA=10054)";
+    if (errorCode == WSAECONNABORTED)
+        return std::string(operation) + "失败: 连接已中止 (WSA=10053)";
+    return std::string(operation) + "失败, WSA=" + std::to_string(errorCode);
 }
 
 bool EnsureWinsock(std::string& error)
@@ -48,7 +54,7 @@ bool EnsureWinsock(std::string& error)
     return true;
 }
 
-bool SendAll(SOCKET socket, const std::uint8_t* data, std::size_t size)
+DeviceOperationResult SendAll(SOCKET socket, const std::uint8_t* data, std::size_t size)
 {
     std::size_t sent = 0;
     while (sent < size)
@@ -57,14 +63,17 @@ bool SendAll(SOCKET socket, const std::uint8_t* data, std::size_t size)
             reinterpret_cast<const char*>(data + sent),
             static_cast<int>((std::min)(size - sent,
                 static_cast<std::size_t>((std::numeric_limits<int>::max)()))), 0);
-        if (chunk <= 0)
-            return false;
+        if (chunk == SOCKET_ERROR)
+            return {false, SocketError("发送请求")};
+        if (chunk == 0)
+            return {false, "发送请求失败: 设备已关闭连接"};
         sent += static_cast<std::size_t>(chunk);
     }
-    return true;
+    return {true, {}};
 }
 
-bool ReceiveAll(SOCKET socket, std::uint8_t* data, std::size_t size)
+DeviceOperationResult ReceiveAll(SOCKET socket, std::uint8_t* data, std::size_t size,
+    const char* operation)
 {
     std::size_t received = 0;
     while (received < size)
@@ -73,11 +82,13 @@ bool ReceiveAll(SOCKET socket, std::uint8_t* data, std::size_t size)
             reinterpret_cast<char*>(data + received),
             static_cast<int>((std::min)(size - received,
                 static_cast<std::size_t>((std::numeric_limits<int>::max)()))), 0);
-        if (chunk <= 0)
-            return false;
+        if (chunk == SOCKET_ERROR)
+            return {false, SocketError(operation)};
+        if (chunk == 0)
+            return {false, std::string(operation) + "失败: 设备已关闭连接"};
         received += static_cast<std::size_t>(chunk);
     }
-    return true;
+    return {true, {}};
 }
 
 class WinsockModbusTransport final : public IModbusTcpTransport
@@ -147,22 +158,25 @@ public:
         response.clear();
         if (socket_ == INVALID_SOCKET)
             return {false, "Modbus TCP socket is not connected"};
-        if (!SendAll(socket_, request.data(), request.size()))
-            return {false, SocketError("send")};
+        DeviceOperationResult transfer = SendAll(socket_, request.data(), request.size());
+        if (!transfer.success)
+            return transfer;
 
         std::array<std::uint8_t, 7> header{};
-        if (!ReceiveAll(socket_, header.data(), header.size()))
-            return {false, SocketError("recv header")};
+        transfer = ReceiveAll(socket_, header.data(), header.size(), "接收响应头");
+        if (!transfer.success)
+            return transfer;
         const std::uint16_t length = ReadU16(header.data() + 4);
         if (length < 2 || length > 254)
             return {false, "Invalid Modbus TCP MBAP length"};
 
         response.assign(header.begin(), header.end());
         response.resize(6 + length);
-        if (!ReceiveAll(socket_, response.data() + 7, length - 1))
+        transfer = ReceiveAll(socket_, response.data() + 7, length - 1, "接收响应体");
+        if (!transfer.success)
         {
             response.clear();
-            return {false, SocketError("recv body")};
+            return transfer;
         }
         return {true, "Modbus TCP response received"};
     }
@@ -171,17 +185,35 @@ private:
     SOCKET socket_ = INVALID_SOCKET;
 };
 
-std::uint8_t ParseUnitId(const std::string& resource)
+bool TryParseUnitId(const std::string& resource, std::uint8_t& unitId)
 {
     if (resource.empty())
-        return 1;
+    {
+        unitId = 1;
+        return true;
+    }
     unsigned int value = 0;
     const char* begin = resource.data();
     const char* end = begin + resource.size();
     const auto parsed = std::from_chars(begin, end, value);
     if (parsed.ec != std::errc{} || parsed.ptr != end || value > 255)
-        return 1;
-    return static_cast<std::uint8_t>(value);
+        return false;
+    unitId = static_cast<std::uint8_t>(value);
+    return true;
+}
+
+std::string RequestContext(std::uint8_t function, std::uint8_t unitId,
+    const std::vector<std::uint8_t>& payload)
+{
+    static constexpr char kHex[] = "0123456789ABCDEF";
+    std::string context = "Modbus TCP 请求失败 (FC=";
+    context.push_back(kHex[(function >> 4) & 0x0f]);
+    context.push_back(kHex[function & 0x0f]);
+    context += ", UnitId=" + std::to_string(unitId);
+    if (payload.size() >= 2)
+        context += ", 地址=" + std::to_string(ReadU16(payload.data()));
+    context += ")";
+    return context;
 }
 
 const char* ModbusExceptionName(std::uint8_t code)
@@ -223,8 +255,12 @@ DeviceOperationResult ModbusTcpAdapter::Connect(const DeviceEndpoint& endpoint)
     if (endpoint.address.empty())
         return Fail("Modbus TCP address is empty");
 
+    std::uint8_t unitId = 1;
+    if (!TryParseUnitId(endpoint.resource, unitId))
+        return Fail("Modbus Unit ID 无效，必须是 0-255 的整数");
+
     state_ = DeviceConnectionState::Connecting;
-    unitId_ = ParseUnitId(endpoint.resource);
+    unitId_ = unitId;
     transactionId_ = 0;
     DeviceOperationResult result = transport_->Connect(
         endpoint.address,
@@ -235,7 +271,10 @@ DeviceOperationResult ModbusTcpAdapter::Connect(const DeviceEndpoint& endpoint)
 
     state_ = DeviceConnectionState::Connected;
     lastError_.clear();
-    return {true, "Modbus TCP connected"};
+    const std::uint16_t port = endpoint.port == 0 ? kDefaultPort : endpoint.port;
+    return {true, "Modbus TCP 已建立连接 (" + endpoint.address + ":" +
+        std::to_string(port) + ", UnitId=" + std::to_string(unitId_) +
+        ")，协议读写尚未验证"};
 }
 
 void ModbusTcpAdapter::Disconnect()
@@ -289,7 +328,16 @@ DeviceOperationResult ModbusTcpAdapter::Execute(std::uint8_t function,
     std::vector<std::uint8_t> response;
     DeviceOperationResult exchange = transport_->Exchange(request, response);
     if (!exchange.success)
-        return Fail(std::move(exchange.message), true);
+    {
+        std::string message = RequestContext(function, unitId_, payload) + ": " +
+            exchange.message;
+        if (exchange.message.find("WSA=10060") != std::string::npos)
+        {
+            message += "；TCP 已连接但设备未返回 Modbus 应答，请检查 Modbus Server、端口、"
+                "Unit ID、协议地址及功能码支持";
+        }
+        return Fail(std::move(message), true);
+    }
     if (response.size() < 9)
         return Fail("Modbus TCP response is too short", true);
 

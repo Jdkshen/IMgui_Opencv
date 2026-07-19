@@ -71,6 +71,26 @@ The adapter validates transaction ID, protocol ID, unit ID, MBAP length, functio
 write echoes, byte counts, and Modbus exception responses. Transport failures move the
 adapter to `Fault`; a Modbus exception leaves the TCP connection available.
 
+### TCP connected but request timed out
+
+`WSA=10060` while receiving the response header means the TCP connection was accepted,
+but no Modbus response arrived before the configured timeout. It is not an image-tool or
+inspection-chain failure. Check these items in order:
+
+1. Confirm that the target is running a Modbus TCP server on the configured port, normally
+   502. A listening TCP port alone does not prove that the Modbus service is active.
+2. Confirm the Unit ID. Direct TCP devices commonly use 1, while some gateways or devices
+   use 0 or 255. An invalid Unit ID is rejected instead of silently falling back to 1.
+3. Confirm the protocol address is zero-based. A PLC address displayed as coil `00001`
+   normally maps to protocol address `0`.
+4. Confirm the server supports Function 05 (write single coil). If the target exposes a
+   holding register instead, configure the Modbus PLC output and register mapping.
+5. Increase the response timeout only after the server, Unit ID, address, and function
+   are confirmed. A longer timeout does not fix a server that ignores the request.
+
+Runtime errors include the function code, Unit ID, and protocol address so a packet
+capture or PLC diagnostic log can be compared against the exact request.
+
 ## PLC tags over Modbus
 
 `ModbusPlcAdapter` maps named PLC tags onto Modbus coils or holding registers. This lets

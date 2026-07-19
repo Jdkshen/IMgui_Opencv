@@ -2108,6 +2108,17 @@ void TestConcreteModbusTcpAdapterProtocol()
         transportView->lastTimeoutMs == endpoint.timeoutMs,
         "concrete Modbus TCP adapter did not apply endpoint settings");
 
+    adapter.Disconnect();
+    endpoint.resource = "not-a-unit-id";
+    const DeviceOperationResult invalidUnit = adapter.Connect(endpoint);
+    Require(!invalidUnit.success &&
+        invalidUnit.message.find("Unit ID") != std::string::npos &&
+        adapter.ConnectionState() == DeviceConnectionState::Disconnected,
+        "invalid Modbus Unit ID silently fell back to a different device");
+    endpoint.resource = "7";
+    Require(adapter.Connect(endpoint).success,
+        "Modbus adapter did not reconnect after Unit ID validation failure");
+
     std::vector<bool> coils;
     Require(adapter.ReadCoils(0x0013, 3, coils).success &&
         coils == std::vector<bool>({true, false, true}) &&
@@ -2145,9 +2156,13 @@ void TestConcreteModbusTcpAdapterProtocol()
         "Modbus exception response was not decoded without faulting the transport");
 
     transportView->failNextExchange = true;
-    Require(!adapter.ReadHoldingRegisters(0, 1, registers).success &&
+    const DeviceOperationResult transportFailure = adapter.ReadHoldingRegisters(0, 1, registers);
+    Require(!transportFailure.success &&
+        transportFailure.message.find("FC=03") != std::string::npos &&
+        transportFailure.message.find("UnitId=7") != std::string::npos &&
+        transportFailure.message.find("地址=0") != std::string::npos &&
         adapter.ConnectionState() == DeviceConnectionState::Fault,
-        "Modbus transport failure did not fault the adapter");
+        "Modbus transport failure did not include request context or fault the adapter");
     adapter.Disconnect();
     Require(adapter.ConnectionState() == DeviceConnectionState::Disconnected,
         "Modbus adapter disconnect state regressed");
