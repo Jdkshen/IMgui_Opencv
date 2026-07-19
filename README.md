@@ -36,7 +36,8 @@ IMgui_Opencv/
 │   ├── ToolController.h/cpp    ←   工具调度器（全部/单步/循环/运行模式）
 │   ├── FrameRenderer.cpp/h     ←   每帧渲染提交
 │   ├── ResultPublisher.h       ←   ToolResult 统一发布入口
-│   └── LegacyAppState.h / UIStateBridge.h ← 旧全局状态过渡桥
+│   ├── ToolJudgement.cpp/h   ←   Pass/Fail/Error 判定与失败停止
+│   └── ResultROIResolver.cpp/h ← 上游工具结果转 ROI
 │
 ├── UI/                         ← 界面模块
 │   ├── AppTitleBar.cpp/h       ←   原生标题栏颜色同步/标题区辅助
@@ -61,7 +62,10 @@ IMgui_Opencv/
 │   ├── OpenCVYoloDetector.cpp/h ←   OpenCV DNN YOLO 推理后端
 │   ├── MultiColorFinder.h/cpp  ←   多点找色工具（实现 ITool）
 │   ├── YOLODetector.cpp/h      ←   YOLO 目标检测（ONNX Runtime 推理）
-│   ├── TemplateMatch.cpp/h     ←   模板匹配（多方法/旋转/NMS）
+│   ├── TemplateMatchingTool.cpp/h ← 工具链模板匹配（实例参数/旋转/NMS）
+│   ├── TemplateMatch.cpp/h     ←   旧模板调试窗口兼容层
+│   ├── QRCodeTool.cpp/h        ←   QR/Code128/EAN/Data Matrix/PDF417
+│   ├── MeasurementTool.cpp/h   ←   距离/线宽/角度/圆直径与公差
 │   ├── ContourDetector.cpp/h   ←   轮廓分析（凸包/圆度/近似）
 │   ├── ShapeMatcher.cpp/h      ←   形状匹配（matchTemplate+轮廓比对）
 │   ├── ShapeTools.cpp/h        ←   形状匹配工具适配（实现 ITool）
@@ -93,12 +97,13 @@ IMgui_Opencv/
 │   ├── PROJECT_UPDATE_GUIDE.md ←   后续项目更新同步指南
 │   ├── PERFORMANCE_REVIEW.md   ←   架构性能审查
 │   ├── OPENCV5_EXPERIMENT.md   ←   OpenCV 5.0 YOLO 实验后端说明
+│   ├── INSPECTION_PIPELINE_2026.md ← 导入、判定、条码、测量、结果 ROI 更新
 │   ├── ROADMAP.md              ←   后续开发方向
 │   └── VIDEO_AUDIO.md          ←   视频/音频模块说明
 │
-├── redist/                     ← 运行时 DLL
-├── models/                     ← 预训练模型
-│   └── yolo11n.onnx            ←   YOLO11 Nano ONNX 模型
+├── redist/                     ← 本地/Release 运行时 DLL 和 lib
+├── models/                     ← 预训练模型与测试素材
+│   └── ppocrv6/                ←   OCR 默认 NCNN 模型
 │
 ├── Windows_imgui.cpp           ← 程序入口 + 主循环
 ├── Windows_imgui.h             ← 公共头文件汇总
@@ -246,7 +251,7 @@ wWinMain()
 
 ## 🔧 工具实例系统
 
-功能窗口（手风琴布局）支持 12 种工具类型，其中 type 0-11 已接入 ITool 统一接口；type 12 为原图重置特殊工具：
+功能窗口（手风琴布局）支持 13 种 ITool 工具；type 0-11 和 type 13 已接入 ITool 统一接口，type 12 为原图重置特殊工具：
 
 | 类型 | 功能 | 独立参数 | ITool |
 |------|------|---------|-------|
@@ -262,6 +267,7 @@ wWinMain()
 | 形态学 | 腐蚀/膨胀/开/闭等 7 种 | 核大小、形状、迭代次数 | ✅ MorphologyITool |
 | 颜色分析 | BGR/HSV/Lab/YCbCr | 色域切换、直方图 | ✅ ColorAnalyzerITool |
 | 多点找色 | 多颜色点同时匹配 | 参考图、锚点、ROI、容差、最大结果数 | ✅ MultiColorFinder |
+| OCR文字识别 | PP-OCRv6 tiny + NCNN 推理 | 检测/识别模型、字典、置信度、最大文本数、ROI | ✅ OCRTool |
 
 > **ITool 接口**：统一 `Execute(VisionContext& ctx) → ToolResult`，结果通过 `DrawUnifiedResults()` 在图像上叠加绘制。
 
@@ -312,7 +318,7 @@ enum class Mode { Idle, Running, Waiting };
 2. 安装 VS2022（勾选"使用 C++ 的桌面开发"）
 3. 打开 `Windows_imgui.slnx`，直接编译运行
 
-**不需要额外安装 OpenCV 或配置任何路径**，默认工程依赖已包含在项目中。当前 `Windows_imgui.vcxproj` 统一链接仓库内置 OpenCV 5.0 runtime（`redist/opencv_world500*.dll/lib`），include 和 runtime 都从 `include/`、`redist/` 取得。
+**不需要额外安装 OpenCV 或配置本机绝对路径**。当前 `Windows_imgui.vcxproj` 使用项目内 `include/` 头文件，并从本地 `redist/` 取 OpenCV 5.0、ONNX Runtime、DirectML、NCNN 的 `.lib/.dll`。大型运行时文件后续建议通过 GitHub Release 的 `runtime.zip` 恢复到 `redist/`。
 
 ## 🔧 技术债务 & 重构路线
 
@@ -379,7 +385,7 @@ ROI → 矩形(RECT) / 点(POINT) / 线段(LINE) / 圆(CIRCLE) / 多边形(POLYG
 |------|------|------|
 | 一 | ✅ 完成 | 图片浏览、ROI、图像处理、模板匹配、YOLO、视频、配方、日志 |
 | 二 | ✅ 完成 | ITool 接口、ToolResult、VisionContext、ROI 类型升级 |
-| 三 | 进行中 | ✅ 多点找色；规划 OCR、二维码/条码、Blob分析增强、尺寸测量 |
+| 三 | 进行中 | ✅ 多点找色、结果导出、运行报告、OCR；规划配方自动执行、二维码/条码、Blob分析增强、尺寸测量 |
 | 四 | 🔲 规划 | 工业相机SDK、Modbus TCP、PLC通讯、OPC UA、MQTT |
 | 五 | 🔲 远景 | 节点式流程编辑器、可选脚本/插件系统；当前主线不依赖 Python |
 

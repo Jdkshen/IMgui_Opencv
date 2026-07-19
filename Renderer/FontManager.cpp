@@ -6,7 +6,9 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
-#include "../Windows_imgui.h"
+#include "FontManager.h"
+#include "../include/imgui/imgui_internal.h"
+#include "../Log/LogSystem.h"
 
 static ImFont *g_DefaultFont = nullptr;
 static ImFontAtlasRectId g_ToolIconRects[12] = {};
@@ -166,7 +168,7 @@ namespace FontManager
         }
 
         if (loaded > 0)
-            LogSystem::Add(LOG_INFO, color, "Tool PNG icons merged: %d", loaded);
+            LogSystem::Add(LOG_INFO, "Tool PNG icons merged: %d", loaded);
     }
 
     ImFont *InitFonts(float dpi_scale)
@@ -185,7 +187,7 @@ namespace FontManager
             font = io.Fonts->AddFontFromFileTTF(
                 localFont.c_str(), 12.0f * dpi_scale,
                 nullptr, BuildIconGlyphRanges());
-            LogSystem::Add(LOG_INFO, color, "simsun.ttc loaded");
+            LogSystem::Add(LOG_INFO, "simsun.ttc loaded");
         }
 
         // System msyh.ttc
@@ -197,14 +199,14 @@ namespace FontManager
                 font = io.Fonts->AddFontFromFileTTF(
                     path, 12.0f * dpi_scale,
                     nullptr, BuildIconGlyphRanges());
-                LogSystem::Add(LOG_INFO, color, "msyh.ttc loaded");
+                LogSystem::Add(LOG_INFO, "msyh.ttc loaded");
             }
         }
 
         // Fallback default
         if (!font)
         {
-            LogSystem::Add(LOG_ERROR, color, "font load failed, using default");
+            LogSystem::Add(LOG_ERROR, "font load failed, using default");
             font = io.Fonts->AddFontDefault();
         }
 
@@ -219,7 +221,7 @@ namespace FontManager
                 miCfg.PixelSnapH = true;
                 static const ImWchar iconRanges[] = { 0xE000, 0xF8FF, 0 };
                 io.Fonts->AddFontFromFileTTF(miPath.c_str(), 18.0f * dpi_scale, &miCfg, iconRanges);
-                LogSystem::Add(LOG_INFO, color, "MaterialIcons-Regular.ttf merged");
+                LogSystem::Add(LOG_INFO, "MaterialIcons-Regular.ttf merged");
             }
         }
 
@@ -234,7 +236,7 @@ namespace FontManager
                 ImVector<ImWchar> emojiRanges;
                 builder.BuildRanges(&emojiRanges);
                 io.Fonts->AddFontFromFileTTF(emojiPath, 16.0f * dpi_scale, &emojiCfg, emojiRanges.Data);
-                LogSystem::Add(LOG_INFO, color, "Segoe UI Emoji merged");
+                LogSystem::Add(LOG_INFO, "Segoe UI Emoji merged");
             }
         }
 

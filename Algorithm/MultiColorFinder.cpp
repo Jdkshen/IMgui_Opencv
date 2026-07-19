@@ -3,19 +3,13 @@
 #include "../Log/LogSystem.h"
 #include "../Core/ImageUtils.h"
 #include "../Core/VisionContext.h"
+#include "../Core/ImageState.h"
 #include <chrono>
 #include <algorithm>
 #include <cmath>
 
-extern ImVec4 color;
-
-float g_McfLastTimeMs = 0;
-int   g_McfLastCount  = 0;
 
 // ---- 实时预处理预览 ----
-extern cv::Mat& gImage;
-extern cv::Mat& gPendingUpload;
-extern bool& gNeedUpload;
 
 void McfApplyPreview(bool useGray, bool useBinary, int binThresh, const cv::Mat& src)
 {
@@ -30,7 +24,11 @@ void McfApplyPreview(bool useGray, bool useBinary, int binThresh, const cv::Mat&
     }
     cv::Mat rgba;
     SafeConvertToRGBA(out, rgba);
-    if (!rgba.empty()) { gPendingUpload = rgba; gNeedUpload = true; }
+    if (!rgba.empty())
+    {
+        ImageState::PendingUploadRef() = rgba;
+        ImageState::NeedUploadRef() = true;
+    }
 }
 
 static bool IsColorMatch(const uint8_t* pixel, int channels, const ColorPoint& pt)
@@ -315,7 +313,7 @@ ToolResult MultiColorFinder::Execute(VisionContext& ctx)
     if (isPartial)
         LogSystem::Add(LOG_WARN, "多点找色:无完全匹配,最佳部分 %d/%d %.3fms", bestPartialCount, nPts, ms);
     else
-        LogSystem::Add(LOG_INFO, color, "多点找色:%d个匹配 %.3fms", (int)matches.size(), ms);
+        LogSystem::Add(LOG_INFO, "多点找色:%d个匹配 %.3fms", (int)matches.size(), ms);
 
     return result;
 }

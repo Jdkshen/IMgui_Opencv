@@ -18,3 +18,8 @@
 *.avi filter=lfs diff=lfs merge=lfs -text
 *.mov filter=lfs diff=lfs merge=lfs -text
 *.mkv filter=lfs diff=lfs merge=lfs -text
+
+# Keep the upstream open62541 amalgamation byte-for-byte reproducible.
+third_party/open62541/LICENSE -whitespace
+third_party/open62541/open62541.c -whitespace
+third_party/open62541/open62541.h -whitespace

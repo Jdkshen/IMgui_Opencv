@@ -1,283 +1,94 @@
 #include "ThresholdTool.h"
-#include "../Core/DX12Context.h"
+
 #include "../Core/ImageState.h"
 #include "../Core/ImageUtils.h"
 
-#include "imgui/imgui.h"
+#include <chrono>
 
-#include <functional>
-#include <vector>
-
-// =========================
-// 阈值调试窗口：全局状态变量
-// =========================
-
-bool g_ShowThresholdWindow = false;         // 窗口显示标志
-
-bool& gNeedUpload = ImageState::NeedUploadRef(); // 是否需要上传处理结果到GPU
-
-cv::Mat& gOriginalImage = ImageState::OriginalRef(); // 原始图像（彩色，永久保留）
-cv::Mat& gImage = ImageState::CurrentRef();          // 当前处理的输入图像
-cv::Mat gThresholdMat;                      // 阈值处理结果
-cv::Mat& gPendingUpload = ImageState::PendingUploadRef(); // 待上传到GPU的RGBA图像
-
-bool gUseGray = false;                      // 是否先转为灰度处理
-
-// =========================
-// 图像处理参数
-// =========================
-int gThresholdValue = 128;                  // 二值化阈值
-bool gThresholdBinaryInv = false;           // 是否反色
-
-int gBlurSize = 1;                          // 高斯模糊核大小
-
-int gCannyLow = 50;                         // Canny低阈值
-int gCannyHigh = 150;                       // Canny高阈值
-
-float gBrightness = 0.0f;                   // 亮度调整
-float gContrast = 1.0f;                     // 对比度调整
-
-int gProcessMode = 0;                       // 处理模式
-
-// =========================
-// 性能计时（单位：毫秒）
-// =========================
-float gTimeGray = 0.0f;     // 灰度转换耗时
-float gTimeBlur = 0.0f;     // 模糊耗时
-float gTimeFilter = 0.0f;   // 滤波耗时
-float gTimeRGBA = 0.0f;     // RGBA转换耗时
-float gTimeTotal = 0.0f;    // 总耗时
-
-// =========================
-// 图像处理管线
-// =========================
-using ImgOp = std::function<cv::Mat(const cv::Mat&)>;
-std::vector<ImgOp> gPipeline;
-
-PipelineState gPipe;                         // 管线状态配置
-
-// =========================
-// 图像处理算子
-// =========================
-namespace Ops
+namespace
 {
-    // 高斯模糊
-    cv::Mat Blur(const cv::Mat& img, int k)
+    float s_lastTimeMs = 0.0f;
+
+    cv::Mat Blur(const cv::Mat& image, int size)
     {
-        cv::Mat out;
-        k = k * 2 + 1;  // 确保核大小为奇数
-        if (k < 3) k = 3;
-        cv::GaussianBlur(img, out, cv::Size(k, k), 0);
-        return out;
+        int kernel = size * 2 + 1;
+        if (kernel < 3)
+            kernel = 3;
+        cv::Mat result;
+        cv::GaussianBlur(image, result, cv::Size(kernel, kernel), 0);
+        return result;
     }
 
-    // 二值化阈值
-    cv::Mat Threshold(const cv::Mat& img, int t)
+    cv::Mat ToGray(const cv::Mat& image)
     {
-        cv::Mat gray, out;
-        if (img.channels() == 3)
-            cv::cvtColor(img, gray, cv::COLOR_BGR2GRAY);
-        else
-            gray = img;
-        cv::threshold(gray, out, t, 255, cv::THRESH_BINARY);
-        return out;
+        if (image.channels() == 4)
+        {
+            cv::Mat gray;
+            cv::cvtColor(image, gray, cv::COLOR_BGRA2GRAY);
+            return gray;
+        }
+        if (image.channels() == 3)
+        {
+            cv::Mat gray;
+            cv::cvtColor(image, gray, cv::COLOR_BGR2GRAY);
+            return gray;
+        }
+        return image;
     }
 
-    // Canny边缘检测
-    cv::Mat Canny(const cv::Mat& img, int low, int high)
+    cv::Mat Threshold(const cv::Mat& image, int value)
     {
-        cv::Mat gray, out;
-        if (img.channels() == 3)
-            cv::cvtColor(img, gray, cv::COLOR_BGR2GRAY);
-        else
-            gray = img;
-        cv::Canny(gray, out, low, high);
-        return out;
+        cv::Mat result;
+        cv::threshold(ToGray(image), result, value, 255, cv::THRESH_BINARY);
+        return result;
+    }
+
+    cv::Mat Canny(const cv::Mat& image, int low, int high)
+    {
+        cv::Mat result;
+        cv::Canny(ToGray(image), result, low, high);
+        return result;
     }
 }
 
-// =========================
-// 阈值工具命名空间
-// =========================
 namespace ThresholdTool
 {
-    // =========================
-    // 执行图像处理管线
-    // =========================
-    void ApplyProcess()
+    void ApplyProcess(bool useGray, const PipelineState& pipeline)
     {
-        if (gImage.empty()) return;
+        const cv::Mat& current = ImageState::Current();
+        if (current.empty())
+            return;
 
-        using clock = std::chrono::high_resolution_clock;
-        auto t0 = clock::now();
+        const auto start = std::chrono::high_resolution_clock::now();
+        cv::Mat result = useGray ? ToGray(current) : current;
+        if (pipeline.enableBlur)
+            result = Blur(result, pipeline.blurSize);
 
-        cv::Mat src = gImage;
-        cv::Mat input;
+        // Keep the historical precedence: Canny wins when both switches are on.
+        if (pipeline.enableCanny)
+            result = Canny(result, pipeline.cannyLow, pipeline.cannyHigh);
+        else if (pipeline.enableThreshold)
+            result = Threshold(result, pipeline.threshold);
 
-        // 阶段1：灰度转换
-        auto t1 = clock::now();
-        if (gUseGray)
-        {
-            if (src.channels() == 4)
-                cv::cvtColor(src, input, cv::COLOR_BGRA2GRAY);
-            else if (src.channels() == 3)
-                cv::cvtColor(src, input, cv::COLOR_BGR2GRAY);
-            else
-                input = src;
-        }
-        else
-        {
-            input = src;
-        }
-        auto t2 = clock::now();
-
-        cv::Mat result = input;
-
-        // 阶段2：高斯模糊
-        if (gPipe.enableBlur)
-            result = Ops::Blur(result, gPipe.blurSize);
-        auto t3 = clock::now();
-
-        // 阶段3：Canny边缘 / 二值化（互斥）
-        if (gPipe.enableThreshold && gPipe.enableCanny)
-            result = Ops::Canny(result, gPipe.cannyLow, gPipe.cannyHigh);
-        else if (gPipe.enableCanny)
-            result = Ops::Canny(result, gPipe.cannyLow, gPipe.cannyHigh);
-        else if (gPipe.enableThreshold)
-            result = Ops::Threshold(result, gPipe.threshold);
-        auto t4 = clock::now();
-
-        // 阶段4：转RGBA → 标记GPU上传
         cv::Mat rgba;
         if (result.channels() == 1)
             cv::cvtColor(result, rgba, cv::COLOR_GRAY2RGBA);
         else if (result.channels() == 3)
             cv::cvtColor(result, rgba, cv::COLOR_BGR2RGBA);
-        else
+        else if (result.channels() == 4)
             cv::cvtColor(result, rgba, cv::COLOR_BGRA2RGBA);
-        auto t5 = clock::now();
+        else
+            return;
 
-        // 标记需要上传到GPU
-        gThresholdMat = result;
-        gImage = result;
-        gPendingUpload = rgba;
-        gNeedUpload = true;
-        auto t6 = clock::now();
-
-        // 阶段5：记录各步骤耗时
-        auto ms = [](auto a, auto b)
-        {
-            return std::chrono::duration<float, std::milli>(b - a).count();
-        };
-        gTimeGray = ms(t0, t2);
-        gTimeBlur = ms(t2, t3);
-        gTimeFilter = ms(t3, t4);
-        gTimeRGBA = ms(t4, t5);
-        gTimeTotal = ms(t0, t6);
+        ImageState::SetDebugImage(result);
+        ImageState::PendingUploadRef() = std::move(rgba);
+        ImageState::NeedUploadRef() = true;
+        s_lastTimeMs = std::chrono::duration<float, std::milli>(
+            std::chrono::high_resolution_clock::now() - start).count();
     }
 
-    // =========================
-    // 显示阈值调试窗口
-    // =========================
-    void ShowThresholdWindow()
+    float LastTimeMs()
     {
-        if (!g_ShowThresholdWindow) return;
-
-        if (ImGui::Begin("图像处理", &g_ShowThresholdWindow)) //,ImGuiWindowFlags_NoDocking  禁止停靠窗口
-        {
-            // =========================
-            // 重置按钮 + 灰度复选框
-            // =========================
-            bool changed = false;
-
-            if (ImGui::Button("重置参数"))
-            {
-                gPipeline.clear();
-                ResetParams();
-                ApplyProcess();
-            }
-            ImGui::SameLine();
-            changed |= ImGui::Checkbox("使用灰度", &gUseGray);
-
-            ImGui::Separator();
-
-            // =========================
-            // 参数变更检测（任一参数变化 => 重新处理）
-            // =========================
-
-            ImGui::Text("图像模糊处理（高斯滤波）");
-            changed |= ImGui::Checkbox("启用模糊", &gPipe.enableBlur);
-            changed |= ImGui::SliderInt("核大小", &gPipe.blurSize, 1, 20);
-
-            ImGui::Separator();
-
-            ImGui::Text("图像二值化（阈值分割）");
-            changed |= ImGui::Checkbox("启用二值化", &gPipe.enableThreshold);
-            changed |= ImGui::SliderInt("阈值", &gPipe.threshold, 0, 255);
-
-            ImGui::Separator();
-
-            ImGui::Text("Canny边缘检测");
-            changed |= ImGui::Checkbox("启用Canny", &gPipe.enableCanny);
-            changed |= ImGui::SliderInt("低阈值", &gPipe.cannyLow, 0, 255);
-            changed |= ImGui::SliderInt("高阈值", &gPipe.cannyHigh, 0, 255);
-
-            // 防抖：拖动滑块时等3帧再执行，避免每帧都跑完整管线
-            static int debounceFrames = 0;
-            if (changed)
-                debounceFrames = 3;
-            if (debounceFrames > 0)
-            {
-                debounceFrames--;
-                if (debounceFrames == 0)
-                    ApplyProcess();
-            }
-
-            // =========================
-            // 显示当前参数值
-            // =========================
-            ImGui::Separator();
-            ImGui::Text("当前参数: 灰度=%s, 模糊核=%d, 阈值=%d, Canny=(%d,%d)",
-                gUseGray ? "是" : "否",
-                gPipe.blurSize,
-                gPipe.threshold,
-                gPipe.cannyLow, gPipe.cannyHigh);
-
-            // =========================
-            // 性能分析
-            // =========================
-            ImGui::Separator();
-            ImGui::Text("性能分析（单位: 毫秒）");
-            ImGui::Text("灰度转换 : %.3f ms", gTimeGray);
-            ImGui::Text("模糊处理 : %.3f ms", gTimeBlur);
-            ImGui::Text("滤波处理 : %.3f ms", gTimeFilter);
-            ImGui::Text("RGBA转换 : %.3f ms", gTimeRGBA);
-            ImGui::Separator();
-            ImGui::Text("总耗时   : %.3f ms", gTimeTotal);
-        }
-        ImGui::End();
-    }
-
-    // =========================
-    // 重置所有处理参数到默认值
-    // =========================
-    void ResetParams()
-    {
-        gUseGray = false;
-
-        gPipe.enableBlur = false;
-        gPipe.blurSize = 5;
-
-        gPipe.enableThreshold = false;
-        gPipe.threshold = 128;
-
-        gPipe.enableCanny = false;
-        gPipe.cannyLow = 50;
-        gPipe.cannyHigh = 150;
-
-        gThresholdValue = 128;
-        gBlurSize = 5;
-        gCannyLow = 50;
-        gCannyHigh = 150;
+        return s_lastTimeMs;
     }
 }

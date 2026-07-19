@@ -18,11 +18,13 @@
 | --- | --- |
 | `include/opencv/` | OpenCV 5.0 头文件 |
 | `include/onnxruntime/` | ONNX Runtime C/C++ API 头文件 |
+| `include/ncnn/` | NCNN OCR 推理头文件 |
 | `include/directx/` | DX12 辅助头文件 |
 | `include/nlohmann/` | JSON 头文件 |
-| `redist/` | OpenCV、ONNX Runtime、DirectML 的 `.lib` 和运行时 `.dll` |
+| `redist/` | 本地或 Release 包恢复的 OpenCV、ONNX Runtime、DirectML、NCNN `.lib/.dll` |
 | `assets/fonts/` | 运行时字体资源 |
 | `assets/images/` | 回归测试样例图，不复制到主程序输出目录 |
+| `models/ppocrv6/` | OCR 默认 PP-OCRv6 tiny NCNN 模型和字典 |
 
 不要把本机 OpenCV 目录、个人用户目录、VS 本机安装目录写进项目属性。工程属性应使用 `$(ProjectDir)`、`$(OutDir)` 这类相对宏。
 
@@ -76,11 +78,13 @@ run_tasks.bat
 
 - `assets\fonts\*`
 - `redist\onnxruntime*.dll`
+- `redist\ncnn.dll`
 - `redist\opencv_world500.dll`
 - `redist\opencv_videoio_ffmpeg500_64.dll`
 - `redist\opencv_videoio_msmf500_64.dll`
 - `redist\DirectML.dll`
 - `models\*.onnx` 和 `models\*.txt`，如果本机存在
+- `models\ppocrv6\*`，如果本机存在
 
 PostBuild 会清理输出目录里的旧 OpenCV 4.x DLL，避免混用 OpenCV 版本。
 
@@ -103,4 +107,19 @@ PostBuild 会清理输出目录里的旧 OpenCV 4.x DLL，避免混用 OpenCV �
 - `*.mov`
 - `*.mkv`
 
-仓库内 `include/` 和 `redist/` 是构建基线的一部分，不要用 `.gitignore` 忽略掉。
+仓库内 `include/` 是构建基线的一部分。`redist/` 需要保留目录和说明文件，体积较大的 `.dll/.lib` 建议通过 Git LFS、下载脚本或 GitHub Release 的 `runtime.zip` 恢复；本地构建前需确保 `redist/` 至少包含 OpenCV 5.0、ONNX Runtime、DirectML、NCNN 对应运行时。
+
+## 运行时包建议
+
+后续发布时建议制作 `runtime.zip`，解压后目录结构保持：
+
+```text
+redist/
+  opencv_world500.dll
+  opencv_videoio_ffmpeg500_64.dll
+  opencv_videoio_msmf500_64.dll
+  onnxruntime*.dll
+  DirectML.dll
+  ncnn.dll
+  ncnn.lib
+```

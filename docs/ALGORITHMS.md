@@ -253,7 +253,7 @@ extern VisionContext gContext;
 
 ### 向后兼容
 
-当前 type 0-11 工具统一通过 `ITool + VisionContext + ToolResult` 执行，并通过 `gContext.unifiedResults` 发布结果；旧的 `g_UnifiedResults` 影子状态已删除。部分工具仍会在图像处理链路中更新 `gImage`、`gPendingUpload`、`gNeedUpload` 等状态，后续新增工具仍应优先走统一接口。
+当前 type 0-11、13 工具统一通过 `ITool + VisionContext + ToolResult` 执行，并通过 `gContext.unifiedResults` 发布结果；旧的 `g_UnifiedResults` 影子状态已删除。部分工具仍会在图像处理链路中更新 `gImage`、`gPendingUpload`、`gNeedUpload` 等状态，后续新增工具仍应优先走统一接口。
 
 ---
 
@@ -291,7 +291,7 @@ struct ToolResult {
     std::vector<Line> lines;            // 直线检测
 
     struct TextItem { std::string text; cv::Rect box; float confidence = 0; };
-    std::vector<TextItem> texts;        // 文本（OCR 预留）
+    std::vector<TextItem> texts;        // OCR 文本框、文本内容和置信度
 
     cv::Mat debugImage;                 // 可选调试图像
 };
@@ -423,7 +423,7 @@ ToolRegistry::Register(13, []() -> std::unique_ptr<ITool> {
 
 1. 在 `ToolInstance` 添加新工具参数。
 2. 在 `ToolExecutor::RunViaITool()` 中把 `ToolInstance` 参数同步到工具对象。
-3. 在 `ToolExecutor::Execute()` 中把新 type 分发到 `RunViaITool()`；当前 0-11 已走统一 ITool，新增工具建议从 type 13 开始。
+3. 在 `ToolExecutor::Execute()` 中把新 type 分发到 `RunViaITool()`；当前 0-11、13 已走统一 ITool，新增工具建议从 type 14 开始。
 4. 在 `RecipeManager.h/.cpp` 增加保存和加载字段。
 5. 在 `Windows_imgui.vcxproj` 和 `.vcxproj.filters` 中添加新文件。
 
@@ -496,7 +496,7 @@ if (ImGui::Button("执行")) {
 
 ---
 
-> 最后更新: 2026-06-24 | 编译: MSVC + OpenCV 5.0 + ONNX Runtime | 12 个工具
+> 最后更新: 2026-06-28 | 编译: MSVC + OpenCV 5.0 + ONNX Runtime + NCNN | 13 个 ITool 工具 + type 12 原图特殊工具
 
 ---
 

@@ -16,8 +16,8 @@
 - type id：`11`
 
 当前仓库只保留主程序需要的 OpenCV 5.0 运行时：
-- `Windows_imgui.vcxproj` 链接 `redist/opencv_world500.lib` / `redist/opencv_world500d.lib`
-- 运行 DLL 来自 `redist/opencv_world500*.dll`
+- `Windows_imgui.vcxproj` 链接本地 `redist/opencv_world500.lib` / `redist/opencv_world500d.lib`
+- 运行 DLL 来自本地或 Release 包恢复的 `redist/opencv_world500*.dll`
 - videoio 插件来自 `redist/opencv_videoio_ffmpeg500_64.dll`、`redist/opencv_videoio_msmf500_64.dll`
 - 不依赖任何本机 OpenCV 安装路径
 
@@ -31,15 +31,15 @@
 
 按钮会把当前图片或摄像头帧通过 helper 进程管道传入 OpenCV 5.0 DNN，日志中会输出 `image=<pipe>`、`forward_ms`、`wall_ms`、`detections=...`。这个路径用于隔离测试 OpenCV 5.0 classic/new graph engine，不再走临时 raw 文件。
 
-helper 和主程序一样使用仓库内 `redist/` 的 OpenCV 5.0 world DLL，不再依赖本机安装目录。
+helper 和主程序一样使用项目本地 `redist/` 的 OpenCV 5.0 world DLL，不再依赖本机安装目录。
 
 ## OpenCV 5.0 仓库依赖
 
 构建信息：
 - 配置：Debug/Release x64
 - 头文件：`include/opencv`
-- 主程序链接库：`redist/opencv_world500.lib` / `redist/opencv_world500d.lib`
-- 主程序运行 DLL：`redist/opencv_world500.dll` / `redist/opencv_world500d.dll`
+- 主程序链接库：本地 `redist/opencv_world500.lib` / `redist/opencv_world500d.lib`
+- 主程序运行 DLL：本地或 Release 包恢复的 `redist/opencv_world500.dll` / `redist/opencv_world500d.dll`
 - helper 使用同一套 `redist/` OpenCV 5.0 runtime
 
 旧的 `opencv_core500.dll`、`opencv_imgproc500.dll`、`opencv_dnn500.dll` 已从 helper 目录移到 `old-dnn-dlls-*` 备份目录，避免和新的 world DLL 混用。

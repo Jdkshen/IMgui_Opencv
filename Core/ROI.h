@@ -1,8 +1,11 @@
 #pragma once
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <vector>
 
 #include <opencv2/core/mat.hpp>
@@ -26,6 +29,7 @@ enum ROIType : int
 // =====================================================
 struct ROI
 {
+    std::uint64_t runtimeId = 0; // UI 运行时关联标识，不写入配方
     int type = ROI_TYPE_RECT;    // ROI 类型
 
     // 矩形/线段：start/end 为对角/端点

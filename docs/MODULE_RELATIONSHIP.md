@@ -52,14 +52,14 @@
             ┌──────────────────┐      ┌──────────────────────┐
             │ ToolController   │      │ ToolExecutor         │
             │ - 请求执行/单步   │─────▶│ - 按 type 分发工具    │
-            │ - 队列/状态控制   │      │ - type 0-11 统一通路  │
+            │ - 队列/状态控制   │      │ - type 0-11、13 统一通路 │
             └──────────────────┘      └──────────┬───────────┘
                                                   │
                         ┌─────────────────────────┼────────────────────────┐
                         ▼                         ▼                        ▼
              ┌──────────────────┐     ┌─────────────────────┐   ┌──────────────────┐
              │ ITool 统一接口    │     │ OpenCV/工具算法      │   │ 深度学习推理      │
-             │ - type 0-11      │     │ - ThresholdTool     │   │ - YOLODetector    │
+             │ - type 0-11、13  │     │ - ThresholdTool     │   │ - YOLODetector    │
              │ - Edge/Template  │     │ - TemplateMatch     │   │ - ONNX Runtime    │
              │ - Blob/Threshold │     │ - MorphologyTool    │   │ - DirectML/CUDA   │
              │ - YOLO/Contour   │     │ - ColorAnalyzer     │   └──────────────────┘
@@ -164,13 +164,13 @@ DX12 渲染输出
 
 ## 4）结果通路（已统一）
 
-type 0-11 工具统一走一条结果通路；type 12 原图由 `ToolController` 直接恢复本轮原图：
+type 0-11、13 工具统一走一条结果通路；type 12 原图由 `ToolController` 直接恢复本轮原图：
 
 ```text
 Tool -> ToolResult -> gContext.unifiedResults -> DrawUnifiedResults()
 ```
 
-实时 YOLO 也发布到 `gContext.unifiedResults`，同时保留 `g_YoloOverlays` 仅用于视频偏移补偿。
+实时 YOLO 也发布到 `gContext.unifiedResults`，视频偏移和实时状态由 `RealtimeDetectionState` 管理。
 
 旧容器 `g_ContourOverlays` / `g_ShapeContourOverlays` / `g_LineOverlays` 及 `g_UnifiedResults` 影子状态已删除。
 
@@ -234,9 +234,10 @@ Tool -> ToolResult -> gContext.unifiedResults -> DrawUnifiedResults()
 |------|----------|------|
 | 程序入口 | `Windows_imgui.cpp` | 主循环、窗口、DX12、ImGui 初始化与逐帧驱动 |
 | 公共头聚合 | `Windows_imgui.h` | 汇总主要模块头文件 |
-| 统一上下文 | `Core/VisionContext.h` | 图像、ROI、模板、结果、视图状态的统一容器 |
+| 统一上下文 | `Core/VisionContext.h` | 图像、ROI、模板和结果的统一容器 |
+| 图像视图状态 | `Core/ImageViewState.h` | 缩放、平移、画布位置和网格设置 |
 | 工具调度 | `Core/ToolController.h/.cpp` | 执行模式、队列、单步/批量控制 |
-| 工具执行 | `Core/ToolExecutor.h/.cpp` | type 0-11 分发到 ITool，type 12 原图由 ToolController 特殊处理 |
+| 工具执行 | `Core/ToolExecutor.h/.cpp` | type 0-11、13 分发到 ITool，type 12 原图由 ToolController 特殊处理 |
 | 图像显示 | `UI/ImageViewer.h/.cpp` | 图片/视频显示、缩放平移、叠加绘制 |
 | 工具界面 | `UI/ToolsWindow.h/.cpp` | 参数编辑、工具实例、执行入口 |
 | ROI 交互 | `UI/ROIManager.h/.cpp` | ROI 创建、选中、拖动、坐标转换 |
@@ -276,6 +277,6 @@ ImageViewer 可视化 + DX12 呈现
 - 上层是交互式桌面 UI
 - 中间是上下文、执行器、配方、日志、视频等系统能力
 - 下层是 OpenCV 视觉算法与深度学习推理
-- type 0-11 工具统一走 `VisionContext → ITool → ToolResult → DrawUnifiedResults` 结果通路
+- type 0-11、13 工具统一走 `VisionContext → ITool → ToolResult → DrawUnifiedResults` 结果通路
 
 这也是理解整个项目结构最重要的一点。

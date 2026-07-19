@@ -2,11 +2,16 @@
 
 #include "BlobTool.h"
 #include "ColorAnalyzer.h"
+#include "DifferenceTool.h"
 #include "EdgeTool.h"
 #include "MorphologyTool.h"
+#include "MeasurementTool.h"
 #include "MultiColorFinder.h"
+#include "OCRTool.h"
+#include "QRCodeTool.h"
 #include "ShapeTools.h"
 #include "ThresholdTool.h"
+#include "TemplateMatchingTool.h"
 #include "YOLOTool.h"
 
 #include <memory>
@@ -67,6 +72,8 @@ namespace
     {
         AutoRegister()
         {
+            ToolRegistry::Register(1, []() -> std::unique_ptr<ITool> { return std::make_unique<TemplateMatchingTool>(); });
+            ToolRegistry::RegisterName(1, "TemplateMatch");
             ToolRegistry::Register(0, []() -> std::unique_ptr<ITool> { return std::make_unique<EdgeTool>(); });
             ToolRegistry::RegisterName(0, "Edge");
             ToolRegistry::Register(2, []() -> std::unique_ptr<ITool> { return std::make_unique<BlobTool>(); });
@@ -87,6 +94,14 @@ namespace
             ToolRegistry::RegisterName(9, "ColorAnalyzer");
             ToolRegistry::Register(10, []() -> std::unique_ptr<ITool> { return std::make_unique<MultiColorFinder>(); });
             ToolRegistry::RegisterName(10, "MultiColorFinder");
+            ToolRegistry::Register(13, []() -> std::unique_ptr<ITool> { return std::make_unique<OCRTool>(); });
+            ToolRegistry::RegisterName(13, "OCR");
+            ToolRegistry::Register(14, []() -> std::unique_ptr<ITool> { return std::make_unique<QRCodeTool>(); });
+            ToolRegistry::RegisterName(14, "Barcode");
+            ToolRegistry::Register(15, []() -> std::unique_ptr<ITool> { return std::make_unique<MeasurementTool>(); });
+            ToolRegistry::RegisterName(15, "Measurement");
+            ToolRegistry::Register(16, []() -> std::unique_ptr<ITool> { return std::make_unique<DifferenceTool>(); });
+            ToolRegistry::RegisterName(16, "Difference");
         }
     };
 

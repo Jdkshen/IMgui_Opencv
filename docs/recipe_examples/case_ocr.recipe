@@ -1,0 +1,28 @@
+{
+  "version": 2,
+  "name": "case_ocr",
+  "imagePath": "../../assets/images/ocr_product_sample.jpg",
+  "rois": [ { "startX": 250.0, "startY": 80.0, "endX": 1250.0, "endY": 900.0, "type": 0 } ],
+  "tools": [
+    { "type": 12, "label": "\u539f\u56fe", "showResultLabels": true },
+    {
+      "type": 13,
+      "label": "\u4ea7\u54c1\u6587\u5b57",
+      "showResultLabels": true,
+      "ocrDetModelPath": "../../models/ppocrv6/PP_OCRv6_tiny_det.ncnn.bin",
+      "ocrDetParamPath": "../../models/ppocrv6/PP_OCRv6_tiny_det.ncnn.param",
+      "ocrRecModelPath": "../../models/ppocrv6/PP_OCRv6_tiny_rec.ncnn.bin",
+      "ocrRecParamPath": "../../models/ppocrv6/PP_OCRv6_tiny_rec.ncnn.param",
+      "ocrDictionaryPath": "../../models/ppocrv6/ppocr_keys_v6_tiny.txt",
+      "ocrMinConfidence": 0.25,
+      "ocrMaxItems": 20,
+      "ocrInputSize": 640,
+      "ocrFastMode": true,
+      "ocrDetectOnly": false,
+      "ocrUseROI": true,
+      "useSearchROI": true,
+      "searchROIs": [ { "startX": 250.0, "startY": 80.0, "endX": 1250.0, "endY": 900.0, "type": 0 } ],
+      "judgement": { "enabled": false, "stopOnFailure": false }
+    }
+  ]
+}

@@ -27,5 +27,9 @@ namespace ToolController
     void SetRuntimeMode(bool enabled);              // 运行模式：减少批量执行时的 UI/日志干扰
     bool IsRuntimeMode();
 
+    // 工具删除、移动或整条配方替换后调用，清除所有与工具索引相关的运行时缓存。
+    void OnToolChainChanged();
+    // 单图或图片序列切换时调用，停止旧输入上的队列并清除结果/耗时缓存。
+    void OnInputImageChanged();
     void Reset();                                  // 重置到 Idle
 }

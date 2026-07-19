@@ -4,7 +4,6 @@
 #include "../Core/VisionContext.h"
 #include "../Log/LogSystem.h"
 #include <chrono>
-extern ImVec4 color;
 
 namespace MorphologyTool
 {
@@ -65,7 +64,7 @@ namespace MorphologyTool
         auto t1 = std::chrono::high_resolution_clock::now();
         g_ProcTimeMs = std::chrono::duration<float, std::milli>(t1 - t0).count();
         static const char *nm[] = {"Erode", "Dilate", "Open", "Close", "Gradient", "TopHat", "BlackHat"};
-        LogSystem::Add(LOG_INFO, color, "MorphTool[%s]:k=%dx%d iter=%d|%.3fms|%dx%d", nm[p.opType], ks, ks, p.iterations, g_ProcTimeMs, dst.cols, dst.rows);
+        LogSystem::Add(LOG_INFO, "MorphTool[%s]:k=%dx%d iter=%d|%.3fms|%dx%d", nm[p.opType], ks, ks, p.iterations, g_ProcTimeMs, dst.cols, dst.rows);
         return dst;
     }
     std::string Summary(const Params &p)

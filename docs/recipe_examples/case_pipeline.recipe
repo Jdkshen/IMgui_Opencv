@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "name": "case_pipeline",
+  "imagePath": "../../assets/images/qr_tests/qr_extreme_multi_mixed.png",
+  "rois": [ { "startX": 0.0, "startY": 0.0, "endX": 900.0, "endY": 620.0, "type": 0 } ],
+  "tools": [
+    { "type": 12, "label": "\u539f\u56fe", "showResultLabels": true },
+    { "type": 0, "label": "\u8fb9\u7f18\u6d4b\u8bd5", "edgeUseGray": true, "cannyLow": 40, "cannyHigh": 130, "useSearchROI": true, "searchROIs": [ { "startX": 0.0, "startY": 0.0, "endX": 900.0, "endY": 620.0, "type": 0 } ] },
+    { "type": 3, "label": "\u9608\u503c\u6d4b\u8bd5", "dbgUseGray": true, "dbgEnableBlur": true, "dbgBlurSize": 5, "dbgEnableThresh": true, "dbgThreshold": 140 },
+    { "type": 5, "label": "\u8f6e\u5ed3\u6d4b\u8bd5", "cntUseGray": true, "cntMinArea": 50.0, "cntMaxContours": 300, "useSearchROI": true, "searchROIs": [ { "startX": 0.0, "startY": 0.0, "endX": 900.0, "endY": 620.0, "type": 0 } ] },
+    { "type": 8, "label": "\u5f62\u6001\u5b66\u6d4b\u8bd5", "morphOpType": 0, "morphKernelSize": 3, "morphKernelShape": 0, "morphIterations": 1, "morphUseGray": true },
+    { "type": 9, "label": "\u989c\u8272\u6d4b\u8bd5", "colorSpace": 0, "colorHistBins": 32, "colorShowHist": true, "colorUseROI": true, "useSearchROI": true, "searchROIs": [ { "startX": 0.0, "startY": 0.0, "endX": 900.0, "endY": 620.0, "type": 0 } ] },
+    { "type": 7, "label": "\u76f4\u7ebf\u6d4b\u8bd5", "lineCannyLow": 40, "lineCannyHigh": 130, "lineMinLength": 80.0, "lineMaxLines": 20, "lineUseROI": true, "useSearchROI": true, "searchROIs": [ { "startX": 0.0, "startY": 0.0, "endX": 900.0, "endY": 620.0, "type": 0 } ] }
+  ]
+}

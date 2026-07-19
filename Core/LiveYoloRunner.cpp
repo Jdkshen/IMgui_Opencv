@@ -1,9 +1,9 @@
 #include "LiveYoloRunner.h"
 
-#include "LegacyAppState.h"
+#include "ImageState.h"
+#include "RealtimeDetectionState.h"
 #include "ROIState.h"
 #include "ToolChainState.h"
-#include "UIStateBridge.h"
 #include "VideoCapture.h"
 #include "VisionContext.h"
 #include "../Algorithm/OpenCVYoloDetector.h"
@@ -13,18 +13,21 @@
 #include <chrono>
 #include <deque>
 
+// =====================================================
+// 实时 YOLO 性能统计（滑动窗口平均）
+// =====================================================
 namespace
 {
 struct LiveYoloPerfStats
 {
-    static constexpr int WarmupFrames = 5;
-    static constexpr int WindowFrames = 100;
+    static constexpr int WarmupFrames = 5;   // 预热帧数（排除前几帧的 JIT/缓存延迟）
+    static constexpr int WindowFrames = 100; // 滑动窗口大小
 
     int framesSeen = 0;
-    std::deque<float> total;
-    std::deque<float> pre;
-    std::deque<float> inf;
-    std::deque<float> post;
+    std::deque<float> total;   // 总耗时滑动窗口
+    std::deque<float> pre;     // 预处理耗时窗口
+    std::deque<float> inf;     // 推理耗时窗口
+    std::deque<float> post;    // 后处理耗时窗口
     float totalSum = 0.0f;
     float preSum = 0.0f;
     float infSum = 0.0f;
@@ -77,11 +80,13 @@ private:
     }
 };
 
+// 从工具实例或全局 ROI 列表中选取实时 YOLO 搜索区域
 cv::Rect SelectLiveYoloSearchRect(const ToolInstance& it, const cv::Mat& image)
 {
     if (image.empty())
         return {};
 
+    // 优先使用工具自身 ROI，否则使用全局 ROI
     const auto& globalROIs = ROIState::ReadOnlyItems();
     const std::vector<ROI>* rois = !it.searchROIs.empty() ? &it.searchROIs : &globalROIs;
     if (!rois || rois->empty())
@@ -92,16 +97,27 @@ cv::Rect SelectLiveYoloSearchRect(const ToolInstance& it, const cv::Mat& image)
         roiIndex = ROIState::SelectIndexFor(*rois);
 
     cv::Rect roi = (*rois)[roiIndex].ToCvRect();
-    roi &= cv::Rect(0, 0, image.cols, image.rows);
+    roi &= cv::Rect(0, 0, image.cols, image.rows);  // 裁剪到图像范围内
     return (roi.width > 0 && roi.height > 0) ? roi : cv::Rect();
 }
 }
 
+// =====================================================
+// LiveYoloRunner::Update — 实时 YOLO 检测主循环
+// 流程：
+//   1. 检查是否启用实时检测 + 是否有图像
+//   2. 从工具链获取模型路径、置信度/NMS 阈值、ROI
+//   3. 根据类型选择后端（YOLODetector=ONNX GPU / OpenCVYoloDetector=DNN CPU）
+//   4. 执行推理 → 计时 → 滑动窗口统计 → 日志输出
+//   5. 发布检测结果到叠加层和统一结果列表
+// =====================================================
 namespace LiveYoloRunner
 {
 void Update()
 {
-    if (!ToolChainState::YoloLiveDetect() || gImage.empty())
+    // 1. 前置检查：实时检测开关 + 图像有效性
+    const cv::Mat& image = ImageState::Current();
+    if (!ToolChainState::YoloLiveDetect() || image.empty())
         return;
 
     static std::string s_LiveModelTag;
@@ -113,8 +129,7 @@ void Update()
     {
         ToolChainState::SetYoloLiveDetect(false);
         ToolChainState::SetYoloLiveInstanceIndex(-1);
-        g_YoloShowOverlay = false;
-        g_YoloOverlays.clear();
+        RealtimeDetectionState::Clear();
         gContext.ClearUnifiedResults();
         return;
     }
@@ -138,7 +153,7 @@ void Update()
         auto dot = s_LiveModelTag.rfind('.');
         if (dot != std::string::npos)
             s_LiveModelTag = s_LiveModelTag.substr(0, dot);
-        roi = SelectLiveYoloSearchRect(it, gImage);
+        roi = SelectLiveYoloSearchRect(it, image);
     }
     else
     {
@@ -168,7 +183,7 @@ void Update()
         }
         else
         {
-            objs = OpenCVYoloDetector::Detect(gImage, confTh, nmsTh, roi);
+            objs = OpenCVYoloDetector::Detect(image, confTh, nmsTh, roi);
         }
     }
     else
@@ -182,7 +197,7 @@ void Update()
         }
         else
         {
-            objs = YOLODetector::Detect(gImage, confTh, nmsTh, roi);
+            objs = YOLODetector::Detect(image, confTh, nmsTh, roi);
         }
     }
     if (!canDetect)
@@ -203,10 +218,11 @@ void Update()
     }
     else
     {
-        totalMs = g_YoloDetailTotalMs > 0.0f ? g_YoloDetailTotalMs : measuredFrameMs;
-        preMs = g_YoloDetailPreMs;
-        infMs = g_YoloDetailInfMs;
-        postMs = g_YoloDetailPostMs;
+        const auto& detectorStats = RealtimeDetectionState::Stats();
+        totalMs = detectorStats.totalMs > 0.0f ? detectorStats.totalMs : measuredFrameMs;
+        preMs = detectorStats.preprocessMs;
+        infMs = detectorStats.inferenceMs;
+        postMs = detectorStats.postprocessMs;
     }
     ToolChainState::SetYoloLiveFrameMs(totalMs);
 
@@ -240,16 +256,19 @@ void Update()
 
     for (auto& o : objs)
         o.className = "[" + s_LiveModelTag + "] " + o.className;
-    g_YoloOverlays = std::move(objs);
-    g_YoloShowOverlay = true;
+    RealtimeDetectionState::SetObjects(std::move(objs));
+    RealtimeDetectionState::SetOverlayVisible(true);
 
     ToolResult tr;
     const char* resultBaseName = liveType == 11 ? "YOLO OpenCV 5.0" : "YOLO";
     tr.toolName = (idx >= 0 && idx < (int)tools.size())
         ? ToolInstanceLogName(resultBaseName, tools[idx].label)
         : std::string(resultBaseName);
+    tr.sourceToolIndex = idx;
+    if (idx >= 0 && idx < static_cast<int>(tools.size()))
+        tr.sourceToolId = tools[idx].toolId;
     tr.success = true;
-    for (const auto& o : g_YoloOverlays)
+    for (const auto& o : RealtimeDetectionState::Objects())
     {
         ToolResult::Detection d;
         d.box = o.box;

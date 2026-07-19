@@ -5,7 +5,7 @@
 // ========================================
 // 打开文件选择对话框
 // 返回用户选择的文件路径（UTF-8编码），取消则返回空字符串
-// 筛选条件：图片文件 (*.jpg;*.png;*.bmp)
+// 筛选条件：jpg, jpeg, png, bmp, tif, tiff, webp
 // ========================================
 std::string OpenFileDialog();
 
@@ -30,8 +30,16 @@ std::string OpenFolderDialog();
 std::string OpenFileDialogWithFilter(const wchar_t *filter, const wchar_t *title = nullptr);
 
 // ========================================
+// 通用保存文件对话框（自定义筛选）
+// filter: L"描述\0通配符\0" 格式
+// 返回用户选择的文件路径（UTF-8），取消则返回空字符串
+// ========================================
+std::string SaveFileDialogWithFilter(const wchar_t *filter, const wchar_t *title = nullptr,
+    const wchar_t *defaultExtension = nullptr);
+
+// ========================================
 // 扫描文件夹中所有图片文件
-// 支持的格式：jpg, jpeg, png, bmp
+// 支持的格式：jpg, jpeg, png, bmp, tif, tiff, webp
 // 返回按文件名排序的路径列表
 // ========================================
-std::vector<std::string> ScanImageFiles(const std::string &folderPath);
+std::vector<std::string> ScanImageFiles(const std::string &folderPath, bool recursive = true);

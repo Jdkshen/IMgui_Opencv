@@ -1,30 +1,21 @@
 #pragma once
-#include "DockSpaceHost.h" // ROI 结构体
+#include "../include/imgui/imgui.h"
+#include "../Core/ROI.h"
+#include "../Core/ROIEditorState.h"
+
+#include <initializer_list>
 
 // =====================================================
-// 图像显示/视图变换状态（extern，定义在 ImageViewer.cpp）
-// =====================================================
-extern float gZoom;
-extern ImVec2 gPan;
-extern ImVec2 gCanvasSize;
-extern ImVec2 gImageScreenPos;
-extern ImVec2 imageScreenPos;
-
 namespace UI
 {
 
-    // =====================================================
-    // ROI 数据与交互状态（extern 声明）
-    // =====================================================
-    extern std::vector<ROI>& gROIs;
-    extern bool gDrawingROI;
-    extern ImVec2 gROIStart;
-    extern int& gSelectedROI;
-    extern bool gDraggingROI;
-    extern ImVec2 gLastMousePos;
-    extern HandleType gActiveHandle;
-    extern int gHoveredROI;
-    extern int gCurrentROIType; // 当前操作的ROI类型 (0-4)
+    inline bool& gDrawingROI = ROIEditorState::Drawing();
+    inline ImVec2& gROIStart = ROIEditorState::DrawStart();
+    inline bool& gDraggingROI = ROIEditorState::Dragging();
+    inline ImVec2& gLastMousePos = ROIEditorState::LastMousePosition();
+    inline HandleType& gActiveHandle = ROIEditorState::ActiveHandle();
+    inline int& gHoveredROI = ROIEditorState::HoveredROI();
+    inline int& gCurrentROIType = ROIEditorState::CurrentROIType(); // 当前操作的ROI类型 (0-4)
 
     // 根据 ROI 类型返回对应颜色
     inline ImU32 GetROIColor(int type, bool selected)
@@ -54,5 +45,13 @@ namespace UI
     void ZoomAtCenter(float d);  // 以鼠标为中心缩放
     void ClearROIState();        // 清理ROI状态
     void HandleROIInteraction(); // ROI 交互处理（创建/选中/拖动/删除/绘制）
+    void BeginROIDrawSequence(std::initializer_list<int> roiTypes);
+    void CancelROIDrawSequence();
+    bool IsROIDrawSequenceActive();
+    int ROIDrawSequenceStep();
+    int ROIDrawSequenceCount();
+    void AdvanceROIDrawSequence(const ROI& completedROI);
+    bool ConsumeCompletedROIDrawSequence(std::vector<ROI>& completedROIs);
+    std::uint64_t EnsureROIRuntimeId(ROI& roi);
 
 } // namespace UI

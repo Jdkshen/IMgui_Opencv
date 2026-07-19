@@ -1,0 +1,25 @@
+{
+  "version": 2,
+  "name": "case_qr_clean",
+  "imagePath": "../../assets/images/qr_tests/qr_test.png",
+  "rois": [ { "startX": 60.0, "startY": 60.0, "endX": 570.0, "endY": 570.0, "type": 0 } ],
+  "tools": [
+    { "type": 12, "label": "\u539f\u56fe", "showResultLabels": true },
+    {
+      "type": 14,
+      "label": "\u6e05\u6670\u4e8c\u7ef4\u7801",
+      "showResultLabels": true,
+      "qrUseROI": true,
+      "qrDetectMulti": true,
+      "qrEnhance": false,
+      "qrMinSize": 24,
+      "qrShowText": true,
+      "qrEngine": 2,
+      "qrFormatMask": 31,
+      "qrFilterDuplicates": true,
+      "useSearchROI": true,
+      "searchROIs": [ { "startX": 60.0, "startY": 60.0, "endX": 570.0, "endY": 570.0, "type": 0 } ],
+      "judgement": { "enabled": true, "stopOnFailure": true, "minResultCount": 1 }
+    }
+  ]
+}

@@ -6,24 +6,23 @@
 
 后续开发按以下顺序推进，除非用户明确指定插队任务：
 
-| 优先级 | 任务 | 目标 | 主要文件 |
+| 优先级 | 任务 | 状态与验收目标 | 主要文件 |
 | --- | --- | --- | --- |
-| P0-1 | 结果导出 | 导出 `ToolResult` 中的 detections、regions、lines、measurements，先支持 CSV/JSON | `Algorithm/ToolResult.h`、`Core/ResultPublisher.h`、`UI/ToolsWindow.cpp`、`docs/BUILD.md` |
-| P0-2 | 配方加载后自动执行 | 加载配方、图片/模板后可自动执行全部工具，让检测流程可复现 | `Core/RecipeManager.*`、`Core/ToolController.*`、`UI/DockSpaceHost.*`、`UI/ToolsWindow.*` |
-| P0-3 | 运行报告 | 全部执行后生成工具名、耗时、结果数量、OK/NG 的 TXT/CSV 报告 | `Core/ToolController.*`、`Core/ToolExecutor.*`、`Algorithm/ToolResult.h`、`UI/ToolsWindow.*` |
-| P1-1 | 尺寸测量 | 点到点距离、线段长度、圆直径、角度、ROI 宽高 | `Algorithm/`、`Core/ToolTypes.h`、`UI/ToolsWindow.*`、`Core/RecipeManager.*` |
-| P1-2 | Blob 分析增强 | 面积、中心点、外接矩形、圆度、长宽比、筛选条件、OK/NG 阈值 | `Algorithm/BlobTool.*`、`Algorithm/ToolResult.h`、`UI/ToolsWindow.*` |
-| P1-3 | 二维码/条码识别 | 先用 OpenCV `QRCodeDetector` 做二维码，条码后续评估 ZXing-cpp | `Algorithm/`、`Windows_imgui.vcxproj`、`UI/ToolsWindow.*` |
-| P1-4 | 图像差分 | 参考图与当前图差异检测，高亮差异区域 | `Algorithm/`、`Core/RecipeManager.*`、`UI/ToolsWindow.*` |
-| P1-5 | OCR | 后置任务，等模型/运行时/中文识别方案明确后再做 | 待定 |
-| P2-1 | OK/NG 状态 | 每个工具输出统一 OK/NG 和失败原因 | `Algorithm/ToolResult.h`、`Core/ToolExecutor.*`、`UI/ImageViewer.*` |
-| P2-2 | 失败停止 | 全部执行时工具 NG 可停止后续工具 | `Core/ToolController.*`、`UI/ToolsWindow.*` |
-| P2-3 | 工具启用/禁用 | 工具实例可跳过执行但保留参数 | `Core/ToolInstance.h`、`Core/ToolController.*`、`Core/RecipeManager.*` |
-| P2-4 | 复制/粘贴参数 | 同类工具之间复制参数 | `Core/ToolInstance.h`、`UI/ToolsWindow.*` |
-| P2-5 | 工具分组/折叠 | 大量工具时管理流程 | `UI/ToolsWindow.*`、`Core/RecipeManager.*` |
-| P3-1 | runtime.zip | 打包 OpenCV、ONNX Runtime、DirectML 等本地运行时 | `redist/`、`docs/BUILD.md` |
-| P3-2 | GitHub Release | 源码进仓库，运行时包放 Release 附件 | GitHub Release、`docs/BUILD.md` |
-| P4 | 平台化 | 节点编辑器、插件系统、工业相机、工业通讯 | 后续单独拆分 |
+| P0-1 | 原图删除与输入源一致性 | ✅ 已完成：原图可删除；单工具、单步、批量执行统一输入回退；删除/移动清理执行缓存和结果 | `Core/ToolController.*`、`Core/ToolChainState.*`、`UI/ToolsWindow.*` |
+| P0-1a | 图片/文件夹导入稳定性 | ✅ Core 导入服务统一单图、递归文件夹、空目录、缺失路径和导航状态清理；异步有效/失败解码均有回归 | `Core/ImageImportService.*`、`Core/AsyncImageLoader.*`、`UI/ImageViewer.*` |
+| P0-2 | 案例配方自动加载执行 | ✅ 已完成回归：案例路径可迁移，OCR 模型相对路径解析，`case_pipeline` 自动执行验证 | `Core/RecipeManager.*`、`Test/regression_tests.cpp`、`docs/recipe_examples/` |
+| P0-3 | 完整回归基线 | ✅ 已完成：完整 `RegressionTests.exe` 通过，不只运行专项参数 | `Test/RegressionTests.vcxproj`、`Test/regression_tests.cpp` |
+| P1-1 | 稳定工具身份 | ✅ `ToolInstance.toolId`、`ToolResult.sourceToolId`、配方字段和上游 ID 优先解析；UI 的活动工具/实时检测引用别名已删除 | `Core/ToolInstance.h`、`Core/ToolChainState.*`、`Core/ToolExecutor.cpp` |
+| P1-2 | ImageViewer/Core 边界 | ✅ ImageViewer 通过 `ImageState`、`FrameNavigation`、`ImageImportService`、`ImageViewState`、`ResultOverlayState` 获取图像、播放和叠加状态，不再直接调用视频/实时检测/工具链全局状态 | `UI/ImageViewer.*`、`Core/FrameNavigation.*`、`Core/ResultOverlayState.*` |
+| P1-3 | TemplateMatch 去全局状态 | ✅ `TemplateMatch` 已收缩为无 UI 的模板辅助，参数和模板资产归实例/Core 服务 | `Algorithm/TemplateMatch.*`、`Algorithm/TemplateMatchingTool.*` |
+| P1-4 | RecipeManager 轻量化 | ✅ `RecipeToolInstance` 改为 ToolInstance JSON + 资产快照组合 DTO；Save 不再反查实时工具链，Load 先解析资产再 Apply | `Core/RecipeManager.*`、`Core/ToolInstance.*` |
+| P1-5 | ROIEditorState | ✅ 绘制、拖拽、Handle、Hover、连续 ROI、runtimeId、工具绑定和测量 ROI 恢复/同步/回滚/删除均已迁入 Core | `Core/ROIEditorState.*`、`Core/ToolROIService.*`、`UI/ROIManager.*` |
+| P2-1 | Blob 与图像差分 | ✅ Blob 特征/筛选参数、聚合质量指标、统一命名测量项公差判定；图像差分参考图/差异区域/差异面积已完成 | `Algorithm/BlobTool.*`、`Algorithm/DifferenceTool.*`、`Core/ToolJudgement.*` |
+| P2-2 | 标定与 Fixture 产品化 | ✅ 多点 X/Y 比例拟合、透视拟合、逐点残差、RMS/最大残差、标定文件导入导出和 Fixture 坐标轴已接入；后续补镜头畸变标定 | `Core/CalibrationFitter.*`、`Core/CalibrationModel.*`、`Core/FixtureTransform.*`, `UI/ImageViewer.*` |
+| P2-3 | SPC 与报表 | ✅ 均值、标准差、Cp/Cpk、测量项选择、统计窗口、趋势图和 CSV 导出 | `Core/ResultExporter.*`、`Core/InspectionHistory.*`、`UI/StatsWindow.*` |
+| P3-1 | 工具链体验 | ✅ 启用/禁用、Core 工具剪贴板复制粘贴、稳定 ID、运行前检查、依赖显示/循环校验、分组筛选及批量启用/标签/失败策略 | `Core/ToolChainPreflight.*`、`Core/ToolChainValidator.*`、`Core/ToolChainState.*`、`UI/ToolsWindow.*` |
+| P4-1 | 工程发布 | ✅ GitHub clean runner 已完成主程序、回归工程、完整测试、运行包校验和 artifact 上传；Git LFS 与可迁移案例资源已验证 | `.github/workflows/`、`scripts/`、`docs/RELEASE.md` |
+| P4-2 | 设备平台化 | ✅ 通用途径已完成并接入主程序：设备连接与控制面板作为左侧同区域页签，配置 OpenCV/UVC/RTSP 相机、普通 TCP 文本、Modbus TCP、Modbus PLC、open62541 OPC UA；异步抓帧进入统一图像链，批次结果自动发布 OK/NG；厂商专用 SDK 由目标设备适配 | `Core/HardwareRuntimeService.*`、`Core/TcpTextAdapter.*`、`Core/OpenCvCameraAdapter.*`、`Core/ModbusTcpAdapter.*`、`Core/ModbusPlcAdapter.*`、`Core/Open62541OpcUaAdapter.*`、`UI/HardwareWindow.*`、`UI/Sidebar.*` |
 
 ## 任务描述模板
 
@@ -61,7 +60,7 @@
 在 IMgui_Opencv 项目里添加新工具：XXXX
 
 要求：
-1. 分配新的 type，避免占用当前 0-12（新增工具从 13 开始）。
+1. 分配新的 type，避免占用当前 0-13（新增工具从 14 开始）。
 2. 优先实现 ITool 接口。
 3. 输出优先使用 ToolResult。
 4. UI 参数放入 ToolInstance。
@@ -95,10 +94,10 @@
 3. 在 `Algorithm/ITool.cpp` 注册：
 
 ```cpp
-ToolRegistry::Register(13, []() -> std::unique_ptr<ITool> {
+ToolRegistry::Register(14, []() -> std::unique_ptr<ITool> {
     return std::make_unique<XXXXTool>();
 });
-ToolRegistry::RegisterName(13, "XXXX");
+ToolRegistry::RegisterName(14, "XXXX");
 ```
 
 4. 在 `UI/ToolsWindow.h` 的 `ToolInstance` 中添加参数。
@@ -159,7 +158,7 @@ ToolRegistry::RegisterName(13, "XXXX");
 | --- | --- | --- |
 | 0 | 边缘检测 | 已接入 ITool |
 | 1 | 模板匹配 | 已接入 ITool |
-| 2 | Blob 分析 | 已接入 ITool，当前主要为占位/待增强 |
+| 2 | Blob 分析 | 已接入 ITool，支持面积、中心、圆度、长宽比、方向、轮廓、筛选与统一测量公差判定 |
 | 3 | 阈值调试 | 已接入 ITool |
 | 4 | YOLO 检测 | 已接入 ITool |
 | 5 | 轮廓分析 | 已接入 ITool |
@@ -170,8 +169,9 @@ ToolRegistry::RegisterName(13, "XXXX");
 | 10 | 多点找色 | 已接入 ITool |
 | 11 | YOLO OpenCV 5.0 | 已接入 ITool，OpenCV DNN 实验工具 |
 | 12 | 原图 | 特殊工具，由 ToolController 恢复本轮原图 |
+| 13 | OCR 文字识别 | 已接入 ITool，PP-OCRv6 tiny + NCNN |
 
-新增工具从 `13` 开始分配。
+新增工具从 `14` 开始分配。
 
 ## 验收清单
 
@@ -190,6 +190,6 @@ ToolRegistry::RegisterName(13, "XXXX");
 
 ```powershell
 rg -n "TODO|未完成|待实现|5 个工具|5 种已接入|传统执行|专用执行|OpenCV 4.12" README.md docs -g *.md
-rg -n "ToolRegistry::Register|g_ToolRegistry|case 12|case 13|RunViaITool" Algorithm UI Core
+rg -n "ToolRegistry::Register|g_ToolRegistry|case 12|case 13|case 14|RunViaITool" Algorithm UI Core
 rg -n "ClCompile Include=.*XXXX|ClInclude Include=.*XXXX" Windows_imgui.vcxproj
 ```

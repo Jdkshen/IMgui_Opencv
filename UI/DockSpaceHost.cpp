@@ -1,7 +1,20 @@
-#include "../Windows_imgui.h"
 #include "../Core/OpenFileDialog.h"
+#include "DockSpaceHost.h"
+#include "ToolsWindow.h"
+#include "Sidebar.h"
+#include "HardwareWindow.h"
+#include "../Core/ThemeManager.h"
+#include "../Core/VisionContext.h"
 #include "../Core/RecipeManager.h"
+#include "../Core/TemplateState.h"
+#include "../Core/FrameSourceState.h"
+#include "../Core/ImageState.h"
+#include "../Core/ResultExporter.h"
+#include "../Core/ToolChainState.h"
 #include "../Core/ToolController.h"
+#include "../Log/LogSystem.h"
+#include "../include/imgui/imgui_internal.h"
+#include <shellapi.h>
 
 // =========================
 // UTF-8 ↔ 宽字符转换工具
@@ -72,7 +85,7 @@ bool g_ShowSidebar = true;
 bool g_ShowStats = true;
 bool g_ShowOpenCV = true;
 bool g_ShowTools = true;
-ImVec4 color = ImVec4(0.2f, 0.8f, 1.0f, 1.0f);
+bool g_ShowHardware = true;
 
 namespace UI
 {
@@ -80,6 +93,9 @@ namespace UI
     static bool g_ResetDockLayout = false;
     static bool g_OpenRenameRecipePopup = false;
     static char g_RenameRecipeName[64] = "";
+    static bool g_AutoRunAfterRecipeLoad = false;
+    static bool g_PendingAutoRunAfterRecipeLoad = false;
+    static std::string g_LastExportPath;
 
     bool SaveCurrentRecipe()
     {
@@ -88,6 +104,116 @@ namespace UI
         std::wstring path = dir + ToWide(g_CurrentRecipeName) + L".recipe";
         RecipeData data = RecipeManager::Capture(g_CurrentRecipeName);
         return RecipeManager::Save(ToNarrow(path).c_str(), data);
+    }
+
+    static std::string ExportPrefix(const char* kind)
+    {
+        std::string prefix = kind && *kind ? kind : "export";
+        if (g_CurrentRecipeName[0] != '\0')
+            prefix += std::string("_") + g_CurrentRecipeName;
+        return prefix;
+    }
+
+    static ResultExporter::ExportSnapshot CaptureExportSnapshot()
+    {
+        ResultExporter::ExportSnapshot snapshot;
+        snapshot.recipeName = g_CurrentRecipeName;
+        snapshot.imagePath = FrameSourceState::Current().sourcePath;
+        snapshot.imageWidth = ImageState::Width();
+        snapshot.imageHeight = ImageState::Height();
+        snapshot.imageVersion = ImageState::Version();
+        snapshot.totalTimeMs = ToolController::GetTotalTimeMs();
+        snapshot.tools = ToolChainState::ReadOnlyTools();
+        snapshot.results = gContext.unifiedResults;
+        snapshot.toolTimesMs.reserve(snapshot.tools.size());
+        for (int i = 0; i < static_cast<int>(snapshot.tools.size()); ++i)
+            snapshot.toolTimesMs.push_back(ToolController::GetToolTimeMs(i));
+        return snapshot;
+    }
+
+    static void ExportCurrentResults()
+    {
+        auto snapshot = CaptureExportSnapshot();
+        std::string path = ResultExporter::BuildDefaultOutputPath(ExportPrefix("results").c_str(), "json");
+        if (ResultExporter::ExportResultsJson(path.c_str(), snapshot))
+        {
+            g_LastExportPath = path;
+            LogSystem::Add(LOG_INFO, "结果已导出: %s", path.c_str());
+        }
+        else
+            LogSystem::Add(LOG_ERROR, "结果导出失败: %s", path.c_str());
+    }
+
+    static void ExportCurrentRunReport()
+    {
+        auto snapshot = CaptureExportSnapshot();
+        if (!ImageState::Current().empty())
+        {
+            std::string imagePath = ResultExporter::BuildDefaultOutputPath(ExportPrefix("result_image").c_str(), "png");
+            if (ResultExporter::ExportImageSnapshot(imagePath.c_str(), ImageState::Current()))
+                snapshot.resultImagePath = imagePath;
+            else
+                LogSystem::Add(LOG_WARN, "结果图像导出失败: %s", imagePath.c_str());
+        }
+
+        std::string path = ResultExporter::BuildDefaultOutputPath(ExportPrefix("run_report").c_str(), "md");
+        if (ResultExporter::ExportRunReportMarkdown(path.c_str(), snapshot))
+        {
+            g_LastExportPath = path;
+            LogSystem::Add(LOG_INFO, "运行报告已导出: %s", path.c_str());
+        }
+        else
+            LogSystem::Add(LOG_ERROR, "运行报告导出失败: %s", path.c_str());
+    }
+
+    static void OpenReportsFolder()
+    {
+        std::wstring dir = ToWide(ResultExporter::ReportsDirectory().c_str());
+        if (dir.empty())
+            return;
+        CreateDirectoryW(dir.c_str(), nullptr);
+        ShellExecuteW(nullptr, L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+
+    static void RequestAutoRunAfterRecipeLoad(const RecipeData& data)
+    {
+        if (!g_AutoRunAfterRecipeLoad)
+            return;
+
+        if (data.tools.empty())
+        {
+            LogSystem::Add(LOG_WARN, "配方加载后自动执行已跳过：没有工具");
+            return;
+        }
+
+        if (data.imagePath.empty() && ImageState::Current().empty())
+        {
+            LogSystem::Add(LOG_WARN, "配方加载后自动执行已跳过：没有图片");
+            return;
+        }
+
+        g_PendingAutoRunAfterRecipeLoad = true;
+        LogSystem::Add(LOG_INFO, "配方加载后自动执行：等待图片就绪");
+    }
+
+    static void ApplyLoadedRecipe(const RecipeData& data)
+    {
+        RecipeManager::Apply(data);
+        RequestAutoRunAfterRecipeLoad(data);
+    }
+
+    static void ProcessPendingAutoRunAfterRecipeLoad()
+    {
+        if (!g_PendingAutoRunAfterRecipeLoad)
+            return;
+        if (ToolController::GetMode() != ToolController::Mode::Idle)
+            return;
+        if (ImageState::Current().empty())
+            return;
+
+        g_PendingAutoRunAfterRecipeLoad = false;
+        ToolController::RequestRunAll(false);
+        LogSystem::Add(LOG_INFO, "配方加载后自动执行：已开始");
     }
 
     static bool DeleteRecipeFilesByName(const std::string& name)
@@ -150,7 +276,7 @@ namespace UI
     {
         bool deleted = DeleteRecipeFilesByName(g_CurrentRecipeName);
         if (deleted)
-            LogSystem::Add(LOG_INFO, color, "Recipe deleted: %s", g_CurrentRecipeName);
+            LogSystem::Add(LOG_INFO, "Recipe deleted: %s", g_CurrentRecipeName);
         else
             LogSystem::Add(LOG_WARN, "Recipe delete failed or not found: %s", g_CurrentRecipeName);
         return deleted;
@@ -159,14 +285,14 @@ namespace UI
     static void ClearRecipeRuntimeState(const char* reason)
     {
         ToolController::Reset();
-        TemplateMatch::Clear();
-        g_ActiveToolIndex = -1;
-        g_YoloLiveDetect = false;
-        g_YoloLiveInstanceIdx = -1;
+TemplateState::ClearResults();
+        ToolChainState::SetActiveIndex(-1);
+        ToolChainState::SetYoloLiveDetect(false);
+        ToolChainState::SetYoloLiveInstanceIndex(-1);
 
         RecipeData empty;
         RecipeManager::Apply(empty);
-        LogSystem::Add(LOG_INFO, color, "%s", reason);
+        LogSystem::Add(LOG_INFO, "%s", reason);
     }
 
     static bool RecipeNameExists(const std::vector<std::string>& recipes, const std::string& name)
@@ -220,7 +346,7 @@ namespace UI
         }
 
         DeleteRecipeFilesByName(oldName);
-        LogSystem::Add(LOG_INFO, color, "Recipe renamed: %s -> %s", oldName.c_str(), g_CurrentRecipeName);
+            LogSystem::Add(LOG_INFO, "Recipe renamed: %s -> %s", oldName.c_str(), g_CurrentRecipeName);
         return true;
     }
 
@@ -281,8 +407,8 @@ namespace UI
         std::string recipeName = data.name.empty() ? RecipeNameFromPath(path) : data.name;
         if (!recipeName.empty())
             SetCurrentRecipeName(recipeName);
-        RecipeManager::Apply(data);
-        LogSystem::Add(LOG_INFO, color, "Recipe opened: %s", path.c_str());
+        ApplyLoadedRecipe(data);
+            LogSystem::Add(LOG_INFO, "Recipe opened: %s", path.c_str());
     }
 
     static void NewCurrentRecipe()
@@ -298,7 +424,7 @@ namespace UI
         ClearRecipeRuntimeState("Recipe UI cleared for new recipe");
 
         if (SaveCurrentRecipe())
-            LogSystem::Add(LOG_INFO, color, "New recipe created: %s", g_CurrentRecipeName);
+            LogSystem::Add(LOG_INFO, "New recipe created: %s", g_CurrentRecipeName);
     }
 
     static float ClampFloat(float v, float minV, float maxV)
@@ -308,6 +434,8 @@ namespace UI
 
     void DrawAppMainMenuItems()
     {
+        ProcessPendingAutoRunAfterRecipeLoad();
+
         if (ImGui::BeginMenu("文件(F)"))
         {
             if (ImGui::MenuItem("新建配方"))
@@ -329,7 +457,7 @@ namespace UI
                 std::wstring path = GetRecipesDirW() + ToWide(g_CurrentRecipeName) + L".recipe";
                 RecipeData data;
                 if (RecipeManager::Load(ToNarrow(path).c_str(), data))
-                    RecipeManager::Apply(data);
+                    ApplyLoadedRecipe(data);
             }
 
             if (ImGui::MenuItem("删除当前配方"))
@@ -352,7 +480,7 @@ namespace UI
                     std::wstring path = GetRecipesDirW() + ToWide(r.c_str()) + L".recipe";
                     RecipeData data;
                     if (RecipeManager::Load(ToNarrow(path).c_str(), data))
-                        RecipeManager::Apply(data);
+                        ApplyLoadedRecipe(data);
                 }
                 ImGui::PopID();
             }
@@ -392,6 +520,15 @@ namespace UI
                 g_ShowOpenCV = !g_ShowOpenCV;
             if (ImGui::Selectable("功能窗口", g_ShowTools))
                 g_ShowTools = !g_ShowTools;
+            if (ImGui::Selectable("设备连接", g_ShowHardware))
+            {
+                g_ShowHardware = !g_ShowHardware;
+                if (g_ShowHardware)
+                {
+                    g_ShowSidebar = true;
+                    UI::RequestHardwareWindowFocus();
+                }
+            }
             ImGui::Separator();
 
             if (ImGui::BeginMenu("主题"))
@@ -410,6 +547,13 @@ namespace UI
             ImGui::EndMenu();
         }
 
+        if (ImGui::MenuItem("连接设备(D)", nullptr, g_ShowHardware))
+        {
+            g_ShowSidebar = true;
+            g_ShowHardware = true;
+            UI::RequestHardwareWindowFocus();
+        }
+
         if (ImGui::BeginMenu("转到(G)"))
         {
             if (ImGui::MenuItem("图像预览"))
@@ -418,17 +562,38 @@ namespace UI
                 g_ShowTools = true;
             if (ImGui::MenuItem("日志窗口"))
                 g_ShowLog = true;
+            if (ImGui::MenuItem("设备连接"))
+            {
+                g_ShowSidebar = true;
+                g_ShowHardware = true;
+                UI::RequestHardwareWindowFocus();
+            }
             ImGui::EndMenu();
         }
 
         if (ImGui::BeginMenu("运行(R)"))
         {
+            ImGui::MenuItem("配方加载后自动执行", nullptr, &g_AutoRunAfterRecipeLoad);
+            ImGui::Separator();
             if (ImGui::MenuItem("全部执行"))
                 ToolController::RequestRunAll(false);
             if (ImGui::MenuItem("单步执行"))
                 ToolController::RequestStepNext();
             if (ImGui::MenuItem("重置单步"))
                 ToolController::RequestStepReset();
+            ImGui::Separator();
+            if (ImGui::MenuItem("导出结果(JSON)"))
+                ExportCurrentResults();
+            if (ImGui::MenuItem("导出运行报告(MD)"))
+                ExportCurrentRunReport();
+            if (ImGui::MenuItem("打开 reports 目录"))
+                OpenReportsFolder();
+            if (!g_LastExportPath.empty())
+            {
+                ImGui::Separator();
+                ImGui::TextDisabled("上次导出:");
+                ImGui::TextWrapped("%s", g_LastExportPath.c_str());
+            }
             ImGui::EndMenu();
         }
 
@@ -525,6 +690,7 @@ namespace UI
             ImGui::DockBuilderDockWindow("功能窗口", right );
             ImGui::DockBuilderDockWindow("图像预览", main);
             ImGui::DockBuilderDockWindow("侧边栏",   left);
+            ImGui::DockBuilderDockWindow("设备连接", left);
             ImGui::DockBuilderDockWindow("日志窗口", bottom);
             ImGui::DockBuilderDockWindow("性能统计", bottom);
             // 每个停靠节点的标签栏在单窗口时自动隐藏（节省空间），图钉仍可用

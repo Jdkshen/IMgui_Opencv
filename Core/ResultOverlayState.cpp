@@ -1,0 +1,136 @@
+#include "ResultOverlayState.h"
+
+#include "FixtureTransform.h"
+#include "RealtimeDetectionState.h"
+#include "TemplateState.h"
+#include "ToolChainState.h"
+#include "ToolResultUtils.h"
+#include "VisionContext.h"
+
+#include <algorithm>
+
+namespace
+{
+ResultOverlayState::Settings s_settings;
+}
+
+namespace ResultOverlayState
+{
+Settings& MutableSettings()
+{
+    return s_settings;
+}
+
+const Settings& ReadOnlySettings()
+{
+    return s_settings;
+}
+
+const std::vector<ToolResult>& Results()
+{
+    return gContext.unifiedResults;
+}
+
+const std::vector<DetectedObject>& RealtimeObjects()
+{
+    return RealtimeDetectionState::Objects();
+}
+
+bool IsRealtimeOverlayVisible()
+{
+    return RealtimeDetectionState::IsOverlayVisible();
+}
+
+float RealtimeOverlayOffsetX()
+{
+    return RealtimeDetectionState::OverlayOffsetX();
+}
+
+std::vector<FixtureOverlay> FixtureOverlays()
+{
+    const auto& tools = ToolChainState::ReadOnlyTools();
+    std::vector<FixtureOverlay> overlays;
+    overlays.reserve(tools.size());
+
+    for (const ToolInstance& tool : tools)
+    {
+        if (!tool.fixture.enabled || !tool.hasLastResult)
+            continue;
+
+        int sourceIndex = tool.fixture.sourceToolIndex;
+        if (tool.fixture.sourceToolId != 0)
+        {
+            sourceIndex = -1;
+            for (int index = 0; index < static_cast<int>(tools.size()); ++index)
+            {
+                if (tools[index].toolId == tool.fixture.sourceToolId)
+                {
+                    sourceIndex = index;
+                    break;
+                }
+            }
+        }
+        if (sourceIndex < 0 || sourceIndex >= static_cast<int>(tools.size()) ||
+            !tools[sourceIndex].hasLastResult)
+            continue;
+
+        FixturePose currentPose;
+        if (!FixtureTransform::TryExtractPose(
+                tools[sourceIndex].lastResult,
+                (std::max)(0, tool.fixture.resultIndex),
+                currentPose))
+            continue;
+
+        FixtureOverlay overlay;
+        overlay.referenceOrigin = tool.fixture.referenceOrigin;
+        overlay.referenceAngleDegrees = tool.fixture.referenceAngleDegrees;
+        overlay.currentOrigin = currentPose.origin;
+        overlay.currentAngleDegrees = currentPose.angleDegrees;
+        overlay.showLabel = tool.showResultLabels;
+        overlays.push_back(overlay);
+    }
+    return overlays;
+}
+
+void ClearResults()
+{
+    TemplateState::ClearResults();
+    RealtimeDetectionState::Clear();
+    gContext.ClearUnifiedResults();
+}
+
+bool ShouldDrawResultLabels(const ToolResult& result)
+{
+    if (!s_settings.showLabels)
+        return false;
+
+    const auto& tools = ToolChainState::ReadOnlyTools();
+    if (result.sourceToolId != 0)
+    {
+        for (const ToolInstance& tool : tools)
+        {
+            if (tool.toolId == result.sourceToolId)
+                return tool.showResultLabels;
+        }
+    }
+    if (result.sourceToolIndex < 0 || result.sourceToolIndex >= static_cast<int>(tools.size()))
+        return true;
+    return tools[result.sourceToolIndex].showResultLabels;
+}
+
+int MaxVisibleLabels()
+{
+    return (std::max)(0, s_settings.maxVisibleLabels);
+}
+
+bool ShouldDrawRegionLabel(const ToolResult& result, const std::string& label)
+{
+    return ShouldDrawResultLabels(result) && !label.empty() &&
+        !ToolResultHasDuplicateTextLabel(result, label);
+}
+
+std::string BuildLabel(const ToolResult& result, const std::string& itemLabel)
+{
+    return BuildToolResultOverlayLabel(result, itemLabel);
+}
+}

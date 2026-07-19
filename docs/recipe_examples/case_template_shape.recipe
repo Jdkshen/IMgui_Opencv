@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "name": "case_template_shape",
+  "imagePath": "../../assets/images/qr_tests/qr_test.png",
+  "rois": [ { "startX": 60.0, "startY": 60.0, "endX": 570.0, "endY": 570.0, "type": 0 } ],
+  "tools": [
+    { "type": 12, "label": "\u539f\u56fe", "showResultLabels": true },
+    { "type": 1, "label": "\u4e8c\u7ef4\u7801\u6a21\u677f", "templateFile": "12345_tpl0.png", "hasTemplateROI": true, "templateROI": { "startX": 80.0, "startY": 80.0, "endX": 250.0, "endY": 250.0, "type": 0 }, "searchMode": 1, "maxResults": 3, "matchThreshold": 0.55, "useSearchROI": true, "searchROIs": [ { "startX": 60.0, "startY": 60.0, "endX": 570.0, "endY": 570.0, "type": 0 } ] },
+    { "type": 6, "label": "\u4e8c\u7ef4\u7801\u5f62\u72b6", "templateFile": "12345_tpl1.png", "hasTemplateROI": true, "templateROI": { "startX": 80.0, "startY": 80.0, "endX": 250.0, "endY": 250.0, "type": 0 }, "shpMinScore": 0.35, "shpMaxResults": 3, "resultRoiMode": 1, "resultRoiSourceTool": 1, "resultRoiIndex": 0, "fixture": { "enabled": true, "sourceToolIndex": 1, "referenceOrigin": { "x": 0.0, "y": 0.0 }, "referenceAngleDegrees": 0.0 }, "useSearchROI": true, "searchROIs": [ { "startX": 60.0, "startY": 60.0, "endX": 570.0, "endY": 570.0, "type": 0 } ] }
+  ]
+}

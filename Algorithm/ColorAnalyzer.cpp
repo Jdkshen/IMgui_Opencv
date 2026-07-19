@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-extern ImVec4 color;
 
 namespace ColorAnalyzer
 {
@@ -34,7 +33,7 @@ namespace ColorAnalyzer
         for (int ch = 0; ch < 3 && ch < nc; ch++)
         {
             std::vector<float> hist(histBins, 0), &out = (ch == 0 ? r.hR : ch == 1 ? r.hG
-                                                                                     : r.hB);
+                                                                                   : r.hB);
             double sum = 0, sum2 = 0;
             int total = src.rows * src.cols;
             for (int y = 0; y < src.rows; y++)
@@ -67,7 +66,7 @@ namespace ColorAnalyzer
         g_AnalyzeTimeMs = std::chrono::duration<float, std::milli>(t1 - t0).count();
         g_LastResult = r;
         static const char *cs[] = {"BGR", "HSV", "Lab", "YCbCr", "Gray"};
-        LogSystem::Add(LOG_INFO, color, "Color[%s]:R=%.1f±%.1f G=%.1f±%.1f B=%.1f±%.1f|%.3fms", cs[colorSpace], r.meanR, r.stdR, r.meanG, r.stdG, r.meanB, r.stdB, g_AnalyzeTimeMs);
+        LogSystem::Add(LOG_INFO, "Color[%s]:R=%.1f±%.1f G=%.1f±%.1f B=%.1f±%.1f|%.3fms", cs[colorSpace], r.meanR, r.stdR, r.meanG, r.stdG, r.meanB, r.stdB, g_AnalyzeTimeMs);
         return r;
     }
     cv::Mat DrawHistogram(const cv::Mat & /*img*/, const ColorResult &r, const Params &p)
@@ -102,11 +101,10 @@ namespace ColorAnalyzer
 
 nlohmann::json ColorAnalyzerITool::Save() const
 {
-    return {{"type", 9}, {"colorSpace", params.colorSpace}, {"histBins", params.histBins},
-        {"showHist", params.showHist}, {"useROI", params.useROI}, {"histHeight", params.histHeight}};
+    return {{"type", 9}, {"colorSpace", params.colorSpace}, {"histBins", params.histBins}, {"showHist", params.showHist}, {"useROI", params.useROI}, {"histHeight", params.histHeight}};
 }
 
-void ColorAnalyzerITool::Load(const nlohmann::json& j)
+void ColorAnalyzerITool::Load(const nlohmann::json &j)
 {
     params.colorSpace = j.value("colorSpace", 0);
     params.histBins = j.value("histBins", 32);
@@ -115,7 +113,7 @@ void ColorAnalyzerITool::Load(const nlohmann::json& j)
     params.histHeight = j.value("histHeight", 100);
 }
 
-ToolResult ColorAnalyzerITool::Execute(VisionContext& ctx)
+ToolResult ColorAnalyzerITool::Execute(VisionContext &ctx)
 {
     ToolResult r;
     r.toolName = GetName();

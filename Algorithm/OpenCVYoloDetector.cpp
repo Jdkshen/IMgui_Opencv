@@ -34,11 +34,10 @@ namespace OpenCVYoloDetector
             "donut", "cake", "chair", "couch", "potted plant", "bed", "dining table", "toilet",
             "tv", "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave", "oven",
             "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors",
-            "teddy bear", "hair drier", "toothbrush"
-        };
+            "teddy bear", "hair drier", "toothbrush"};
     }
 
-    static std::vector<std::string> LoadClasses(const std::string& path)
+    static std::vector<std::string> LoadClasses(const std::string &path)
     {
         std::vector<std::string> classes;
         if (!path.empty())
@@ -54,7 +53,7 @@ namespace OpenCVYoloDetector
         return classes.empty() ? DefaultCocoClasses() : classes;
     }
 
-    bool LoadModel(const std::string& onnxPath, const std::string& classesPath)
+    bool LoadModel(const std::string &onnxPath, const std::string &classesPath)
     {
         if (onnxPath.empty())
             return false;
@@ -79,10 +78,10 @@ namespace OpenCVYoloDetector
             s_ClassesPath = classesPath;
             s_Classes = LoadClasses(classesPath);
             LogSystem::Add(LOG_INFO, "YOLO OpenCV DNN: 已加载 %s, %zu 类别",
-                onnxPath.c_str(), s_Classes.size());
+                           onnxPath.c_str(), s_Classes.size());
             return true;
         }
-        catch (const cv::Exception& e)
+        catch (const cv::Exception &e)
         {
             LogSystem::Add(LOG_ERROR, "YOLO OpenCV DNN: 加载失败 - %s", e.what());
             return false;
@@ -94,12 +93,12 @@ namespace OpenCVYoloDetector
         return !s_Net.empty();
     }
 
-    const std::string& GetModelPath()
+    const std::string &GetModelPath()
     {
         return s_ModelPath;
     }
 
-    static std::vector<int64_t> ShapeOf(const cv::Mat& m)
+    static std::vector<int64_t> ShapeOf(const cv::Mat &m)
     {
         std::vector<int64_t> shape;
         if (m.dims > 0)
@@ -115,8 +114,8 @@ namespace OpenCVYoloDetector
         return shape;
     }
 
-    static std::vector<DetectedObject> Postprocess(const float* data, const std::vector<int64_t>& shape,
-        float confThreshold, float nmsThreshold, cv::Rect roi)
+    static std::vector<DetectedObject> Postprocess(const float *data, const std::vector<int64_t> &shape,
+                                                   float confThreshold, float nmsThreshold, cv::Rect roi)
     {
         std::vector<DetectedObject> detections;
         if (!data || shape.empty())
@@ -260,9 +259,10 @@ namespace OpenCVYoloDetector
         return detections;
     }
 
-    std::vector<DetectedObject> Detect(const cv::Mat& image, float confThreshold, float nmsThreshold, cv::Rect roi)
+    std::vector<DetectedObject> Detect(const cv::Mat &image, float confThreshold, float nmsThreshold, cv::Rect roi)
     {
-        try {
+        try
+        {
             if (s_Net.empty() || image.empty())
                 return {};
 
@@ -277,7 +277,7 @@ namespace OpenCVYoloDetector
             cv::Mat crop = image(roi);
             auto t0 = std::chrono::steady_clock::now();
             cv::Mat blob = cv::dnn::blobFromImage(crop, 1.0 / 255.0, cv::Size(s_InputW, s_InputH),
-                cv::Scalar(), true, false, CV_32F);
+                                                  cv::Scalar(), true, false, CV_32F);
             auto t1 = std::chrono::steady_clock::now();
 
             s_Net.setInput(blob);
@@ -301,13 +301,16 @@ namespace OpenCVYoloDetector
             g_OpenCVYoloTotalMs = std::chrono::duration<float, std::milli>(t3 - total0).count();
             return result;
         }
-        catch (const cv::Exception& e) {
+        catch (const cv::Exception &e)
+        {
             LogSystem::Add(LOG_ERROR, "YOLO OpenCV DNN: inference failed - %s", e.what());
         }
-        catch (const std::exception& e) {
+        catch (const std::exception &e)
+        {
             LogSystem::Add(LOG_ERROR, "YOLO OpenCV DNN: inference failed - %s", e.what());
         }
-        catch (...) {
+        catch (...)
+        {
             LogSystem::Add(LOG_ERROR, "YOLO OpenCV DNN: inference failed with an unknown error");
         }
         g_OpenCVYoloPreMs = 0.0f;

@@ -1,6 +1,7 @@
 #define NOMINMAX
 #define ORT_API_MANUAL_INIT
 #include "YOLODetector.h"
+#include "../Core/RealtimeDetectionState.h"
 #include "../Log/LogSystem.h"
 
 #include <onnxruntime/onnxruntime_cxx_api.h>
@@ -637,10 +638,12 @@ namespace YOLODetector
 
             // 输出分步耗时供外部读取
             auto t3 = std::chrono::steady_clock::now();
-            g_YoloDetailPreMs  = std::chrono::duration<float, std::milli>(t1 - t0).count();
-            g_YoloDetailInfMs  = std::chrono::duration<float, std::milli>(t2 - t1).count();
-            g_YoloDetailPostMs = std::chrono::duration<float, std::milli>(t3 - t2).count();
-            g_YoloDetailTotalMs = std::chrono::duration<float, std::milli>(t3 - t0).count();
+            RealtimeDetectionState::Performance stats;
+            stats.preprocessMs = std::chrono::duration<float, std::milli>(t1 - t0).count();
+            stats.inferenceMs = std::chrono::duration<float, std::milli>(t2 - t1).count();
+            stats.postprocessMs = std::chrono::duration<float, std::milli>(t3 - t2).count();
+            stats.totalMs = std::chrono::duration<float, std::milli>(t3 - t0).count();
+            RealtimeDetectionState::SetStats(stats);
 
             return result;
         }
@@ -848,7 +851,3 @@ namespace YOLODetector
 } // namespace YOLODetector
 
 // 分步耗时（每次检测后更新，供外部读取）
-float g_YoloDetailPreMs = 0;
-float g_YoloDetailInfMs = 0;
-float g_YoloDetailPostMs = 0;
-float g_YoloDetailTotalMs = 0;

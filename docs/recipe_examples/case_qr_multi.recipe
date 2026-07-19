@@ -1,0 +1,25 @@
+{
+  "version": 2,
+  "name": "case_qr_multi",
+  "imagePath": "../../assets/images/qr_tests/qr_extreme_multi_mixed.png",
+  "rois": [ { "startX": 0.0, "startY": 0.0, "endX": 900.0, "endY": 620.0, "type": 0 } ],
+  "tools": [
+    { "type": 12, "label": "\u539f\u56fe", "showResultLabels": true },
+    {
+      "type": 14,
+      "label": "\u591a\u7801\u538b\u529b\u6d4b\u8bd5",
+      "showResultLabels": true,
+      "qrUseROI": true,
+      "qrDetectMulti": true,
+      "qrEnhance": true,
+      "qrMinSize": 20,
+      "qrShowText": true,
+      "qrEngine": 2,
+      "qrFormatMask": 31,
+      "qrFilterDuplicates": true,
+      "useSearchROI": true,
+      "searchROIs": [ { "startX": 0.0, "startY": 0.0, "endX": 900.0, "endY": 620.0, "type": 0 } ],
+      "judgement": { "enabled": true, "stopOnFailure": false, "minResultCount": 1, "maxResultCount": 5 }
+    }
+  ]
+}

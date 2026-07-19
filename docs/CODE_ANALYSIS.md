@@ -55,13 +55,13 @@
               └──────────────────────┘
                           │
                           ▼
-              ┌──────────────────────┐
-              │ 图片加载处理（调度）   │
-              │ ├─ pendingPath→      │
-              │ │  TestReadImage()   │
-              │ └─ gNeedUpload→      │
-              │    UploadToDX12()   │
-              └──────────────────────┘
+              ┌──────────────────────────┐
+              │ Core 图片导入与上传调度    │
+              │ ├─ ImageImportService   │
+              │ ├─ AsyncImageLoader     │
+              │ ├─ ImageState           │
+              │ └─ ImageLoadController  │
+              └──────────────────────────┘
 ```
 
 ---
@@ -87,10 +87,10 @@
 | `Core/FrameNavigation.h/cpp` | **图片导航** | 图片序列上一张/下一张切换 |
 | `Core/ImageLoadController.h/cpp` | **加载控制器** | 图片加载请求、异步回调和上传调度 |
 | `Core/LiveYoloRunner.h/cpp` | **实时 YOLO 调度** | 视频/摄像头实时推理和耗时统计 |
-| `Core/VisionContext.h/cpp` | **统一视觉上下文** | `struct VisionContext { image, rois, frozenTemplate, unifiedResults, zoom/pan }` 替代散落全局变量 |
+| `Core/VisionContext.h/cpp` | **统一视觉上下文** | `struct VisionContext { image, rois, frozenTemplate, unifiedResults }` 替代散落全局变量；视图变换由 `ImageViewState` 管理 |
 | `Core/ToolInstance.h` / `Core/ToolTypes.h` | **工具元数据** | 工具实例参数、类型常量和工具名称 |
 | `Core/ToolChainState.h/cpp` | **工具链状态** | 工具输入/输出图像链路状态 |
-| `Core/ToolExecutor.h/cpp` | **统一工具执行器** | type 0-11 统一分发到 `RunViaITool()`，type 12 原图由 `ToolController` 特殊处理 |
+| `Core/ToolExecutor.h/cpp` | **统一工具执行器** | type 0-11、13 统一分发到 `RunViaITool()`，type 12 原图由 `ToolController` 特殊处理 |
 | `Core/ToolController.h/cpp` | **工具调度器** | queue 驱动 + Tick() 替代旧 ExecState 状态机 |
 | `Core/FrameRenderer.h/cpp` | **帧渲染提交** | 每帧渲染提交和渲染资源收尾 |
 | `UI/DockSpaceHost.h/cpp` | **主框架** | DockSpace 容器 + 菜单栏 + 配方菜单 |
@@ -198,12 +198,10 @@ while (!done)
     backBufferIdx = pSwapChain->GetCurrentBackBufferIndex()
     Reset CommandAllocator + CommandList
 
-    // ── ⑦ 图片加载调度 ──
-    if pendingPath 不为空:
-        uploadRequest = pendingPath; pendingPath.clear()
-        OpenCVTest::TestReadImage(...)
-    if gNeedUpload:
-        UploadToDX12(...)  // 处理阈值结果回传
+    // ── ⑦ 图片纹理上传调度 ──
+    ImageLoadController::ProcessPendingUpload()
+        → 从 ImageState 读取待显示图像
+        → UploadToDX12(...)
 
     // ── ⑧ DX12 渲染管线 ──
     Barrier: PRESENT → RENDER_TARGET
@@ -262,8 +260,7 @@ WM_DESTROY → PostQuitMessage(0)
 | `g_pd3dSrvDescHeap` | `ID3D12DescriptorHeap*` | SRV 描述符堆 |
 | `gSrvCpuHandle` | `D3D12_CPU_DESCRIPTOR_HANDLE` | SRV CPU 句柄 |
 | `gSrvGpuHandle` | `D3D12_GPU_DESCRIPTOR_HANDLE` | SRV GPU 句柄（传给 ImGui::Image） |
-| `pendingPath` | `std::string` | 待加载的图片路径（UI写入→主循环读取） |
-| `gImageWidth/Height` | `int` | 当前图片尺寸 |
+| `ImageState::Width/Height()` | `int` | 当前图片尺寸 |
 
 #### 3.2.2 `InitDX12Context()` 函数
 
@@ -279,24 +276,25 @@ WM_DESTROY → PostQuitMessage(0)
 
 ---
 
-### 3.3 图片加载管线 — `Core/OpenCVTest.h/cpp`
+### 3.3 图片加载管线 — `Core/ImageImportService.*`
 
 #### 3.3.1 加载流程
 
 ```
 用户点击"选择图片"
   → OpenFileDialog() 返回路径
-  → pendingPath = 路径           (UI线程写入)
-  → 主循环检测 pendingPath
-    → uploadRequest = pendingPath  (主线程读取)
-    → OpenCVTest::TestReadImage()
-       ├── ① 参数检查
-       ├── ② 旧纹理 → 延迟释放队列 (gPendingReleaseTextures)
-       ├── ③ cv::imread(path, IMREAD_UNCHANGED)
-       ├── ④ gImage = img; gOriginalImage = img;
-       ├── ⑤ gImageWidth/Height = img.cols/rows
-       ├── ⑥ 通道转换 (BGR/BGRA/GRAY → RGBA)
-       └── ⑦ UploadToDX12() 上传 GPU
+  → ImageImportService::ImportImage(path)
+     ├── ① 校验路径并清理旧执行/叠加状态
+     ├── ② FrameSourceState 切换到单图模式
+     ├── ③ AsyncImageLoader::Request(path)
+     └── ④ ImageLoadController 接收解码结果
+          ├── ImageState::SetImage(img)
+          ├── 更新宽高、版本号和原图
+          └── 请求 DX12 纹理上传
+
+选择文件夹时由 `ImportFolder()` 递归收集受支持图片，并通过
+`FrameNavigation` 切换当前帧。空目录、路径不存在和解码失败都会返回
+可展示的错误信息。
 ```
 
 #### 3.3.2 `UploadToDX12()` 核心逻辑
@@ -373,7 +371,7 @@ DockSpace → 子窗口可随意停靠/浮动
 
 ```
 按钮: "并发日志测试" → 创建10个线程写日志（展示线程安全）
-按钮: "日志测试按钮" → 打印 pendingPath 内容
+按钮: "日志测试按钮" → 输出当前图像状态摘要
 输入框: 自定义日志输入 → "发送到日志" 按钮
 ```
 
@@ -609,7 +607,7 @@ InitFonts(dpi_scale):
 #### 3.8.1 管线数据流
 
 ```
-gImage (原图)
+VisionContext.image（只读输入）
   │
   ├── [可选] 灰度化 gUseGray
   │     BGRA/BGR/GRAY → GRAY
@@ -623,14 +621,9 @@ gImage (原图)
   ├── [可选] Canny 边缘检测 gPipe.enableCanny
   │     Canny(lowThreshold, highThreshold)
   │
-  ├── → RGBA 转换
-  │     GRAY/BGR/BGRA → RGBA
-  │
-  ├── gPendingUpload = rgba
-  ├── gNeedUpload = true
-  │
-  └── 主循环检测 gNeedUpload
-        → UploadToDX12() 更新 GPU 纹理
+  └── ToolResult.debugImage（新图像输出）
+        → ResultPublisher / ImageState
+        → ImageLoadController 请求纹理更新
 ```
 
 #### 3.8.2 PipelineState 参数
@@ -773,15 +766,15 @@ struct DetectedObject {
        │                            │ 返回路径
        ▼                            ▼
 ┌──────────────┐           ┌───────────────┐
-│UI::ShowOpenCV│ ←──────── │ pendingPath   │
-│ 显示图片      │           │ (全局变量)     │
+│UI::ShowOpenCV│ ────────→ │ImageImportSvc │
+│ 显示图片      │           │ (Core 服务)    │
 └──────┬──────┘           └──────┬───────┘
-       │                         │ 主循环检测
+       │                         │ 异步解码
        ▼                         ▼
 ┌───────────────────────────────────────────┐
-│OpenCVTest::TestReadImage()                │
+│AsyncImageLoader / ImageLoadController     │
 │  ├── cv::imread() 从硬盘读取               │
-│  ├── gImage = img (OpenCV Mat)            │
+│  ├── ImageState::SetImage(img)            │
 │  ├── 通道转换 BGR→RGBA                     │
 │  └── UploadToDX12() 上传 GPU               │
 │         ├── 创建 D3D12 Texture (DEFAULT)   │
@@ -805,7 +798,7 @@ struct DetectedObject {
                         │   ├─ 二值化    │
                         │   └─ Canny    │
                         └──────┬────────┘
-                               │ gPendingUpload
+                               │ ToolResult.debugImage
                                ▼
                         ┌──────────────┐
                         │UploadToDX12()│
@@ -852,6 +845,8 @@ struct DetectedObject {
 - `opencv_world500*.dll`、`opencv_videoio_ffmpeg500_64.dll`、`opencv_videoio_msmf500_64.dll` — OpenCV 5.0 运行时
 - `onnxruntime*.dll` — ONNX Runtime 运行时
 - `yolo11n.onnx` — YOLO11 模型（PostBuild 自动复制到 models/）
+- `ncnn.dll` / `ncnn.lib` — OCR 的 NCNN 运行时和链接库
+- `models/ppocrv6/*` — PP-OCRv6 tiny 检测/识别模型和字典
 
 ---
 

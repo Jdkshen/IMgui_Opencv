@@ -2,7 +2,6 @@
 #include "LineDetector.h"
 #include "../Log/LogSystem.h"
 #include <chrono>
-extern ImVec4 color;
 namespace LineDetector
 {
     float g_LineTimeMs = 0;
@@ -28,7 +27,7 @@ namespace LineDetector
         g_LineCount = 0;
         if (img.empty())
         {
-            LogSystem::Add(LOG_ERROR, color, "Line:空图");
+            LogSystem::Add(LOG_ERROR, "Line:空图");
             return {};
         }
         cv::Rect r = p.roi;
@@ -73,7 +72,7 @@ namespace LineDetector
         { return std::chrono::duration<float, std::milli>(b - a).count(); };
         g_LineTimeMs = ms(t0, t2);
         g_LineCount = (int)res.size();
-        LogSystem::Add(LOG_INFO, color, "直线:Canny%.3fms+Hough%.3fms|%zu->%d", ms(t0, t1), ms(t1, t2), raw.size(), g_LineCount);
+        LogSystem::Add(LOG_INFO, "直线:Canny%.3fms+Hough%.3fms|%zu->%d", ms(t0, t1), ms(t1, t2), raw.size(), g_LineCount);
         return res;
     }
     cv::Mat DrawLines(const cv::Mat &img, const std::vector<LineResult> &ls, const Params &p)
