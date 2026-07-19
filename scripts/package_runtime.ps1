@@ -38,7 +38,10 @@ if ($IncludeCudaProvider) {
 foreach ($dll in $runtimeDlls) {
     $source = Join-Path $buildDir $dll
     if (-not (Test-Path -LiteralPath $source)) {
-        throw "Required runtime dependency not found: $source"
+        $source = Join-Path (Join-Path $repo "redist") $dll
+    }
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+        throw "Required runtime dependency not found in build output or redist: $dll"
     }
     Copy-Item -LiteralPath $source -Destination $Output -Force
 }
