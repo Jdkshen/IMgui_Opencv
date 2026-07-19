@@ -127,19 +127,22 @@ distortion calibration remains a later extension.
 
 ## P4 Release and Hardware
 
-- Validate GitHub Actions on a clean Windows runner.
-- `runtime.zip` builds locally and its required executable/OpenCV/NCNN entries pass
-  an archive smoke check; keep this check in the release gate.
+- GitHub Actions passes on a clean Windows runner and uploads the verified runtime ZIP.
+- `runtime.zip` validates the executable, runtime libraries, example recipes, template
+  assets, sample images, hardware documentation, and open62541 source/license entries.
 - Camera, PLC, Modbus TCP, and OPC UA contracts plus adapter lifecycle registration are
-  implemented in Core; concrete vendor/protocol implementations remain.
+  implemented in Core.
 - `HardwareRuntimeService` publishes registered camera frames into `FrameSourceState` and
   routes Pass/Fail/Error status to PLC tags, Modbus coils, or OPC UA nodes. Offline mock
   adapters cover all three output routes.
 - Concrete portable adapters now cover OpenCV camera indexes/stream URLs, Modbus TCP
   functions 01/03/05/06 over Winsock, and named PLC tags mapped to Modbus coils or
   scaled holding registers. Protocol and runtime integration are regression-tested.
-- Native OPC UA and vendor-specific camera/PLC SDK adapters remain deployment choices;
-  see `docs/HARDWARE_INTEGRATION.md` for the required Core boundary.
+- Native OPC UA is implemented with open62541 v1.4.17 and protocol-tested against a real
+  local OPC UA TCP server. The bundled build supports anonymous SecurityPolicy None;
+  certificate-enabled deployments require an approved encryption-enabled rebuild.
+- Vendor-specific camera/PLC SDK adapters remain deployment choices; see
+  `docs/HARDWARE_INTEGRATION.md` for the required Core boundary.
 - Keep device implementations out of UI and preserve offline recipe/regression operation.
 
 ## Per-task Workflow

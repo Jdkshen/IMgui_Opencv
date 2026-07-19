@@ -157,6 +157,7 @@ ROI 交互主要在 `UI/ROIManager.cpp` 中完成，包含控制点、拖动、�
 | `OpenCvCameraAdapter.*` | UVC、摄像头索引和 OpenCV 视频流 URL 的通用相机实现 |
 | `ModbusTcpAdapter.*` | Winsock Modbus TCP 01/03/05/06 客户端与协议校验 |
 | `ModbusPlcAdapter.*` | PLC 标签到 Modbus 线圈/寄存器及工程量的映射 |
+| `Open62541OpcUaAdapter.*` | open62541 原生 OPC UA TCP 客户端、NodeId 与标量读写 |
 | `LiveYoloRunner.*` | 实时 YOLO 推理调度和耗时统计 |
 | `FrameRenderer.*` | 每帧渲染提交和渲染资源收尾 |
 | `VisionContext.*` | 统一视觉上下文，保存图片、ROI、模板和结果 |

@@ -104,14 +104,41 @@ HardwareRuntimeService::PublishInspectionStatus(result.status, output);
 
 `Pass` writes true. `Fail` and `Error` write false unless `invert` is enabled.
 
-## OPC UA and vendor SDKs
+## OPC UA
 
-`IOpcUaAdapter` and adapter lifecycle support are complete, but the repository does not
-bundle an OPC UA stack. A production implementation should use the selected deployment
-stack, such as open62541, UA-.NETStandard through a process boundary, or the PLC vendor
-SDK. The implementation must remain behind `IOpcUaAdapter` so offline recipes and tests
-do not depend on a connected server.
+`Open62541OpcUaAdapter` is a native OPC UA TCP client backed by open62541 v1.4.17. It
+supports anonymous SecurityPolicy None endpoints, standard text NodeIds such as
+`ns=2;s=Inspection.OK`, connection timeouts, and scalar values represented by
+`DeviceValue`:
 
-The same rule applies to native industrial-camera SDKs. Add the SDK-specific adapter in
-Core, keep its DLLs optional in packaging, and preserve the OpenCV adapter as the default
-portable path.
+- Boolean
+- signed and unsigned 8/16/32/64-bit integers (within `int64_t` range)
+- Float and Double
+- String
+
+```cpp
+auto opcUa = std::make_unique<Open62541OpcUaAdapter>();
+DeviceEndpoint endpoint;
+endpoint.address = "192.168.1.30"; // Full opc.tcp:// URL is also accepted
+endpoint.port = 4840;              // 0 selects the OPC UA default 4840
+endpoint.resource = "factory";    // Optional endpoint URL path
+endpoint.timeoutMs = 1500;
+
+opcUa->Connect(endpoint);
+opcUa->WriteNode("ns=2;s=Inspection.OK", DeviceValue(true));
+HardwareAdapterService::Register("opcua-main", std::move(opcUa));
+```
+
+Integer and floating-point writes first inspect the target node type. For example, an
+`int64_t` `DeviceValue` is range-checked and written as Int16 or Int32 when that is the
+server node's declared type. Node/type errors keep the session connected; transport,
+session, timeout, and SecureChannel errors move the adapter to `Fault`.
+
+The bundled build intentionally has encryption disabled and must not silently connect to
+certificate-protected production endpoints. Deployments requiring Sign/Encrypt must
+rebuild open62541 with an approved OpenSSL or mbedTLS configuration and provision the
+client certificate, private key, trust list, and rejected-certificate policy.
+
+The same adapter rule applies to native industrial-camera SDKs. Add the SDK-specific
+implementation in Core, keep its DLLs optional in packaging, and preserve the OpenCV
+adapter as the default portable UVC/RTSP path.

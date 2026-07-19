@@ -24,9 +24,10 @@ pwsh -File .\scripts\package_runtime.ps1 -IncludeCudaProvider
 
 `.github/workflows/windows-build.yml` checks out Git LFS runtime dependencies, builds both Visual Studio projects, and runs the complete `RegressionTests.exe` command. Missing optional OCR or YOLO model files do not fail the build; the runtime package simply excludes absent optional assets.
 
-Winsock is a Windows system dependency and is linked through `Ws2_32.lib`; it does not
-add a DLL to the runtime archive. Vendor camera/PLC SDK DLLs and an OPC UA stack are not
-bundled until a deployment-specific adapter is selected.
+Winsock and IP Helper are Windows system dependencies linked through `Ws2_32.lib` and
+`Iphlpapi.lib`; they do not add DLLs to the runtime archive. The open62541 OPC UA client
+is statically linked. Its exact amalgamation source, header, version metadata, and MPL-2.0
+license are included in the runtime archive. Vendor camera/PLC SDK DLLs remain optional.
 
 ## Release acceptance
 

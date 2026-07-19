@@ -51,7 +51,8 @@ foreach ($source in @(
     "assets\images\qr_tests",
     "docs\recipe_examples",
     "recipes",
-    "models\ppocrv6"
+    "models\ppocrv6",
+    "third_party\open62541"
 )) {
     $path = Join-Path $repo $source
     if (Test-Path $path) {
@@ -121,6 +122,10 @@ try {
         "docs/recipe_examples/case_pipeline.recipe",
         "docs/recipe_examples/12345_tpl0.png",
         "docs/recipe_examples/12345_tpl1.png",
+        "third_party/open62541/LICENSE",
+        "third_party/open62541/README.md",
+        "third_party/open62541/open62541.c",
+        "third_party/open62541/open62541.h",
         "assets/images/qr_tests/qr_test.png",
         "assets/images/ocr_product_sample.jpg",
         "docs/HARDWARE_INTEGRATION.md"

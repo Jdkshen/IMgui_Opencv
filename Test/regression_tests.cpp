@@ -29,6 +29,7 @@
 #include "../Core/ModbusTcpAdapter.h"
 #include "../Core/ModbusPlcAdapter.h"
 #include "../Core/OpenCvCameraAdapter.h"
+#include "../Core/Open62541OpcUaAdapter.h"
 #include "../Core/OpenFileDialog.h"
 #include "../Core/ResultOverlayState.h"
 #include "../Core/RealtimeDetectionState.h"
@@ -48,10 +49,13 @@
 #include "../Core/VisionContext.h"
 #include "../UI/ROIManager.h"
 #include "../UI/ToolsWindow.h"
+#include "../third_party/open62541/open62541.h"
 
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
 
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -63,6 +67,115 @@
 
 namespace
 {
+class LocalOpcUaTestServer
+{
+public:
+    ~LocalOpcUaTestServer()
+    {
+        Stop();
+    }
+
+    bool Start()
+    {
+        for (std::uint16_t candidate = 48550; candidate < 48570; ++candidate)
+        {
+            server_ = UA_Server_new();
+            if (!server_)
+                return false;
+
+            UA_StatusCode status = UA_ServerConfig_setMinimal(
+                UA_Server_getConfig(server_), candidate, nullptr);
+            if (status == UA_STATUSCODE_GOOD)
+                status = AddNodes();
+            if (status == UA_STATUSCODE_GOOD)
+                status = UA_Server_run_startup(server_);
+            if (status == UA_STATUSCODE_GOOD)
+            {
+                port_ = candidate;
+                running_.store(true);
+                worker_ = std::thread([this]()
+                {
+                    while (running_.load())
+                    {
+                        UA_Server_run_iterate(server_, false);
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    }
+                });
+                return true;
+            }
+
+            UA_Server_delete(server_);
+            server_ = nullptr;
+        }
+        return false;
+    }
+
+    void Stop()
+    {
+        running_.store(false);
+        if (worker_.joinable())
+            worker_.join();
+        if (server_)
+        {
+            UA_Server_run_shutdown(server_);
+            UA_Server_delete(server_);
+            server_ = nullptr;
+        }
+        port_ = 0;
+    }
+
+    std::uint16_t Port() const
+    {
+        return port_;
+    }
+
+private:
+    UA_StatusCode AddVariable(const char* nodeName, const void* initialValue,
+        const UA_DataType& type)
+    {
+        UA_VariableAttributes attributes = UA_VariableAttributes_default;
+        UA_StatusCode status = UA_Variant_setScalarCopy(
+            &attributes.value, initialValue, &type);
+        if (status != UA_STATUSCODE_GOOD)
+            return status;
+        attributes.dataType = type.typeId;
+        attributes.accessLevel = UA_ACCESSLEVELMASK_READ | UA_ACCESSLEVELMASK_WRITE;
+        attributes.displayName = UA_LOCALIZEDTEXT_ALLOC("en-US", nodeName);
+
+        status = UA_Server_addVariableNode(server_,
+            UA_NODEID_STRING(1, const_cast<char*>(nodeName)),
+            UA_NODEID_NUMERIC(0, UA_NS0ID_OBJECTSFOLDER),
+            UA_NODEID_NUMERIC(0, UA_NS0ID_ORGANIZES),
+            UA_QUALIFIEDNAME(1, const_cast<char*>(nodeName)),
+            UA_NODEID_NUMERIC(0, UA_NS0ID_BASEDATAVARIABLETYPE),
+            attributes, nullptr, nullptr);
+        UA_VariableAttributes_clear(&attributes);
+        return status;
+    }
+
+    UA_StatusCode AddNodes()
+    {
+        const UA_Boolean inspectionPass = UA_FALSE;
+        UA_StatusCode status = AddVariable("InspectionPass", &inspectionPass,
+            UA_TYPES[UA_TYPES_BOOLEAN]);
+        const UA_Int32 count = 7;
+        if (status == UA_STATUSCODE_GOOD)
+            status = AddVariable("Count", &count, UA_TYPES[UA_TYPES_INT32]);
+        const UA_Float ratio = 1.25f;
+        if (status == UA_STATUSCODE_GOOD)
+            status = AddVariable("Ratio", &ratio, UA_TYPES[UA_TYPES_FLOAT]);
+        UA_String lineName = UA_STRING(const_cast<char*>("line-a"));
+        if (status == UA_STATUSCODE_GOOD)
+            status = AddVariable("LineName", &lineName, UA_TYPES[UA_TYPES_STRING]);
+        return status;
+    }
+
+    UA_Server* server_ = nullptr;
+    std::atomic<bool> running_{false};
+    std::thread worker_;
+    std::uint16_t port_ = 0;
+};
+
 struct TestDisposableTool final : ITool
 {
     explicit TestDisposableTool(bool* destroyedFlag) : destroyed(destroyedFlag) {}
@@ -1998,6 +2111,83 @@ void TestConcreteOpenCvCameraAdapter()
     FrameSourceState::Clear();
 }
 
+void TestConcreteOpen62541OpcUaAdapter()
+{
+    HardwareAdapterService::Clear();
+    LocalOpcUaTestServer server;
+    Require(server.Start(), "local OPC UA test server failed to start");
+
+    auto adapter = std::make_unique<Open62541OpcUaAdapter>();
+    Open62541OpcUaAdapter* adapterView = adapter.get();
+    DeviceEndpoint endpoint;
+    endpoint.address = "127.0.0.1";
+    endpoint.port = server.Port();
+    endpoint.timeoutMs = 1000;
+    Require(adapterView->Connect(endpoint).success &&
+        adapterView->ConnectionState() == DeviceConnectionState::Connected &&
+        std::string(adapterView->AdapterName()).find("open62541") != std::string::npos,
+        "native open62541 OPC UA adapter failed to connect");
+
+    DeviceValue value;
+    Require(adapterView->ReadNode("ns=1;s=InspectionPass", value).success &&
+        !std::get<bool>(value), "OPC UA Boolean read failed");
+    Require(adapterView->WriteNode("ns=1;s=InspectionPass", DeviceValue(true)).success &&
+        adapterView->ReadNode("ns=1;s=InspectionPass", value).success &&
+        std::get<bool>(value), "OPC UA Boolean write failed");
+
+    Require(adapterView->ReadNode("ns=1;s=Count", value).success &&
+        std::get<std::int64_t>(value) == 7,
+        "OPC UA Int32 read conversion failed");
+    Require(adapterView->WriteNode("ns=1;s=Count", DeviceValue(std::int64_t(42))).success &&
+        adapterView->ReadNode("ns=1;s=Count", value).success &&
+        std::get<std::int64_t>(value) == 42,
+        "OPC UA integer write did not preserve the target node type");
+    Require(!adapterView->WriteNode("ns=1;s=Count",
+        DeviceValue(std::int64_t(1) << 40)).success &&
+        adapterView->ConnectionState() == DeviceConnectionState::Connected,
+        "OPC UA integer range validation regressed");
+
+    Require(adapterView->ReadNode("ns=1;s=Ratio", value).success &&
+        std::abs(std::get<double>(value) - 1.25) < 0.001,
+        "OPC UA Float read conversion failed");
+    Require(adapterView->WriteNode("ns=1;s=Ratio", DeviceValue(2.75)).success &&
+        adapterView->ReadNode("ns=1;s=Ratio", value).success &&
+        std::abs(std::get<double>(value) - 2.75) < 0.001,
+        "OPC UA floating-point write did not preserve the target node type");
+
+    Require(adapterView->ReadNode("ns=1;s=LineName", value).success &&
+        std::get<std::string>(value) == "line-a",
+        "OPC UA String read failed");
+    Require(adapterView->WriteNode("ns=1;s=LineName",
+        DeviceValue(std::string("line-b"))).success &&
+        adapterView->ReadNode("ns=1;s=LineName", value).success &&
+        std::get<std::string>(value) == "line-b",
+        "OPC UA String write failed");
+
+    Require(!adapterView->ReadNode("not-a-node-id", value).success &&
+        adapterView->ConnectionState() == DeviceConnectionState::Connected,
+        "invalid OPC UA NodeId should not drop the connection");
+
+    Require(HardwareAdapterService::Register("opcua-native", std::move(adapter)),
+        "native OPC UA adapter registration failed");
+    HardwareOutputBinding output;
+    output.kind = HardwareOutputKind::OpcUaNode;
+    output.adapterKey = "opcua-native";
+    output.target = "ns=1;s=InspectionPass";
+    Require(HardwareRuntimeService::PublishInspectionStatus(
+        ToolResultStatus::Fail, output).success &&
+        adapterView->ReadNode(output.target, value).success && !std::get<bool>(value),
+        "inspection status did not flow through the native OPC UA adapter");
+    Require(HardwareRuntimeService::PublishInspectionStatus(
+        ToolResultStatus::Pass, output).success &&
+        adapterView->ReadNode(output.target, value).success && std::get<bool>(value),
+        "passing inspection status did not reach the OPC UA node");
+
+    HardwareAdapterService::Clear();
+    Require(HardwareAdapterService::Find("opcua-native") == nullptr,
+        "native OPC UA adapter cleanup regressed");
+}
+
 void TestModbusPlcTagMappingAdapter()
 {
     HardwareAdapterService::Clear();
@@ -2995,9 +3185,16 @@ int main(int argc, char** argv)
         TestOCRToolMissingEngineFailsWithTextResultContract();
         TestWindowsPPOCREngineUnavailableContract();
         TestWindowsPPOCRRecognitionCropKeepsHorizontalAspect();
+#if defined(IMGUI_OPENCV_ENABLE_NCNN_OCR)
         TestWindowsPPOCREngineLoadsBundledModels();
+#else
+        std::cout << "regression_tests: skipped NCNN OCR model inference "
+                     "(backend not enabled in this build)\n";
+#endif
         TestWindowsPPOCREngineResolvesRelativeModelsFromReleaseDir();
+#if defined(IMGUI_OPENCV_ENABLE_NCNN_OCR)
         TestOCRToolDefaultRelativeModelsWorkOutsideReleaseCwd();
+#endif
         TestMorphologyToolITool();
         TestColorAnalyzerITool();
         TestBlobToolITool();
@@ -3008,6 +3205,7 @@ int main(int argc, char** argv)
         TestHardwareAdapterServiceLifecycle();
         TestConcreteModbusTcpAdapterProtocol();
         TestConcreteOpenCvCameraAdapter();
+        TestConcreteOpen62541OpcUaAdapter();
         TestModbusPlcTagMappingAdapter();
         TestCalibrationFitter();
         TestThresholdToolITool();

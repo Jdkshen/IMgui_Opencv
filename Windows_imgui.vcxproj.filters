@@ -89,6 +89,7 @@
     <ClInclude Include="Core\ModbusTcpAdapter.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ModbusPlcAdapter.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\OpenCvCameraAdapter.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\Open62541OpcUaAdapter.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\HardwareRuntimeService.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\FrameRenderer.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ImageLoadController.h"><Filter>Core</Filter></ClInclude>
@@ -187,6 +188,7 @@
     <ClCompile Include="Core\ModbusTcpAdapter.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ModbusPlcAdapter.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\OpenCvCameraAdapter.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\Open62541OpcUaAdapter.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\HardwareRuntimeService.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\FrameRenderer.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ImageLoadController.cpp"><Filter>Core</Filter></ClCompile>
@@ -269,5 +271,9 @@
   <ItemGroup>
     <None Include="README.md" />
     <None Include="LICENSE" />
+    <None Include="third_party\open62541\LICENSE" />
+    <None Include="third_party\open62541\README.md" />
+    <None Include="third_party\open62541\open62541.c" />
+    <None Include="third_party\open62541\open62541.h" />
   </ItemGroup>
 </Project>

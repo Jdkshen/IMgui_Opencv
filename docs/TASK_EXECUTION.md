@@ -21,8 +21,8 @@
 | P2-2 | 标定与 Fixture 产品化 | ✅ 多点 X/Y 比例拟合、透视拟合、逐点残差、RMS/最大残差、标定文件导入导出和 Fixture 坐标轴已接入；后续补镜头畸变标定 | `Core/CalibrationFitter.*`、`Core/CalibrationModel.*`、`Core/FixtureTransform.*`, `UI/ImageViewer.*` |
 | P2-3 | SPC 与报表 | ✅ 均值、标准差、Cp/Cpk、测量项选择、统计窗口、趋势图和 CSV 导出 | `Core/ResultExporter.*`、`Core/InspectionHistory.*`、`UI/StatsWindow.*` |
 | P3-1 | 工具链体验 | ✅ 启用/禁用、复制、稳定 ID、运行前检查、依赖显示/循环校验、分组筛选及批量启用/标签/失败策略 | `Core/ToolChainPreflight.*`、`Core/ToolChainValidator.*`、`Core/ToolChainState.*`、`UI/ToolsWindow.*` |
-| P4-1 | 工程发布 | 🟡 CI、完整回归、Git LFS checkout 和 `runtime.zip` 脚本已完成本地审查；待 GitHub clean runner 实跑和 Release 发布 | `.github/workflows/`、`scripts/`、`docs/RELEASE.md` |
-| P4-2 | 设备平台化 | 🟡 公共适配器和生命周期已完成；新增可运行的 OpenCV/UVC/RTSP 相机、Winsock Modbus TCP 01/03/05/06、Modbus PLC 标签映射；原生 OPC UA 和厂商 SDK 适配仍待选型 | `Core/HardwareAdapters.*`、`Core/OpenCvCameraAdapter.*`、`Core/ModbusTcpAdapter.*`、`Core/ModbusPlcAdapter.*` |
+| P4-1 | 工程发布 | ✅ GitHub clean runner 已完成主程序、回归工程、完整测试、运行包校验和 artifact 上传；Git LFS 与可迁移案例资源已验证 | `.github/workflows/`、`scripts/`、`docs/RELEASE.md` |
+| P4-2 | 设备平台化 | ✅ 通用途径已完成：OpenCV/UVC/RTSP 相机、Winsock Modbus TCP 01/03/05/06、Modbus PLC 标签映射、open62541 原生 OPC UA TCP；厂商专用 SDK 由目标设备适配 | `Core/HardwareAdapters.*`、`Core/OpenCvCameraAdapter.*`、`Core/ModbusTcpAdapter.*`、`Core/ModbusPlcAdapter.*`、`Core/Open62541OpcUaAdapter.*` |
 
 ## 任务描述模板
 
