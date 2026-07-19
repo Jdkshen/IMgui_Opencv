@@ -32,7 +32,7 @@ Release/
 imgui.ini
 imgui_log.txt
 theme.cfg
-Log/
+Log/*.log
 recipes/
 .codegraph/*
 !.codegraph/.gitignore
