@@ -56,13 +56,13 @@
       <AdditionalOptions>/utf-8 /FS %(AdditionalOptions)</AdditionalOptions>
       <AdditionalIncludeDirectories>$(ProjectDir)..\include\ncnn;$(ProjectDir)..\include\opencv;$(ProjectDir)..\include;$(ProjectDir)..;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
-      <PreprocessorDefinitions>_CONSOLE;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_CONSOLE;_DEBUG;IMGUI_OPENCV_ENABLE_ZXING_CPP;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(ProjectDir)..\redist;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>opencv_world500d.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>opencv_world500d.lib;zxingcppd.lib;Comdlg32.lib;Ole32.lib;Shell32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>xcopy /Y "$(ProjectDir)..\redist\opencv_world500d.dll" "$(OutDir)"</Command>
@@ -79,13 +79,13 @@
       <AdditionalOptions>/utf-8 /FS %(AdditionalOptions)</AdditionalOptions>
       <AdditionalIncludeDirectories>$(ProjectDir)..\include\ncnn;$(ProjectDir)..\include\opencv;$(ProjectDir)..\include;$(ProjectDir)..;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
-      <PreprocessorDefinitions>_CONSOLE;NDEBUG;IMGUI_OPENCV_ENABLE_NCNN_OCR;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_CONSOLE;NDEBUG;IMGUI_OPENCV_ENABLE_NCNN_OCR;IMGUI_OPENCV_ENABLE_ZXING_CPP;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(ProjectDir)..\redist;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>opencv_world500.lib;ncnn.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>opencv_world500.lib;ncnn.lib;zxingcpp.lib;Comdlg32.lib;Ole32.lib;Shell32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>xcopy /Y "$(ProjectDir)..\redist\opencv_world500.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)..\redist\ncnn.dll" "$(OutDir)"</Command>
@@ -101,22 +101,32 @@
     <ClCompile Include="..\Algorithm\ITool.cpp" />
     <ClCompile Include="..\Algorithm\LineDetector.cpp" />
     <ClCompile Include="..\Algorithm\MorphologyTool.cpp" />
+    <ClCompile Include="..\Algorithm\CaliperOperators.cpp" />
+    <ClCompile Include="..\Algorithm\MeasurementTool.cpp" />
     <ClCompile Include="..\Algorithm\MultiColorFinder.cpp" />
     <ClCompile Include="..\Algorithm\OCRTool.cpp" />
+    <ClCompile Include="..\Algorithm\QRCodeTool.cpp" />
     <ClCompile Include="..\Algorithm\WindowsPPOCREngine.cpp" />
     <ClCompile Include="..\Algorithm\ShapeMatcher.cpp" />
     <ClCompile Include="..\Algorithm\ShapeTools.cpp" />
     <ClCompile Include="..\Algorithm\ThresholdITool.cpp" />
+    <ClCompile Include="..\Algorithm\TemplateMatchingTool.cpp" />
     <ClCompile Include="..\Algorithm\ToolImageUtils.cpp" />
     <ClCompile Include="..\Algorithm\YOLOTool.cpp" />
     <ClCompile Include="..\Core\FrameNavigation.cpp" />
+    <ClCompile Include="..\Core\FixtureTransform.cpp" />
+    <ClCompile Include="..\Core\BarcodeBenchmark.cpp" />
+    <ClCompile Include="..\Core\CalibrationModel.cpp" />
     <ClCompile Include="..\Core\FrameSourceState.cpp" />
     <ClCompile Include="..\Core\ImageState.cpp" />
+    <ClCompile Include="..\Core\OpenFileDialog.cpp" />
     <ClCompile Include="..\Core\TemplateState.cpp" />
     <ClCompile Include="..\Core\RecipeManager.cpp" />
     <ClCompile Include="..\Core\ResultExporter.cpp" />
+    <ClCompile Include="..\Core\ResultROIResolver.cpp" />
     <ClCompile Include="..\Core\ROIState.cpp" />
     <ClCompile Include="..\Core\ToolChainState.cpp" />
+    <ClCompile Include="..\Core\ToolJudgement.cpp" />
     <ClCompile Include="..\Core\ToolExecutor.cpp" />
     <ClCompile Include="..\Core\VisionContext.cpp" />
   </ItemGroup>
@@ -128,24 +138,36 @@
     <ClInclude Include="..\Algorithm\ITool.h" />
     <ClInclude Include="..\Algorithm\LineDetector.h" />
     <ClInclude Include="..\Algorithm\MorphologyTool.h" />
+    <ClInclude Include="..\Algorithm\CaliperOperators.h" />
+    <ClInclude Include="..\Algorithm\MeasurementTool.h" />
     <ClInclude Include="..\Algorithm\MultiColorFinder.h" />
     <ClInclude Include="..\Algorithm\OCRTool.h" />
+    <ClInclude Include="..\Algorithm\QRCodeTool.h" />
     <ClInclude Include="..\Algorithm\WindowsPPOCREngine.h" />
     <ClInclude Include="..\Algorithm\ShapeMatcher.h" />
     <ClInclude Include="..\Algorithm\ShapeTools.h" />
     <ClInclude Include="..\Algorithm\ThresholdTool.h" />
+    <ClInclude Include="..\Algorithm\TemplateMatchingTool.h" />
     <ClInclude Include="..\Algorithm\ToolImageUtils.h" />
     <ClInclude Include="..\Algorithm\ToolResult.h" />
     <ClInclude Include="..\Algorithm\YOLOTool.h" />
     <ClInclude Include="..\Core\FrameNavigation.h" />
+    <ClInclude Include="..\Core\FixtureTransform.h" />
+    <ClInclude Include="..\Core\BarcodeBenchmark.h" />
+    <ClInclude Include="..\Core\CalibrationModel.h" />
     <ClInclude Include="..\Core\FrameSourceState.h" />
     <ClInclude Include="..\Core\ImageState.h" />
+    <ClInclude Include="..\Core\OpenFileDialog.h" />
     <ClInclude Include="..\Core\TemplateState.h" />
     <ClInclude Include="..\Core\RecipeManager.h" />
     <ClInclude Include="..\Core\ResultExporter.h" />
+    <ClInclude Include="..\Core\ResultROIResolver.h" />
     <ClInclude Include="..\Core\ROIState.h" />
     <ClInclude Include="..\Core\ResultPublisher.h" />
+    <ClInclude Include="..\Core\ResultOverlayState.h" />
+    <ClInclude Include="..\Core\ToolResultUtils.h" />
     <ClInclude Include="..\Core\ToolChainState.h" />
+    <ClInclude Include="..\Core\ToolJudgement.h" />
     <ClInclude Include="..\Core\ToolExecutor.h" />
     <ClInclude Include="..\Core\VisionContext.h" />
   </ItemGroup>

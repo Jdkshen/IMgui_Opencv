@@ -13,8 +13,8 @@ extern int g_GridStep;       // 坐标网格步长（图片像素）
 // =====================================================
 // 图片列表浏览状态（文件夹批量加载）
 // =====================================================
-extern std::vector<std::string> gImageList; // 当前文件夹中所有图片路径
-extern int gCurrentImageIndex;              // 当前显示图片在列表中的索引（-1=无）
+extern std::vector<std::string>& gImageList; // Core FrameNavigation 状态别名
+extern int& gCurrentImageIndex;
 
 namespace UI
 {

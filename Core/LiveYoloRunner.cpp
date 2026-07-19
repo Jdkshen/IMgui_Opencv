@@ -1,9 +1,8 @@
 #include "LiveYoloRunner.h"
 
-#include "LegacyAppState.h"
+#include "ImageState.h"
 #include "ROIState.h"
 #include "ToolChainState.h"
-#include "UIStateBridge.h"
 #include "VideoCapture.h"
 #include "VisionContext.h"
 #include "../Algorithm/OpenCVYoloDetector.h"
@@ -116,7 +115,8 @@ namespace LiveYoloRunner
 void Update()
 {
     // 1. 前置检查：实时检测开关 + 图像有效性
-    if (!ToolChainState::YoloLiveDetect() || gImage.empty())
+    const cv::Mat& image = ImageState::Current();
+    if (!ToolChainState::YoloLiveDetect() || image.empty())
         return;
 
     static std::string s_LiveModelTag;
@@ -153,7 +153,7 @@ void Update()
         auto dot = s_LiveModelTag.rfind('.');
         if (dot != std::string::npos)
             s_LiveModelTag = s_LiveModelTag.substr(0, dot);
-        roi = SelectLiveYoloSearchRect(it, gImage);
+        roi = SelectLiveYoloSearchRect(it, image);
     }
     else
     {
@@ -183,7 +183,7 @@ void Update()
         }
         else
         {
-            objs = OpenCVYoloDetector::Detect(gImage, confTh, nmsTh, roi);
+            objs = OpenCVYoloDetector::Detect(image, confTh, nmsTh, roi);
         }
     }
     else
@@ -197,7 +197,7 @@ void Update()
         }
         else
         {
-            objs = YOLODetector::Detect(gImage, confTh, nmsTh, roi);
+            objs = YOLODetector::Detect(image, confTh, nmsTh, roi);
         }
     }
     if (!canDetect)
@@ -263,6 +263,7 @@ void Update()
     tr.toolName = (idx >= 0 && idx < (int)tools.size())
         ? ToolInstanceLogName(resultBaseName, tools[idx].label)
         : std::string(resultBaseName);
+    tr.sourceToolIndex = idx;
     tr.success = true;
     for (const auto& o : g_YoloOverlays)
     {

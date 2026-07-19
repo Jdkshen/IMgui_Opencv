@@ -104,7 +104,50 @@ void SetYoloLiveFrameMs(float ms)
 
 void MoveOriginalToolToFront()
 {
-    std::stable_partition(s_tools.begin(), s_tools.end(),
-        [](const ToolInstance& it) { return it.type == 12; });
+    if (s_tools.size() < 2)
+        return;
+
+    std::vector<int> order;
+    order.reserve(s_tools.size());
+    for (int i = 0; i < static_cast<int>(s_tools.size()); ++i)
+        if (s_tools[i].type == 12)
+            order.push_back(i);
+    for (int i = 0; i < static_cast<int>(s_tools.size()); ++i)
+        if (s_tools[i].type != 12)
+            order.push_back(i);
+
+    bool changed = false;
+    for (int i = 0; i < static_cast<int>(order.size()); ++i)
+        changed |= order[i] != i;
+    if (!changed)
+        return;
+
+    std::vector<int> oldToNew(s_tools.size(), -1);
+    std::vector<ToolInstance> reordered;
+    reordered.reserve(s_tools.size());
+    for (int newIndex = 0; newIndex < static_cast<int>(order.size()); ++newIndex)
+    {
+        oldToNew[order[newIndex]] = newIndex;
+        reordered.push_back(std::move(s_tools[order[newIndex]]));
+    }
+
+    for (ToolInstance& tool : reordered)
+    {
+        if (tool.resultRoiSourceTool >= 0 &&
+            tool.resultRoiSourceTool < static_cast<int>(oldToNew.size()))
+        {
+            tool.resultRoiSourceTool = oldToNew[tool.resultRoiSourceTool];
+        }
+        if (tool.fixture.sourceToolIndex >= 0 &&
+            tool.fixture.sourceToolIndex < static_cast<int>(oldToNew.size()))
+        {
+            tool.fixture.sourceToolIndex = oldToNew[tool.fixture.sourceToolIndex];
+        }
+    }
+    if (s_activeToolIndex >= 0 && s_activeToolIndex < static_cast<int>(oldToNew.size()))
+        s_activeToolIndex = oldToNew[s_activeToolIndex];
+    if (s_yoloLiveInstanceIndex >= 0 && s_yoloLiveInstanceIndex < static_cast<int>(oldToNew.size()))
+        s_yoloLiveInstanceIndex = oldToNew[s_yoloLiveInstanceIndex];
+    s_tools = std::move(reordered);
 }
 }

@@ -4,6 +4,7 @@
 #include "ShapeMatcher.h"
 #include "../Core/VisionContext.h"
 #include <nlohmann/json.hpp>
+#include <opencv2/geometry/2d.hpp>
 
 namespace
 {
@@ -253,6 +254,8 @@ ToolResult ShapeTool::Execute(VisionContext& ctx)
         reg.contour.reserve(m.points.size());
         for (const auto &pt : m.points)
             reg.contour.push_back(cv::Point(pt.x + m.bbox.x + roi.x, pt.y + m.bbox.y + roi.y));
+        if (reg.contour.size() >= 3)
+            reg.angle = cv::minAreaRect(reg.contour).angle;
         r.regions.push_back(reg);
     }
     r.success = true;

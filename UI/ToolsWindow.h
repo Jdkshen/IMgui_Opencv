@@ -51,6 +51,10 @@ namespace UI
         };
         activeIndex = remapSwappedIndex(activeIndex);
         liveIndex = remapSwappedIndex(liveIndex);
+        for (ToolInstance& tool : tools) {
+            tool.resultRoiSourceTool = remapSwappedIndex(tool.resultRoiSourceTool);
+            tool.fixture.sourceToolIndex = remapSwappedIndex(tool.fixture.sourceToolIndex);
+        }
         return true;
     }
 
@@ -66,6 +70,17 @@ namespace UI
         delete tools[index].toolImpl;
         tools[index].toolImpl = nullptr;
         tools.erase(tools.begin() + index);
+
+        for (ToolInstance& tool : tools) {
+            if (tool.resultRoiSourceTool == index)
+                tool.resultRoiSourceTool = -1;
+            else if (tool.resultRoiSourceTool > index)
+                --tool.resultRoiSourceTool;
+            if (tool.fixture.sourceToolIndex == index)
+                tool.fixture.sourceToolIndex = -1;
+            else if (tool.fixture.sourceToolIndex > index)
+                --tool.fixture.sourceToolIndex;
+        }
 
         if (activeIndex == index)
             activeIndex = -1;

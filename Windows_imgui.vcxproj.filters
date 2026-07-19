@@ -74,14 +74,17 @@
     </ClInclude>
     <ClInclude Include="Core\AsyncImageLoader.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\AudioPlayer.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\BarcodeBenchmark.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\CalibrationModel.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\VideoCapture.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\RecipeManager.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\FrameNavigation.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\FixtureTransform.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\FrameSourceState.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\FrameRenderer.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ImageLoadController.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ImageUtils.h"><Filter>Core</Filter></ClInclude>
-    <ClInclude Include="Core\LegacyAppState.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\ToolJudgement.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\LiveYoloRunner.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ROIState.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ROI.h"><Filter>Core</Filter></ClInclude>
@@ -92,7 +95,6 @@
     <ClInclude Include="Core\ToolController.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ToolChainState.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ThemeManager.h"><Filter>Core</Filter></ClInclude>
-    <ClInclude Include="Core\UIStateBridge.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\DX12Context.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\OpenCVTest.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\OpenFileDialog.h"><Filter>Core</Filter></ClInclude>
@@ -118,6 +120,16 @@
     <ClInclude Include="Algorithm\MorphologyTool.h">
       <Filter>Algorithm</Filter>
     </ClInclude>
+    <ClInclude Include="Algorithm\CaliperOperators.h"><Filter>Algorithm</Filter></ClInclude>
+    <ClInclude Include="Algorithm\MeasurementTool.h">
+      <Filter>Algorithm</Filter>
+    </ClInclude>
+    <ClInclude Include="Algorithm\TemplateMatchingTool.h">
+      <Filter>Algorithm</Filter>
+    </ClInclude>
+    <ClInclude Include="Core\ResultROIResolver.h">
+      <Filter>Core</Filter>
+    </ClInclude>
     <ClInclude Include="Algorithm\MultiColorFinder.h">
       <Filter>Algorithm</Filter>
     </ClInclude>
@@ -125,6 +137,7 @@
       <Filter>Algorithm</Filter>
     </ClInclude>
     <ClInclude Include="Algorithm\LineDetector.h"><Filter>Algorithm</Filter></ClInclude>
+    <ClInclude Include="Algorithm\QRCodeTool.h"><Filter>Algorithm</Filter></ClInclude>
     <ClInclude Include="Renderer\FontManager.h"><Filter>Renderer</Filter></ClInclude>
     <ClInclude Include="Log\LogSystem.h"><Filter>Log</Filter></ClInclude>
   </ItemGroup>
@@ -140,9 +153,12 @@
     <ClCompile Include="include\imgui\imgui_widgets.cpp"><Filter>include\imgui</Filter></ClCompile>
     <ClCompile Include="Core\AsyncImageLoader.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\AudioPlayer.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\BarcodeBenchmark.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\CalibrationModel.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\VideoCapture.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\RecipeManager.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\FrameNavigation.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\FixtureTransform.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\FrameSourceState.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\FrameRenderer.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ImageLoadController.cpp"><Filter>Core</Filter></ClCompile>
@@ -151,6 +167,7 @@
     <ClCompile Include="Core\VisionContext.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ToolExecutor.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ToolController.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\ToolJudgement.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ToolChainState.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ThemeManager.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\DX12Context.cpp"><Filter>Core</Filter></ClCompile>
@@ -179,6 +196,16 @@
     <ClCompile Include="Algorithm\MorphologyTool.cpp">
       <Filter>Algorithm</Filter>
     </ClCompile>
+    <ClCompile Include="Algorithm\CaliperOperators.cpp"><Filter>Algorithm</Filter></ClCompile>
+    <ClCompile Include="Algorithm\MeasurementTool.cpp">
+      <Filter>Algorithm</Filter>
+    </ClCompile>
+    <ClCompile Include="Algorithm\TemplateMatchingTool.cpp">
+      <Filter>Algorithm</Filter>
+    </ClCompile>
+    <ClCompile Include="Core\ResultROIResolver.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
     <ClCompile Include="Algorithm\MultiColorFinder.cpp">
       <Filter>Algorithm</Filter>
     </ClCompile>
@@ -186,6 +213,7 @@
       <Filter>Algorithm</Filter>
     </ClCompile>
     <ClCompile Include="Algorithm\LineDetector.cpp"><Filter>Algorithm</Filter></ClCompile>
+    <ClCompile Include="Algorithm\QRCodeTool.cpp"><Filter>Algorithm</Filter></ClCompile>
     <ClCompile Include="Renderer\FontManager.cpp"><Filter>Renderer</Filter></ClCompile>
     <ClCompile Include="Log\LogSystem.cpp"><Filter>Log</Filter></ClCompile>
   </ItemGroup>

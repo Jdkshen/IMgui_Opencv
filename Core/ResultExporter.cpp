@@ -108,8 +108,12 @@ json ResultToJson(const ToolResult& result)
 {
     json j;
     j["toolName"] = result.toolName;
+    j["sourceToolIndex"] = result.sourceToolIndex;
     j["success"] = result.success;
+    j["skipped"] = result.skipped;
     j["message"] = result.message;
+    j["status"] = ToolResultStatusName(result.status);
+    j["statusReason"] = result.statusReason;
 
     j["measurements"] = json::array();
     for (const auto& m : result.measurements)
@@ -122,6 +126,7 @@ json ResultToJson(const ToolResult& result)
         region["bbox"] = RectToJson(r.bbox);
         region["area"] = r.area;
         region["score"] = r.score;
+        region["angle"] = r.angle;
         region["label"] = r.label;
         region["contour"] = json::array();
         for (const auto& p : r.contour)
@@ -268,13 +273,13 @@ bool ExportRunReportMarkdown(const char* filepath, const ExportSnapshot& snapsho
     for (const auto& result : snapshot.results)
     {
         out << "| " << result.toolName
-            << " | " << (result.success ? "OK" : "FAIL")
+            << " | " << ToolResultStatusName(result.status)
             << " | " << result.regions.size()
             << " | " << result.detections.size()
             << " | " << result.lines.size()
             << " | " << result.texts.size()
             << " | " << result.measurements.size()
-            << " | " << result.message
+            << " | " << (result.statusReason.empty() ? result.message : result.statusReason)
             << " |\n";
     }
 
@@ -290,6 +295,8 @@ bool ExportRunReportMarkdown(const char* filepath, const ExportSnapshot& snapsho
             out << "- 线段 (" << l.p1.x << "," << l.p1.y << ")->(" << l.p2.x << "," << l.p2.y << ") length=" << l.length << " angle=" << l.angle << "\n";
         for (const auto& t : result.texts)
             out << "- 文本 `" << t.text << "` box=(" << t.box.x << "," << t.box.y << "," << t.box.width << "," << t.box.height << ") confidence=" << t.confidence << "\n";
+        for (const auto& measurement : result.measurements)
+            out << "- 测量 `" << measurement.name << "` = " << measurement.value << " " << measurement.unit << "\n";
         if (result.regions.empty() && result.detections.empty() && result.lines.empty() && result.texts.empty() && result.measurements.empty())
             out << "- 无几何结果\n";
         out << "\n";

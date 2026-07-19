@@ -4,14 +4,32 @@
 #include "../Core/OpenFileDialog.h"
 #include "../Core/DX12Context.h"
 #include "../Core/FrameSourceState.h"
+#include "../Core/FrameNavigation.h"
 #include "../Core/ImageState.h"
+#include "../Core/ImageLoadController.h"
+#include "../Core/ResultOverlayState.h"
 #include "../Core/VideoCapture.h"
 #include "../Core/VisionContext.h"
 #include "../Algorithm/YOLODetector.h"
 #include "../Algorithm/ITool.h"
 #include "../Log/LogSystem.h"
 
+#include <cmath>
+#include <utility>
+
 extern std::string pendingPath;
+
+namespace
+{
+std::string s_ImageImportError;
+bool s_OpenImageImportError = false;
+
+void ReportImageImportError(std::string message)
+{
+    s_ImageImportError = std::move(message);
+    s_OpenImageImportError = true;
+}
+}
 
 // 图像显示/视图变换状态定义
 float gZoom = 1.0f;
@@ -24,8 +42,8 @@ bool g_ShowCoordGrid = false; // 坐标网格开关
 int g_GridStep = 1;			  // 坐标网格步长（图片像素）
 
 // 图片列表浏览状态
-std::vector<std::string> gImageList;
-int gCurrentImageIndex = -1;
+std::vector<std::string>& gImageList = FrameNavigation::ImageListRef();
+int& gCurrentImageIndex = FrameNavigation::CurrentImageIndexRef();
 
 // 旧叠加层：仅保留 YOLO（有视频偏移补偿逻辑）和统一结果
 std::vector<DetectedObject> g_YoloOverlays;
@@ -45,26 +63,88 @@ static std::string TruncateUtf8Label(const std::string& text, size_t maxBytes)
     return text.substr(0, cut) + "...";
 }
 
-static void DrawReadableLabel(ImDrawList* dl, ImVec2 anchor, ImU32 accent, const char* label)
+struct OverlayLabelRect
 {
-    if (!label || !label[0]) return;
+    ImVec2 min;
+    ImVec2 max;
+};
+
+struct OverlayLabelState
+{
+    std::vector<OverlayLabelRect> occupied;
+    int drawnCount = 0;
+};
+
+static bool RectsOverlap(const OverlayLabelRect& a, const OverlayLabelRect& b)
+{
+    return a.min.x < b.max.x && a.max.x > b.min.x &&
+        a.min.y < b.max.y && a.max.y > b.min.y;
+}
+
+static bool IsFinitePoint(ImVec2 p)
+{
+    return std::isfinite(p.x) && std::isfinite(p.y);
+}
+
+static bool DrawReadableLabel(ImDrawList* dl, ImVec2 anchor, ImU32 accent, const char* label, OverlayLabelState& labelState)
+{
+    if (!label || !label[0])
+        return false;
+    const int maxLabels = ResultOverlayState::MaxVisibleLabels();
+    if (maxLabels <= 0 || labelState.drawnCount >= maxLabels || !IsFinitePoint(anchor))
+        return false;
 
     const ImVec2 textSize = ImGui::CalcTextSize(label);
     const float padX = 4.0f;
     const float padY = 2.0f;
     const float fontH = ImGui::GetFontSize();
     const float topLimit = ImGui::GetWindowPos().y + 2.0f;
+    const float rowH = textSize.y + padY * 2.0f + 3.0f;
 
     ImVec2 pos(anchor.x + 2.0f, anchor.y - fontH - padY * 2.0f - 2.0f);
     if (pos.y < topLimit)
         pos.y = anchor.y + 2.0f;
 
-    ImVec2 bgMin(pos.x - padX, pos.y - padY);
-    ImVec2 bgMax(pos.x + textSize.x + padX, pos.y + textSize.y + padY);
+    OverlayLabelRect rect{};
+    bool placed = false;
+    const int attempts = ResultOverlayState::ReadOnlySettings().avoidLabelOverlap ? 8 : 1;
+    for (int i = 0; i < attempts; ++i)
+    {
+        ImVec2 candidate = ImVec2(pos.x, pos.y + rowH * i);
+        rect.min = ImVec2(candidate.x - padX, candidate.y - padY);
+        rect.max = ImVec2(candidate.x + textSize.x + padX, candidate.y + textSize.y + padY);
+
+        bool overlaps = false;
+        if (ResultOverlayState::ReadOnlySettings().avoidLabelOverlap)
+        {
+            for (const auto& used : labelState.occupied)
+            {
+                if (RectsOverlap(rect, used))
+                {
+                    overlaps = true;
+                    break;
+                }
+            }
+        }
+        if (!overlaps)
+        {
+            pos = candidate;
+            placed = true;
+            break;
+        }
+    }
+    if (!placed)
+        return false;
+
+    ImVec2 bgMin = rect.min;
+    ImVec2 bgMax = rect.max;
     dl->AddRectFilled(bgMin, bgMax, IM_COL32(18, 22, 28, 230), 3.0f);
     dl->AddRect(bgMin, bgMax, accent, 3.0f, 0, 1.0f);
     dl->AddText(ImVec2(pos.x + 1.0f, pos.y + 1.0f), IM_COL32(0, 0, 0, 220), label);
     dl->AddText(pos, IM_COL32(255, 235, 120, 255), label);
+    labelState.occupied.push_back(rect);
+    ++labelState.drawnCount;
+    return true;
 }
 
 static void DrawUnifiedResults(ImDrawList* dl)
@@ -76,10 +156,12 @@ static void DrawUnifiedResults(ImDrawList* dl)
         IM_COL32(255,0,255,255), IM_COL32(0,255,255,255),
     };
     constexpr int nCol = 5;
+    OverlayLabelState labelState;
     for (size_t i = 0; i < results.size(); i++)
     {
         const auto& r = results[i];
         if (!r.success) continue;
+        const bool drawLabels = ResultOverlayState::ShouldDrawResultLabels(r);
         float t = std::max(2.0f, 3.0f * gZoom);
 
         // 检测框
@@ -87,14 +169,15 @@ static void DrawUnifiedResults(ImDrawList* dl)
             auto p1 = UI::ImageToScreenPos(ImVec2((float)d.box.x, (float)d.box.y));
             auto p2 = UI::ImageToScreenPos(ImVec2((float)(d.box.x+d.box.width), (float)(d.box.y+d.box.height)));
             dl->AddRect(p1, p2, cols[i % nCol], 0, 0, t);
-            if (!d.label.empty()) {
-                char buf[128]; snprintf(buf, sizeof(buf), "%s %.2f", d.label.c_str(), d.score);
-                dl->AddText(ImVec2(p1.x+2, p1.y-ImGui::GetFontSize()-2), IM_COL32(255,255,255,255), buf);
+            if (drawLabels && !d.label.empty()) {
+                const std::string label = ResultOverlayState::BuildLabel(r, d.label);
+                char buf[160]; snprintf(buf, sizeof(buf), "%s %.2f", label.c_str(), d.score);
+                DrawReadableLabel(dl, p1, cols[i % nCol], buf, labelState);
             }
         }
 
         // 区域（轮廓多边形 + 顶点圆点）
-        for (const auto& reg : r.regions) {
+        if (r.texts.empty()) for (const auto& reg : r.regions) {
             auto p1 = UI::ImageToScreenPos(ImVec2((float)reg.bbox.x, (float)reg.bbox.y));
             auto p2 = UI::ImageToScreenPos(ImVec2((float)(reg.bbox.x+reg.bbox.width), (float)(reg.bbox.y+reg.bbox.height)));
 
@@ -109,9 +192,9 @@ static void DrawUnifiedResults(ImDrawList* dl)
             if (!isPartial)
             {
                 dl->AddRect(p1, p2, rectColor, 0, 0, t);
-                if (!reg.label.empty()) {
-                    char buf[128]; snprintf(buf, sizeof(buf), "%s", reg.label.c_str());
-                    dl->AddText(ImVec2(p1.x+2, p1.y-ImGui::GetFontSize()-2), IM_COL32(255,255,255,255), buf);
+                if (ResultOverlayState::ShouldDrawRegionLabel(r, reg.label)) {
+                    const std::string label = ResultOverlayState::BuildLabel(r, reg.label);
+                    DrawReadableLabel(dl, p1, rectColor, label.c_str(), labelState);
                 }
             }
             // 轮廓顶点：画圆点（部分匹配时绿/红区分）
@@ -146,12 +229,12 @@ static void DrawUnifiedResults(ImDrawList* dl)
 	            auto p2 = UI::ImageToScreenPos(ImVec2((float)(text.box.x + text.box.width), (float)(text.box.y + text.box.height)));
 	            ImU32 boxColor = IM_COL32(0, 220, 120, 255);
 	            dl->AddRect(p1, p2, boxColor, 0, 0, t);
-	            if (!text.text.empty()) {
-	                std::string preview = TruncateUtf8Label(text.text, 48);
-	                char buf[192];
-	                snprintf(buf, sizeof(buf), "%s %.2f", preview.c_str(), text.confidence);
-	                DrawReadableLabel(dl, p1, boxColor, buf);
-	            }
+		            if (drawLabels && !text.text.empty()) {
+		                std::string preview = TruncateUtf8Label(text.text, 48);
+		                char buf[192];
+		                snprintf(buf, sizeof(buf), "%s %.2f", preview.c_str(), text.confidence);
+		                DrawReadableLabel(dl, p1, boxColor, buf, labelState);
+		            }
 	        }
     }
 }
@@ -164,8 +247,27 @@ namespace UI
 		if (!g_ShowOpenCV)
 			return;
 
-				ImGui::Begin("图像预览", &g_ShowOpenCV,
-					ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+					ImGui::Begin("图像预览", &g_ShowOpenCV,
+						ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+			if (FrameNavigation::ConsumeFitRequest())
+				FitImageToWindow();
+
+			std::string asyncLoadError;
+			if (ImageLoadController::ConsumeLastError(asyncLoadError))
+				ReportImageImportError(std::move(asyncLoadError));
+			if (s_OpenImageImportError)
+			{
+				ImGui::OpenPopup("图片导入失败");
+				s_OpenImageImportError = false;
+			}
+			if (ImGui::BeginPopupModal("图片导入失败", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+			{
+				ImGui::TextWrapped("%s", s_ImageImportError.c_str());
+				ImGui::Spacing();
+				if (ImGui::Button("确定", ImVec2(100.0f, 0.0f)))
+					ImGui::CloseCurrentPopup();
+				ImGui::EndPopup();
+			}
 
 			float buttonWidth = 100.0f;
 
@@ -241,11 +343,20 @@ namespace UI
 				// 坐标网格：固定步长，跟随图片平移（参照 ImGui Demo Canvas 实现）
 				ImGui::SameLine();
 				ImGui::Checkbox("坐标网格", &g_ShowCoordGrid);
-				ImGui::SameLine();
-				ImGui::SetNextItemWidth(80);
-				ImGui::SliderInt("步长(px)", &g_GridStep, 1, 500);
+					ImGui::SameLine();
+					ImGui::SetNextItemWidth(80);
+					ImGui::SliderInt("步长(px)", &g_GridStep, 1, 500);
+					ImGui::SameLine();
+					ToolbarLabel("结果");
+					auto& overlaySettings = ResultOverlayState::MutableSettings();
+					ImGui::Checkbox("标签##result_overlay_labels", &overlaySettings.showLabels);
+					ImGui::SameLine();
+					ImGui::Checkbox("避让##result_overlay_avoid", &overlaySettings.avoidLabelOverlap);
+					ImGui::SameLine();
+					ImGui::SetNextItemWidth(90);
+					ImGui::SliderInt("最大标签##result_overlay_max", &overlaySettings.maxVisibleLabels, 0, 200);
 
-			ImGui::PopStyleVar(2);
+				ImGui::PopStyleVar(2);
 			ImGui::Separator();
 
 		// ===== 视频/摄像头播放控制栏（仅当视频打开时显示）=====
@@ -635,12 +746,12 @@ namespace UI
 							const uchar* bgra = row + ix * 4;
 							snprintf(pixInfo, sizeof(pixInfo), " | R:%d G:%d B:%d A:%d", bgra[2], bgra[1], bgra[0], bgra[3]);
 						}
-						ImGui::TextDisabled("%dx%d %s | X:%.0f Y:%.0f%s",
-											image.cols, image.rows, fmtStr, imgCoord.x, imgCoord.y, pixInfo);
-					}
-					else if (inImg)
-						ImGui::TextDisabled("%dx%d %s | X:%.0f Y:%.0f",
-											image.cols, image.rows, fmtStr, imgCoord.x, imgCoord.y);
+							ImGui::TextDisabled("%dx%d %s | X:%.4f Y:%.4f%s",
+												image.cols, image.rows, fmtStr, imgCoord.x, imgCoord.y, pixInfo);
+						}
+						else if (inImg)
+							ImGui::TextDisabled("%dx%d %s | X:%.4f Y:%.4f",
+												image.cols, image.rows, fmtStr, imgCoord.x, imgCoord.y);
 					else
 						ImGui::TextDisabled("%dx%d %s | X:--- Y:---",
 											image.cols, image.rows, fmtStr);
@@ -703,14 +814,15 @@ namespace UI
 	// =====================================================
 	void LoadFolderImages(const std::string &folderPath)
 	{
-		gImageList = ScanImageFiles(folderPath);
-		gCurrentImageIndex = -1;
+		FrameNavigation::SetImageList(ScanImageFiles(folderPath));
 
-		if (gImageList.empty())
-		{
-			LogSystem::Add(LOG_WARN, color, "文件夹中没有找到图片文件");
-			return;
-		}
+			if (gImageList.empty())
+			{
+				const std::string error = "所选文件夹及其子目录中没有找到支持的图片文件";
+				LogSystem::Add(LOG_WARN, color, "%s", error.c_str());
+				ReportImageImportError(error);
+				return;
+			}
 
 		// 加载第一张
 		NavigateToImage(0);
@@ -724,7 +836,7 @@ namespace UI
 		if (gImageList.empty() || index < 0 || index >= (int)gImageList.size())
 			return;
 
-		gCurrentImageIndex = index;
+		FrameNavigation::CurrentImageIndexRef() = index;
 
 		// 清除上一次的 ROI、模板匹配和所有工具叠加
 		ClearROIState();
@@ -734,7 +846,7 @@ namespace UI
 			gContext.ClearUnifiedResults();
 
 		// 通过 pendingPath 机制触发图片加载
-		pendingPath = gImageList[index];
+		ImageLoadController::RequestLoad(gImageList[index]);
 
 		LogSystem::Add(LOG_INFO, color, "切换到图片 [%d/%zu]: %s",
 					   index + 1, gImageList.size(), gImageList[index].c_str());

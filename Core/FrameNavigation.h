@@ -10,9 +10,16 @@
 namespace FrameNavigation
 {
     const std::vector<std::string>& ImageList();          // 图片路径列表
+    std::vector<std::string>& ImageListRef();
     int CurrentImageIndex();                               // 当前图片索引
+    int& CurrentImageIndexRef();
+    void SetImageList(std::vector<std::string> images);
     bool IsCurrentImage(const std::string& path);          // 判断路径是否为当前图片
     bool HasNextImage();                                   // 是否有下一张图片
     void FitImageToWindow();                               // 缩放图片适配窗口
     void NavigateNextImage();                              // 导航到下一张图片
+    bool NavigateToImage(int index);
+    void RequestImagePath(std::string path);
+    bool ConsumeFitRequest();
+    bool ConsumePendingImagePath(std::string& path);
 }

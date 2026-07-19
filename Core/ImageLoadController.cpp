@@ -5,13 +5,14 @@
 #include "FrameNavigation.h"
 #include "FrameSourceState.h"
 #include "ImageUtils.h"
-#include "LegacyAppState.h"
 #include "OpenCVTest.h"
 #include "ROIState.h"
-#include "UIStateBridge.h"
 #include "VideoCapture.h"
 #include "../Algorithm/TemplateMatch.h"
 #include "../Log/LogSystem.h"
+
+#include <exception>
+#include <utility>
 
 // =====================================================
 // 内部状态
@@ -19,6 +20,7 @@
 namespace
 {
 std::string s_UploadRequest;     // 当前待加载的图片路径
+std::string s_LastError;
 bool s_RequestLoadImage = false; // 是否需要发起异步加载请求
 }
 
@@ -31,8 +33,20 @@ bool s_RequestLoadImage = false; // 是否需要发起异步加载请求
 // =====================================================
 namespace ImageLoadController
 {
+void RequestLoad(std::string path)
+{
+    if (path.empty())
+        return;
+    s_UploadRequest = std::move(path);
+    s_RequestLoadImage = true;
+}
+
 void Update()
 {
+    std::string navigationPath;
+    if (FrameNavigation::ConsumePendingImagePath(navigationPath))
+        RequestLoad(std::move(navigationPath));
+
     // 1. 检查是否有待加载路径（由外部模块写入 pendingPath）
     if (!pendingPath.empty())
     {
@@ -79,16 +93,35 @@ void Update()
                 DXGI_FORMAT_R8G8B8A8_UNORM, gSrvCpuHandle);
 
             LogSystem::Add(LOG_INFO, "异步图片加载完成: %dx%d", img.cols, img.rows);
+            s_LastError.clear();
 
             // 后处理：适配窗口、清空交互状态、清空模板匹配
             FrameNavigation::FitImageToWindow();
             ROIState::ClearInteraction();
             TemplateMatch::Clear();
         }
+        catch (const std::exception& e)
+        {
+            s_LastError = std::string("图片加载后处理异常: ") + e.what();
+            LogSystem::Add(LOG_ERROR, "%s", s_LastError.c_str());
+        }
         catch (...)
         {
-            LogSystem::Add(LOG_ERROR, "异步图片加载后处理异常");
+            s_LastError = "图片加载后处理发生未知异常";
+            LogSystem::Add(LOG_ERROR, "%s", s_LastError.c_str());
         }
+    }, [](const std::string& error)
+    {
+        s_LastError = error;
     });
+}
+
+bool ConsumeLastError(std::string& error)
+{
+    if (s_LastError.empty())
+        return false;
+    error = std::move(s_LastError);
+    s_LastError.clear();
+    return true;
 }
 }

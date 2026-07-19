@@ -1,4 +1,9 @@
 #pragma once
+
+#include "ToolJudgement.h"
+#include "BarcodeTypes.h"
+#include "CalibrationModel.h"
+#include "FixtureTransform.h"
 #include <string>
 #include <vector>
 
@@ -51,6 +56,13 @@ struct RecipeToolInstance
 {
     int type = 0;             // 0=边缘检测 1=模板匹配 2=Blob 3=阈值调试
     std::string label;
+    bool showResultLabels = true;
+    ToolJudgementSettings judgement;
+    int resultRoiMode = 0;
+    int resultRoiSourceTool = -1;
+    int resultRoiIndex = 0;
+    int resultRoiMissingPolicy = 0;
+    FixtureSettings fixture;
     int inputSourceMode = 2;  // 0=上一步原图, 1=上一步处理图, 2=原图工具输出
     std::string templateFile; // 模板图像文件名（与配方同名 _tplN.png）
     bool hasTemplateROI = false;
@@ -182,6 +194,39 @@ struct RecipeToolInstance
     bool ocrFastMode = true;
     bool ocrDetectOnly = false;
     bool ocrUseROI = true;
+
+    // type==14 二维码识别
+    bool qrUseROI = true;
+    bool qrDetectMulti = true;
+    bool qrEnhance = true;
+    int qrMinSize = 24;
+    bool qrShowText = true;
+    int qrEngine = 0;
+    std::uint32_t qrFormatMask = BarcodeFormatAll;
+    bool qrFilterDuplicates = true;
+
+    // type==15 工业测量
+    int measureMode = 0;
+    int measureCaliperCount = 16;
+    float measureSearchLength = 30.0f;
+    float measureProjectionWidth = 5.0f;
+    float measureSmoothingSigma = 1.0f;
+    float measureEdgeThreshold = 12.0f;
+    float measureMinPairDistance = 3.0f;
+    int measureEdgePolarity = 0;
+    bool measureSubpixel = true;
+    int measureFitMethod = 1;
+    float measureFitInlierThreshold = 1.5f;
+    int measureMinimumValidCalipers = 3;
+    float measureMinimumConfidence = 0.0f;
+    float measureMmPerPixel = 0.0f;
+    float measureCalibrationPixels = 100.0f;
+    float measureCalibrationMm = 10.0f;
+    bool measureToleranceEnabled = false;
+    float measureNominal = 0.0f;
+    float measureToleranceMinus = 0.0f;
+    float measureTolerancePlus = 0.0f;
+    CalibrationModel measureCalibration;
 };
 
 struct RecipeData

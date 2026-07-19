@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <future>
+#include <functional>
 #include <mutex>
 #include <opencv2/opencv.hpp>
 
@@ -16,7 +17,9 @@ namespace AsyncImageLoader
     // 检查异步任务是否完成；若完成则通过回调上传GPU
     // 返回 true 表示本帧处理了结果
     // callback: void(cv::Mat img) — 主线程回调，用于上传纹理
-    bool CheckAndProcess(void (*callback)(cv::Mat img));
+    bool CheckAndProcess(
+        const std::function<void(cv::Mat)>& success,
+        const std::function<void(const std::string&)>& failure = {});
 
     // 是否有任务进行中
     bool IsPending();

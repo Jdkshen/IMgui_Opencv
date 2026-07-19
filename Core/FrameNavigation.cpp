@@ -1,45 +1,79 @@
 #include "FrameNavigation.h"
 
-#include "LegacyAppState.h"
-#include "UIStateBridge.h"
+#include <utility>
 
-// =====================================================
-// FrameNavigation — 图片序列导航实现
-// 所有函数直接委托到 LegacyAppState / UIStateBridge 的全局变量
-// =====================================================
-namespace FrameNavigation
+namespace
 {
-const std::vector<std::string>& ImageList()
-{
-    return gImageList;  // 全局图片路径列表
+std::vector<std::string> s_ImageList;
+int s_CurrentImageIndex = -1;
+bool s_FitRequested = false;
+std::string s_PendingImagePath;
 }
 
-int CurrentImageIndex()
+namespace FrameNavigation
 {
-    return gCurrentImageIndex;
+const std::vector<std::string>& ImageList() { return s_ImageList; }
+std::vector<std::string>& ImageListRef() { return s_ImageList; }
+int CurrentImageIndex() { return s_CurrentImageIndex; }
+int& CurrentImageIndexRef() { return s_CurrentImageIndex; }
+
+void SetImageList(std::vector<std::string> images)
+{
+    s_ImageList = std::move(images);
+    s_CurrentImageIndex = -1;
+    s_PendingImagePath.clear();
 }
 
 bool IsCurrentImage(const std::string& path)
 {
-    const int index = CurrentImageIndex();
-    const auto& images = ImageList();
-    return index >= 0 && index < static_cast<int>(images.size()) && images[index] == path;
+    return s_CurrentImageIndex >= 0 && s_CurrentImageIndex < static_cast<int>(s_ImageList.size()) &&
+           s_ImageList[s_CurrentImageIndex] == path;
 }
 
 bool HasNextImage()
 {
-    const int index = CurrentImageIndex();
-    const auto& images = ImageList();
-    return !images.empty() && index >= 0 && index < static_cast<int>(images.size()) - 1;
+    return !s_ImageList.empty() && s_CurrentImageIndex >= 0 &&
+           s_CurrentImageIndex < static_cast<int>(s_ImageList.size()) - 1;
 }
 
-void FitImageToWindow()
+bool NavigateToImage(int index)
 {
-    UI::FitImageToWindow();
+    if (index < 0 || index >= static_cast<int>(s_ImageList.size()))
+        return false;
+    s_CurrentImageIndex = index;
+    s_PendingImagePath = s_ImageList[index];
+    return true;
+}
+
+void RequestImagePath(std::string path)
+{
+    s_PendingImagePath = std::move(path);
 }
 
 void NavigateNextImage()
 {
-    UI::NavigateNextImage();
+    if (HasNextImage())
+        NavigateToImage(s_CurrentImageIndex + 1);
+}
+
+void FitImageToWindow()
+{
+    s_FitRequested = true;
+}
+
+bool ConsumeFitRequest()
+{
+    const bool requested = s_FitRequested;
+    s_FitRequested = false;
+    return requested;
+}
+
+bool ConsumePendingImagePath(std::string& path)
+{
+    if (s_PendingImagePath.empty())
+        return false;
+    path = std::move(s_PendingImagePath);
+    s_PendingImagePath.clear();
+    return true;
 }
 }

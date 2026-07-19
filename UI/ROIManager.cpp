@@ -27,6 +27,80 @@ namespace UI
     int gHoveredROI = -1;
     int gCurrentROIType = ROI_TYPE_RECT;
 
+    namespace
+    {
+        std::vector<int> s_roiDrawSequence;
+        std::vector<ROI> s_roiDrawSequenceROIs;
+        int s_roiDrawSequenceStep = 0;
+        std::uint64_t s_nextRuntimeROIId = 1;
+    }
+
+    void BeginROIDrawSequence(std::initializer_list<int> roiTypes)
+    {
+        s_roiDrawSequence.assign(roiTypes.begin(), roiTypes.end());
+        s_roiDrawSequenceROIs.clear();
+        s_roiDrawSequenceStep = 0;
+        gDrawingROI = false;
+        if (!s_roiDrawSequence.empty())
+            gCurrentROIType = s_roiDrawSequence.front();
+    }
+
+    std::uint64_t EnsureROIRuntimeId(ROI& roi)
+    {
+        if (roi.runtimeId == 0)
+            roi.runtimeId = s_nextRuntimeROIId++;
+        return roi.runtimeId;
+    }
+
+    void CancelROIDrawSequence()
+    {
+        s_roiDrawSequence.clear();
+        s_roiDrawSequenceROIs.clear();
+        s_roiDrawSequenceStep = 0;
+        gDrawingROI = false;
+    }
+
+    bool IsROIDrawSequenceActive()
+    {
+        return s_roiDrawSequenceStep >= 0 &&
+            s_roiDrawSequenceStep < static_cast<int>(s_roiDrawSequence.size());
+    }
+
+    int ROIDrawSequenceStep()
+    {
+        return IsROIDrawSequenceActive() ? s_roiDrawSequenceStep : -1;
+    }
+
+    int ROIDrawSequenceCount()
+    {
+        return static_cast<int>(s_roiDrawSequence.size());
+    }
+
+    void AdvanceROIDrawSequence(const ROI& completedROI)
+    {
+        if (!IsROIDrawSequenceActive() ||
+            s_roiDrawSequence[s_roiDrawSequenceStep] != completedROI.type)
+            return;
+
+        s_roiDrawSequenceROIs.push_back(completedROI);
+        ++s_roiDrawSequenceStep;
+        if (IsROIDrawSequenceActive())
+            gCurrentROIType = s_roiDrawSequence[s_roiDrawSequenceStep];
+        else
+            gDrawingROI = false;
+    }
+
+    bool ConsumeCompletedROIDrawSequence(std::vector<ROI>& completedROIs)
+    {
+        if (IsROIDrawSequenceActive() || s_roiDrawSequence.empty() ||
+            s_roiDrawSequenceROIs.size() != s_roiDrawSequence.size())
+            return false;
+
+        completedROIs = s_roiDrawSequenceROIs;
+        CancelROIDrawSequence();
+        return true;
+    }
+
     // =====================================================
     // 坐标转换函数实现
     // =====================================================
@@ -123,6 +197,7 @@ namespace UI
     {
         gROIs.clear();
         gDrawingROI = false;
+        CancelROIDrawSequence();
         gSelectedROI = -1;
         gActiveHandle = HANDLE_NONE;
         gDraggingROI = false;
@@ -158,8 +233,38 @@ namespace UI
                 roi.end = imageMouse;
                 roi.type = gCurrentROIType; // 新ROI使用当前选中的类型
                 NormalizeROI(roi);
-                if (fabs(roi.start.x - roi.end.x) > 2 && fabs(roi.start.y - roi.end.y) > 2)
+                const float dx = roi.end.x - roi.start.x;
+                const float dy = roi.end.y - roi.start.y;
+                bool valid = false;
+                switch (roi.type)
+                {
+                case ROI_TYPE_POINT:
+                    roi.end = roi.start;
+                    valid = true;
+                    break;
+                case ROI_TYPE_LINE:
+                    valid = std::hypot(dx, dy) > 2.0f;
+                    break;
+                case ROI_TYPE_CIRCLE:
+                {
+                    const float radius = std::hypot(dx, dy);
+                    roi.end = ImVec2(roi.start.x + radius, roi.start.y);
+                    valid = radius > 2.0f;
+                    break;
+                }
+                case ROI_TYPE_RECT:
+                case ROI_TYPE_POLYGON:
+                    valid = std::abs(dx) > 2.0f && std::abs(dy) > 2.0f;
+                    break;
+                default:
+                    break;
+                }
+                if (valid)
+                {
+                    EnsureROIRuntimeId(roi);
                     gROIs.push_back(roi);
+                    AdvanceROIDrawSequence(roi);
+                }
             }
             gDrawingROI = false;
         }
@@ -404,22 +509,6 @@ namespace UI
             }
             } // switch
 
-            // 在当前类型ROI旁显示类型标签
-            if (roi.type == gCurrentROIType)
-            {
-                const char *typeLabel = "?";
-                switch (roi.type)
-                {
-                case ROI_TYPE_RECT:    typeLabel = "矩形"; break;
-                case ROI_TYPE_POINT:   typeLabel = "点";   break;
-                case ROI_TYPE_LINE:    typeLabel = "线段"; break;
-                case ROI_TYPE_CIRCLE:  typeLabel = "圆";   break;
-                case ROI_TYPE_POLYGON: typeLabel = "多边形"; break;
-                default:               typeLabel = "?";    break;
-                }
-                drawList->AddText(ImVec2(sp.x + 3, sp.y - ImGui::GetTextLineHeight() - 2),
-                                  IM_COL32(255, 255, 255, 255), typeLabel);
-            }
         }
 
         if (gDrawingROI)

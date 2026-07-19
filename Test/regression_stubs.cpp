@@ -5,6 +5,7 @@
 #include "../Algorithm/ITool.h"
 #include "../Core/RecipeManager.h"
 #include "../Core/ImageState.h"
+#include "../Core/FrameNavigation.h"
 #include "../Core/ROIState.h"
 #include "../Core/TemplateState.h"
 #include "../Core/ToolChainState.h"
@@ -51,8 +52,8 @@ bool& gNeedUpload = ImageState::NeedUploadRef();
 int& gImageWidth = ImageState::WidthRef();
 int& gImageHeight = ImageState::HeightRef();
 int& g_ImageVersion = ImageState::VersionRef();
-std::vector<std::string> gImageList;
-int gCurrentImageIndex = -1;
+std::vector<std::string>& gImageList = FrameNavigation::ImageListRef();
+int& gCurrentImageIndex = FrameNavigation::CurrentImageIndexRef();
 bool& g_ShowPreview = TemplateState::ShowPreview();
 bool& g_TMEnableRotation = TemplateState::EnableRotation();
 int& g_TMRotationStart = TemplateState::RotationStart();

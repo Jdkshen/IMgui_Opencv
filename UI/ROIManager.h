@@ -1,6 +1,8 @@
 #pragma once
 #include "DockSpaceHost.h" // ROI 结构体
 
+#include <initializer_list>
+
 // =====================================================
 // 图像显示/视图变换状态（extern，定义在 ImageViewer.cpp）
 // =====================================================
@@ -54,5 +56,13 @@ namespace UI
     void ZoomAtCenter(float d);  // 以鼠标为中心缩放
     void ClearROIState();        // 清理ROI状态
     void HandleROIInteraction(); // ROI 交互处理（创建/选中/拖动/删除/绘制）
+    void BeginROIDrawSequence(std::initializer_list<int> roiTypes);
+    void CancelROIDrawSequence();
+    bool IsROIDrawSequenceActive();
+    int ROIDrawSequenceStep();
+    int ROIDrawSequenceCount();
+    void AdvanceROIDrawSequence(const ROI& completedROI);
+    bool ConsumeCompletedROIDrawSequence(std::vector<ROI>& completedROIs);
+    std::uint64_t EnsureROIRuntimeId(ROI& roi);
 
 } // namespace UI

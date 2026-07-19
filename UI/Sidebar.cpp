@@ -43,7 +43,10 @@ namespace UI
                 ImVec4 col4 = ImGui::ColorConvertU32ToFloat4(col);
                 ImGui::PushStyleColor(ImGuiCol_Text, col4);
                 if (ImGui::Selectable(kROITypeNames[i], isSelected))
+                {
+                    CancelROIDrawSequence();
                     gCurrentROIType = i;
+                }
                 ImGui::PopStyleColor();
                 if (isSelected)
                     ImGui::SetItemDefaultFocus();

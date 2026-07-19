@@ -61,7 +61,9 @@ namespace AsyncImageLoader
         return cv::imdecode(data, cv::IMREAD_COLOR); }, path);
     }
 
-    bool CheckAndProcess(void (*callback)(cv::Mat img))
+    bool CheckAndProcess(
+        const std::function<void(cv::Mat)>& success,
+        const std::function<void(const std::string&)>& failure)
     {
         std::lock_guard<std::mutex> lock(s_Mutex);
 
@@ -77,12 +79,15 @@ namespace AsyncImageLoader
 
         if (img.empty())
         {
-            LogSystem::Add(LOG_ERROR, "异步加载图片失败");
+            const std::string error = "无法读取或解码图片: " + s_RequestPath;
+            LogSystem::Add(LOG_ERROR, "%s", error.c_str());
+            if (failure)
+                failure(error);
             return true;
         }
 
-        if (callback)
-            callback(img);
+        if (success)
+            success(img);
 
         LogSystem::Add(LOG_INFO, "异步图片加载完成: %dx%d", img.cols, img.rows);
         return true;

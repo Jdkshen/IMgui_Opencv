@@ -1,15 +1,19 @@
-﻿#include "RecipeManager.h"
+﻿#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
+#include "RecipeManager.h"
 #include "DX12Context.h"
 #include "FrameSourceState.h"
+#include "FrameNavigation.h"
 #include "ROIState.h"
+#include "TemplateState.h"
 #include "ToolChainState.h"
-#include "UIStateBridge.h"
 #include "../Log/LogSystem.h"
 #include "../Algorithm/ThresholdTool.h"
 #include "../Algorithm/TemplateMatch.h"
 #include "../Algorithm/MultiColorFinder.h"
 
-#define NOMINMAX
 #include <windows.h>
 #include <algorithm>
 #include <fstream>
@@ -18,19 +22,6 @@
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
-
-// 外部变量引用
-extern std::string pendingPath;
-extern bool gUseGray;
-extern int gThresholdValue;
-extern bool gThresholdBinaryInv;
-extern int gBlurSize;
-extern int gCannyLow, gCannyHigh;
-extern float gBrightness, gContrast;
-extern int gProcessMode;
-extern PipelineState gPipe;
-extern cv::Mat& g_FrozenTemplate;
-extern bool& g_ShowPreview;
 
 namespace RecipeManager
 {
@@ -228,7 +219,7 @@ namespace RecipeManager
     {
         json j;
 
-        j["version"] = 1;
+        j["version"] = 2;
         j["name"] = data.name;
         j["imagePath"] = data.imagePath;
         j["templateImage"] = data.templateImage;
@@ -278,7 +269,33 @@ namespace RecipeManager
             json tj;
             tj["type"] = t.type;
             tj["label"] = t.label;
+            tj["showResultLabels"] = t.showResultLabels;
             tj["inputSourceMode"] = t.inputSourceMode;
+            tj["resultRoiMode"] = t.resultRoiMode;
+            tj["resultRoiSourceTool"] = t.resultRoiSourceTool;
+            tj["resultRoiIndex"] = t.resultRoiIndex;
+            tj["resultRoiMissingPolicy"] = t.resultRoiMissingPolicy;
+            tj["fixture"] = {
+                {"enabled", t.fixture.enabled},
+                {"sourceToolIndex", t.fixture.sourceToolIndex},
+                {"resultIndex", t.fixture.resultIndex},
+                {"referenceX", t.fixture.referenceOrigin.x},
+                {"referenceY", t.fixture.referenceOrigin.y},
+                {"referenceAngle", t.fixture.referenceAngleDegrees},
+                {"failOnMissing", t.fixture.failOnMissing}
+            };
+            tj["judgement"] = {
+                {"enabled", t.judgement.enabled},
+                {"stopOnFailure", t.judgement.stopOnFailure},
+                {"minResultCount", t.judgement.minResultCount},
+                {"maxResultCount", t.judgement.maxResultCount},
+                {"minScore", t.judgement.minScore},
+                {"minArea", t.judgement.minArea},
+                {"maxArea", t.judgement.maxArea},
+                {"requiredText", t.judgement.requiredText},
+                {"textMatchMode", t.judgement.textMatchMode},
+                {"textCaseSensitive", t.judgement.textCaseSensitive}
+            };
             tj["templateFile"] = t.templateFile;
             tj["hasTemplateROI"] = t.hasTemplateROI;
             tj["templateROI"] = {{"startX", t.templateROI.startX}, {"startY", t.templateROI.startY}, {"endX", t.templateROI.endX}, {"endY", t.templateROI.endY}, {"type", t.templateROI.type}};
@@ -405,6 +422,52 @@ namespace RecipeManager
             tj["ocrFastMode"] = t.ocrFastMode;
             tj["ocrDetectOnly"] = t.ocrDetectOnly;
             tj["ocrUseROI"] = t.ocrUseROI;
+            tj["qrUseROI"] = t.qrUseROI;
+            tj["qrDetectMulti"] = t.qrDetectMulti;
+            tj["qrEnhance"] = t.qrEnhance;
+            tj["qrMinSize"] = t.qrMinSize;
+            tj["qrShowText"] = t.qrShowText;
+            tj["qrEngine"] = t.qrEngine;
+            tj["qrFormatMask"] = t.qrFormatMask;
+            tj["qrFilterDuplicates"] = t.qrFilterDuplicates;
+            tj["measureMode"] = t.measureMode;
+            tj["measureMmPerPixel"] = t.measureMmPerPixel;
+            tj["measureCalibrationPixels"] = t.measureCalibrationPixels;
+            tj["measureCalibrationMm"] = t.measureCalibrationMm;
+            tj["measureToleranceEnabled"] = t.measureToleranceEnabled;
+            tj["measureNominal"] = t.measureNominal;
+            tj["measureToleranceMinus"] = t.measureToleranceMinus;
+            tj["measureTolerancePlus"] = t.measureTolerancePlus;
+            std::vector<double> measureHomography(
+                t.measureCalibration.pixelToWorldHomography.val,
+                t.measureCalibration.pixelToWorldHomography.val + 9);
+            tj["measurement"] = {
+                {"mode", t.measureMode}, {"caliperCount", t.measureCaliperCount},
+                {"searchLength", t.measureSearchLength}, {"projectionWidth", t.measureProjectionWidth},
+                {"smoothingSigma", t.measureSmoothingSigma}, {"edgeThreshold", t.measureEdgeThreshold},
+                {"minPairDistance", t.measureMinPairDistance}, {"edgePolarity", t.measureEdgePolarity},
+                {"subpixel", t.measureSubpixel}, {"fitMethod", t.measureFitMethod},
+                {"fitInlierThreshold", t.measureFitInlierThreshold},
+                {"minimumValidCalipers", t.measureMinimumValidCalipers},
+                {"minimumConfidence", t.measureMinimumConfidence},
+                {"legacyMmPerPixel", t.measureMmPerPixel},
+                {"calibrationEnabled", t.measureCalibration.enabled},
+                {"scaleX", t.measureCalibration.scaleX}, {"scaleY", t.measureCalibration.scaleY},
+                {"pixelOriginX", t.measureCalibration.pixelOrigin.x},
+                {"pixelOriginY", t.measureCalibration.pixelOrigin.y},
+                {"worldOriginX", t.measureCalibration.worldOrigin.x},
+                {"worldOriginY", t.measureCalibration.worldOrigin.y},
+                {"homographyEnabled", t.measureCalibration.homographyEnabled},
+                {"homography", measureHomography},
+                {"distortionEnabled", t.measureCalibration.distortionEnabled},
+                {"fx", t.measureCalibration.fx}, {"fy", t.measureCalibration.fy},
+                {"cx", t.measureCalibration.cx}, {"cy", t.measureCalibration.cy},
+                {"k1", t.measureCalibration.k1}, {"k2", t.measureCalibration.k2},
+                {"p1", t.measureCalibration.p1}, {"p2", t.measureCalibration.p2},
+                {"k3", t.measureCalibration.k3},
+                {"toleranceEnabled", t.measureToleranceEnabled}, {"nominal", t.measureNominal},
+                {"toleranceMinus", t.measureToleranceMinus}, {"tolerancePlus", t.measureTolerancePlus}
+            };
 
             // 搜索 ROI 子数组
             json &srois = tj["searchROIs"] = json::array();
@@ -438,7 +501,7 @@ namespace RecipeManager
                           ? tplPath.substr(0, slash + 1) + data.templateImage
                           : data.templateImage;
 
-            if (WriteImageFile(tplPath, g_FrozenTemplate))
+            if (WriteImageFile(tplPath, TemplateState::FrozenTemplate()))
                 LogSystem::Add(LOG_INFO, "Template image saved: %s", tplPath.c_str());
         }
 
@@ -503,8 +566,8 @@ namespace RecipeManager
         }
 
         int version = j.value("version", 0);
-        if (version > 1)
-            LogSystem::Add(LOG_WARN, "RecipeManager: recipe version %d > supported version 1", version);
+        if (version > 2)
+            LogSystem::Add(LOG_WARN, "RecipeManager: recipe version %d > supported version 2", version);
 
         data.name = j.value("name", "");
         data.imagePath = j.value("imagePath", "");
@@ -572,7 +635,37 @@ namespace RecipeManager
                 RecipeToolInstance t;
                 t.type = tj.value("type", 0);
                 t.label = tj.value("label", "");
+                t.showResultLabels = tj.value("showResultLabels", true);
                 t.inputSourceMode = tj.value("inputSourceMode", 2);
+                t.resultRoiMode = tj.value("resultRoiMode", 0);
+                t.resultRoiSourceTool = tj.value("resultRoiSourceTool", -1);
+                t.resultRoiIndex = tj.value("resultRoiIndex", 0);
+                t.resultRoiMissingPolicy = tj.value("resultRoiMissingPolicy", 0);
+                if (tj.contains("fixture") && tj["fixture"].is_object())
+                {
+                    const auto& fixture = tj["fixture"];
+                    t.fixture.enabled = fixture.value("enabled", false);
+                    t.fixture.sourceToolIndex = fixture.value("sourceToolIndex", -1);
+                    t.fixture.resultIndex = fixture.value("resultIndex", 0);
+                    t.fixture.referenceOrigin.x = fixture.value("referenceX", 0.0f);
+                    t.fixture.referenceOrigin.y = fixture.value("referenceY", 0.0f);
+                    t.fixture.referenceAngleDegrees = fixture.value("referenceAngle", 0.0f);
+                    t.fixture.failOnMissing = fixture.value("failOnMissing", true);
+                }
+                if (tj.contains("judgement") && tj["judgement"].is_object())
+                {
+                    const auto& judgement = tj["judgement"];
+                    t.judgement.enabled = judgement.value("enabled", false);
+                    t.judgement.stopOnFailure = judgement.value("stopOnFailure", false);
+                    t.judgement.minResultCount = judgement.value("minResultCount", 1);
+                    t.judgement.maxResultCount = judgement.value("maxResultCount", -1);
+                    t.judgement.minScore = judgement.value("minScore", -1.0f);
+                    t.judgement.minArea = judgement.value("minArea", -1.0f);
+                    t.judgement.maxArea = judgement.value("maxArea", -1.0f);
+                    t.judgement.requiredText = judgement.value("requiredText", "");
+                    t.judgement.textMatchMode = judgement.value("textMatchMode", 0);
+                    t.judgement.textCaseSensitive = judgement.value("textCaseSensitive", false);
+                }
                 t.templateFile = tj.value("templateFile", "");
                 t.hasTemplateROI = tj.value("hasTemplateROI", false);
                 if (tj.contains("templateROI") && tj["templateROI"].is_object())
@@ -707,6 +800,66 @@ namespace RecipeManager
                 t.ocrFastMode = tj.value("ocrFastMode", true);
                 t.ocrDetectOnly = tj.value("ocrDetectOnly", false);
                 t.ocrUseROI = tj.value("ocrUseROI", true);
+                t.qrUseROI = tj.value("qrUseROI", true);
+                t.qrDetectMulti = tj.value("qrDetectMulti", true);
+                t.qrEnhance = tj.value("qrEnhance", true);
+                t.qrMinSize = tj.value("qrMinSize", 24);
+                t.qrShowText = tj.value("qrShowText", true);
+                t.qrEngine = tj.value("qrEngine", 0);
+                t.qrFormatMask = tj.value("qrFormatMask", static_cast<std::uint32_t>(BarcodeFormatAll));
+                t.qrFilterDuplicates = tj.value("qrFilterDuplicates", true);
+                t.measureMode = tj.value("measureMode", 0);
+                t.measureMmPerPixel = tj.value("measureMmPerPixel", 0.0f);
+                t.measureCalibrationPixels = tj.value("measureCalibrationPixels", 100.0f);
+                t.measureCalibrationMm = tj.value("measureCalibrationMm", 10.0f);
+                t.measureToleranceEnabled = tj.value("measureToleranceEnabled", false);
+                t.measureNominal = tj.value("measureNominal", 0.0f);
+                t.measureToleranceMinus = tj.value("measureToleranceMinus", 0.0f);
+                t.measureTolerancePlus = tj.value("measureTolerancePlus", 0.0f);
+                if (tj.contains("measurement") && tj["measurement"].is_object())
+                {
+                    const auto& measurement = tj["measurement"];
+                    t.measureMode = std::clamp(measurement.value("mode", t.measureMode), 0, 7);
+                    t.measureCaliperCount = measurement.value("caliperCount", 16);
+                    t.measureSearchLength = measurement.value("searchLength", 30.0f);
+                    t.measureProjectionWidth = measurement.value("projectionWidth", 5.0f);
+                    t.measureSmoothingSigma = measurement.value("smoothingSigma", 1.0f);
+                    t.measureEdgeThreshold = measurement.value("edgeThreshold", 12.0f);
+                    t.measureMinPairDistance = measurement.value("minPairDistance", 3.0f);
+                    t.measureEdgePolarity = measurement.value("edgePolarity", 0);
+                    t.measureSubpixel = measurement.value("subpixel", true);
+                    t.measureFitMethod = measurement.value("fitMethod", 1);
+                    t.measureFitInlierThreshold = measurement.value("fitInlierThreshold", 1.5f);
+                    t.measureMinimumValidCalipers = measurement.value("minimumValidCalipers", 3);
+                    t.measureMinimumConfidence = measurement.value("minimumConfidence", 0.0f);
+                    t.measureMmPerPixel = measurement.value("legacyMmPerPixel", t.measureMmPerPixel);
+                    t.measureCalibration.enabled = measurement.value("calibrationEnabled", false);
+                    t.measureCalibration.scaleX = measurement.value("scaleX", 1.0);
+                    t.measureCalibration.scaleY = measurement.value("scaleY", 1.0);
+                    t.measureCalibration.pixelOrigin.x = measurement.value("pixelOriginX", 0.0);
+                    t.measureCalibration.pixelOrigin.y = measurement.value("pixelOriginY", 0.0);
+                    t.measureCalibration.worldOrigin.x = measurement.value("worldOriginX", 0.0);
+                    t.measureCalibration.worldOrigin.y = measurement.value("worldOriginY", 0.0);
+                    t.measureCalibration.homographyEnabled = measurement.value("homographyEnabled", false);
+                    const auto homography = measurement.value("homography", std::vector<double>());
+                    if (homography.size() == 9)
+                        std::copy(homography.begin(), homography.end(),
+                            t.measureCalibration.pixelToWorldHomography.val);
+                    t.measureCalibration.distortionEnabled = measurement.value("distortionEnabled", false);
+                    t.measureCalibration.fx = measurement.value("fx", 1.0);
+                    t.measureCalibration.fy = measurement.value("fy", 1.0);
+                    t.measureCalibration.cx = measurement.value("cx", 0.0);
+                    t.measureCalibration.cy = measurement.value("cy", 0.0);
+                    t.measureCalibration.k1 = measurement.value("k1", 0.0);
+                    t.measureCalibration.k2 = measurement.value("k2", 0.0);
+                    t.measureCalibration.p1 = measurement.value("p1", 0.0);
+                    t.measureCalibration.p2 = measurement.value("p2", 0.0);
+                    t.measureCalibration.k3 = measurement.value("k3", 0.0);
+                    t.measureToleranceEnabled = measurement.value("toleranceEnabled", t.measureToleranceEnabled);
+                    t.measureNominal = measurement.value("nominal", t.measureNominal);
+                    t.measureToleranceMinus = measurement.value("toleranceMinus", t.measureToleranceMinus);
+                    t.measureTolerancePlus = measurement.value("tolerancePlus", t.measureTolerancePlus);
+                }
 
                 // 搜索 ROI 子数组
                 if (tj.contains("searchROIs") && tj["searchROIs"].is_array())
@@ -755,8 +908,8 @@ namespace RecipeManager
             cv::Mat tpl = ReadImageFile(tplPath, cv::IMREAD_COLOR);
             if (!tpl.empty())
             {
-                g_FrozenTemplate = tpl;
-                g_ShowPreview = true;
+                TemplateState::FrozenTemplate() = tpl;
+                TemplateState::ShowPreview() = true;
                 LogSystem::Add(LOG_INFO, "Template image loaded: %s", tplPath.c_str());
             }
         }
@@ -800,37 +953,36 @@ namespace RecipeManager
         const std::string& currentSourcePath = FrameSourceState::Current().sourcePath;
         if (!currentSourcePath.empty())
             d.imagePath = currentSourcePath;
-        else if (!pendingPath.empty())
-            d.imagePath = pendingPath;
 
-        // 阈值
-        d.threshold.useGray = gUseGray;
-        d.threshold.thresholdValue = gThresholdValue;
-        d.threshold.binaryInv = gThresholdBinaryInv;
-        d.threshold.blurSize = gBlurSize;
-        d.threshold.cannyLow = gCannyLow;
-        d.threshold.cannyHigh = gCannyHigh;
-        d.threshold.brightness = gBrightness;
-        d.threshold.contrast = gContrast;
-        d.threshold.processMode = gProcessMode;
-
-        d.threshold.pipeBlur = gPipe.enableBlur;
-        d.threshold.pipeThreshold = gPipe.enableThreshold;
-        d.threshold.pipeCanny = gPipe.enableCanny;
-        d.threshold.pipeBlurSize = gPipe.blurSize;
-        d.threshold.pipeThresholdVal = gPipe.threshold;
-        d.threshold.pipeCannyLow = gPipe.cannyLow;
-        d.threshold.pipeCannyHigh = gPipe.cannyHigh;
-
-        // Template match
-        d.tmMatch.searchMode = g_TMSearchMode;
-        d.tmMatch.maxResults = g_TMMaxResults;
-        d.tmMatch.maxImageDim = g_TMMaxImageDim;
-        d.tmMatch.matchThreshold = g_TMMatchThreshold;
-        d.tmMatch.enableRotation = g_TMEnableRotation;
-        d.tmMatch.rotationStart = g_TMRotationStart;
-        d.tmMatch.rotationEnd = g_TMRotationEnd;
-        d.tmMatch.rotationStep = g_TMRotationStep;
+        // Legacy top-level fields are derived from Core tool instances for old recipe readers.
+        for (const auto& tool : ToolChainState::ReadOnlyTools())
+        {
+            if (tool.type == 3)
+            {
+                d.threshold.useGray = tool.dbgUseGray;
+                d.threshold.thresholdValue = tool.dbgThreshold;
+                d.threshold.cannyLow = tool.dbgCannyLow;
+                d.threshold.cannyHigh = tool.dbgCannyHigh;
+                d.threshold.pipeBlur = tool.dbgEnableBlur;
+                d.threshold.pipeThreshold = tool.dbgEnableThresh;
+                d.threshold.pipeCanny = tool.dbgEnableCanny;
+                d.threshold.pipeBlurSize = tool.dbgBlurSize;
+                d.threshold.pipeThresholdVal = tool.dbgThreshold;
+                d.threshold.pipeCannyLow = tool.dbgCannyLow;
+                d.threshold.pipeCannyHigh = tool.dbgCannyHigh;
+            }
+            else if (tool.type == 1)
+            {
+                d.tmMatch.searchMode = tool.searchMode;
+                d.tmMatch.maxResults = tool.maxResults;
+                d.tmMatch.maxImageDim = tool.maxImageDim;
+                d.tmMatch.matchThreshold = tool.matchThreshold;
+                d.tmMatch.enableRotation = tool.enableRotation;
+                d.tmMatch.rotationStart = tool.rotationStart;
+                d.tmMatch.rotationEnd = tool.rotationEnd;
+                d.tmMatch.rotationStep = tool.rotationStep;
+            }
+        }
 
         // ROI
         d.rois.clear();
@@ -857,7 +1009,14 @@ namespace RecipeManager
             RecipeToolInstance t;
             t.type = src.type;
             t.label = src.label;
+            t.showResultLabels = src.showResultLabels;
             t.inputSourceMode = src.inputSourceMode;
+            t.resultRoiMode = src.resultRoiMode;
+            t.resultRoiSourceTool = src.resultRoiSourceTool;
+            t.resultRoiIndex = src.resultRoiIndex;
+            t.resultRoiMissingPolicy = src.resultRoiMissingPolicy;
+            t.fixture = src.fixture;
+            t.judgement = src.judgement;
             if (!src.templateImg.empty() || !src.shpTplImage.empty())
                 t.templateFile = d.name + "_tpl" + std::to_string(ti) + ".png";
             t.hasTemplateROI = src.hasTemplateROI;
@@ -981,6 +1140,35 @@ namespace RecipeManager
             t.ocrFastMode = src.ocrFastMode;
             t.ocrDetectOnly = src.ocrDetectOnly;
             t.ocrUseROI = src.ocrUseROI;
+            t.qrUseROI = src.qrUseROI;
+            t.qrDetectMulti = src.qrDetectMulti;
+            t.qrEnhance = src.qrEnhance;
+            t.qrMinSize = src.qrMinSize;
+            t.qrShowText = src.qrShowText;
+            t.qrEngine = src.qrEngine;
+            t.qrFormatMask = src.qrFormatMask;
+            t.qrFilterDuplicates = src.qrFilterDuplicates;
+            t.measureMode = src.measureMode;
+            t.measureCaliperCount = src.measureCaliperCount;
+            t.measureSearchLength = src.measureSearchLength;
+            t.measureProjectionWidth = src.measureProjectionWidth;
+            t.measureSmoothingSigma = src.measureSmoothingSigma;
+            t.measureEdgeThreshold = src.measureEdgeThreshold;
+            t.measureMinPairDistance = src.measureMinPairDistance;
+            t.measureEdgePolarity = src.measureEdgePolarity;
+            t.measureSubpixel = src.measureSubpixel;
+            t.measureFitMethod = src.measureFitMethod;
+            t.measureFitInlierThreshold = src.measureFitInlierThreshold;
+            t.measureMinimumValidCalipers = src.measureMinimumValidCalipers;
+            t.measureMinimumConfidence = src.measureMinimumConfidence;
+            t.measureMmPerPixel = src.measureMmPerPixel;
+            t.measureCalibration = src.measureCalibration;
+            t.measureCalibrationPixels = src.measureCalibrationPixels;
+            t.measureCalibrationMm = src.measureCalibrationMm;
+            t.measureToleranceEnabled = src.measureToleranceEnabled;
+            t.measureNominal = src.measureNominal;
+            t.measureToleranceMinus = src.measureToleranceMinus;
+            t.measureTolerancePlus = src.measureTolerancePlus;
 
             for (const auto &roi : src.searchROIs)
             {
@@ -1041,36 +1229,7 @@ namespace RecipeManager
     void Apply(const RecipeData &data)
     {
         if (!data.imagePath.empty())
-            pendingPath = data.imagePath;
-
-        // 阈值参数
-        gUseGray = data.threshold.useGray;
-        gThresholdValue = data.threshold.thresholdValue;
-        gThresholdBinaryInv = data.threshold.binaryInv;
-        gBlurSize = data.threshold.blurSize;
-        gCannyLow = data.threshold.cannyLow;
-        gCannyHigh = data.threshold.cannyHigh;
-        gBrightness = data.threshold.brightness;
-        gContrast = data.threshold.contrast;
-        gProcessMode = data.threshold.processMode;
-
-        gPipe.enableBlur = data.threshold.pipeBlur;
-        gPipe.enableThreshold = data.threshold.pipeThreshold;
-        gPipe.enableCanny = data.threshold.pipeCanny;
-        gPipe.blurSize = data.threshold.pipeBlurSize;
-        gPipe.threshold = data.threshold.pipeThresholdVal;
-        gPipe.cannyLow = data.threshold.pipeCannyLow;
-        gPipe.cannyHigh = data.threshold.pipeCannyHigh;
-
-        // Template match
-        g_TMSearchMode = data.tmMatch.searchMode;
-        g_TMMaxResults = data.tmMatch.maxResults;
-        g_TMMaxImageDim = data.tmMatch.maxImageDim;
-        g_TMMatchThreshold = data.tmMatch.matchThreshold;
-        g_TMEnableRotation = data.tmMatch.enableRotation;
-        g_TMRotationStart = data.tmMatch.rotationStart;
-        g_TMRotationEnd = data.tmMatch.rotationEnd;
-        g_TMRotationStep = data.tmMatch.rotationStep;
+            FrameNavigation::RequestImagePath(data.imagePath);
 
         // ROI
         ROIState::Items().clear();
@@ -1086,13 +1245,34 @@ namespace RecipeManager
         // 工具实例
         ToolChainState::Tools().clear();
         LogSystem::Add(LOG_INFO, "[Apply] restoring tools: %zu", data.tools.size());
+        if (data.tools.empty())
+        {
+            ToolInstance threshold;
+            threshold.type = 3;
+            threshold.dbgUseGray = data.threshold.useGray;
+            threshold.dbgEnableBlur = data.threshold.pipeBlur;
+            threshold.dbgBlurSize = data.threshold.pipeBlurSize;
+            threshold.dbgEnableThresh = data.threshold.pipeThreshold;
+            threshold.dbgThreshold = data.threshold.pipeThresholdVal;
+            threshold.dbgEnableCanny = data.threshold.pipeCanny;
+            threshold.dbgCannyLow = data.threshold.pipeCannyLow;
+            threshold.dbgCannyHigh = data.threshold.pipeCannyHigh;
+            ToolChainState::Tools().push_back(std::move(threshold));
+        }
         for (size_t ti = 0; ti < data.tools.size(); ti++)
         {
             const auto &t = data.tools[ti];
             ToolInstance it;
             it.type = t.type;
             it.label = t.label;
+            it.showResultLabels = t.showResultLabels;
             it.inputSourceMode = t.inputSourceMode;
+            it.resultRoiMode = t.resultRoiMode;
+            it.resultRoiSourceTool = t.resultRoiSourceTool;
+            it.resultRoiIndex = t.resultRoiIndex;
+            it.resultRoiMissingPolicy = t.resultRoiMissingPolicy;
+            it.fixture = t.fixture;
+            it.judgement = t.judgement;
             it.hasTemplateROI = t.hasTemplateROI;
             if (t.hasTemplateROI)
             {
@@ -1211,6 +1391,35 @@ namespace RecipeManager
             it.ocrFastMode = t.ocrFastMode;
             it.ocrDetectOnly = t.ocrDetectOnly;
             it.ocrUseROI = t.ocrUseROI;
+            it.qrUseROI = t.qrUseROI;
+            it.qrDetectMulti = t.qrDetectMulti;
+            it.qrEnhance = t.qrEnhance;
+            it.qrMinSize = t.qrMinSize;
+            it.qrShowText = t.qrShowText;
+            it.qrEngine = t.qrEngine;
+            it.qrFormatMask = t.qrFormatMask;
+            it.qrFilterDuplicates = t.qrFilterDuplicates;
+            it.measureMode = t.measureMode;
+            it.measureCaliperCount = t.measureCaliperCount;
+            it.measureSearchLength = t.measureSearchLength;
+            it.measureProjectionWidth = t.measureProjectionWidth;
+            it.measureSmoothingSigma = t.measureSmoothingSigma;
+            it.measureEdgeThreshold = t.measureEdgeThreshold;
+            it.measureMinPairDistance = t.measureMinPairDistance;
+            it.measureEdgePolarity = t.measureEdgePolarity;
+            it.measureSubpixel = t.measureSubpixel;
+            it.measureFitMethod = t.measureFitMethod;
+            it.measureFitInlierThreshold = t.measureFitInlierThreshold;
+            it.measureMinimumValidCalipers = t.measureMinimumValidCalipers;
+            it.measureMinimumConfidence = t.measureMinimumConfidence;
+            it.measureMmPerPixel = t.measureMmPerPixel;
+            it.measureCalibration = t.measureCalibration;
+            it.measureCalibrationPixels = t.measureCalibrationPixels;
+            it.measureCalibrationMm = t.measureCalibrationMm;
+            it.measureToleranceEnabled = t.measureToleranceEnabled;
+            it.measureNominal = t.measureNominal;
+            it.measureToleranceMinus = t.measureToleranceMinus;
+            it.measureTolerancePlus = t.measureTolerancePlus;
 
             // 多点找色 type==10
             if (t.type == 10)

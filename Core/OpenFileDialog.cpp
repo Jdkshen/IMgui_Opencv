@@ -7,6 +7,83 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <cwctype>
+
+namespace
+{
+std::string WideToUtf8(const wchar_t* text)
+{
+    if (!text || !text[0])
+        return {};
+    const int length = WideCharToMultiByte(CP_UTF8, 0, text, -1, nullptr, 0, nullptr, nullptr);
+    if (length <= 1)
+        return {};
+    std::string result(static_cast<size_t>(length), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text, -1, result.data(), length, nullptr, nullptr);
+    result.resize(static_cast<size_t>(length - 1));
+    return result;
+}
+
+std::wstring Utf8ToWide(const std::string& text)
+{
+    if (text.empty())
+        return {};
+    const int length = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, nullptr, 0);
+    if (length <= 1)
+        return {};
+    std::wstring result(static_cast<size_t>(length), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, result.data(), length);
+    result.resize(static_cast<size_t>(length - 1));
+    return result;
+}
+
+bool IsImageExtension(const std::wstring& fileName)
+{
+    const size_t dot = fileName.find_last_of(L'.');
+    if (dot == std::wstring::npos)
+        return false;
+    std::wstring extension = fileName.substr(dot);
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+        [](wchar_t value) { return static_cast<wchar_t>(std::towlower(value)); });
+    return extension == L".jpg" || extension == L".jpeg" ||
+        extension == L".png" || extension == L".bmp" ||
+        extension == L".tif" || extension == L".tiff" ||
+        extension == L".webp";
+}
+
+void ScanDirectory(const std::wstring& folder, bool recursive, std::vector<std::string>& files)
+{
+    WIN32_FIND_DATAW data{};
+    const std::wstring searchPath = folder + L"\\*";
+    HANDLE findHandle = FindFirstFileW(searchPath.c_str(), &data);
+    if (findHandle == INVALID_HANDLE_VALUE)
+        return;
+
+    do
+    {
+        const std::wstring name(data.cFileName);
+        if (name == L"." || name == L"..")
+            continue;
+
+        const std::wstring fullPath = folder + L"\\" + name;
+        if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
+        {
+            if (recursive && (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0)
+                ScanDirectory(fullPath, true, files);
+            continue;
+        }
+
+        if (IsImageExtension(name))
+        {
+            std::string utf8Path = WideToUtf8(fullPath.c_str());
+            if (!utf8Path.empty())
+                files.push_back(std::move(utf8Path));
+        }
+    } while (FindNextFileW(findHandle, &data));
+
+    FindClose(findHandle);
+}
+}
 
 // ========================================
 // 打开文件选择对话框（支持中文）
@@ -27,8 +104,8 @@ std::string OpenFileDialog()
 
     // Unicode过滤器
     ofn.lpstrFilter =
-        L"图片文件 (*.jpg;*.png;*.bmp)\0"
-        L"*.jpg;*.png;*.bmp\0"
+        L"图片文件 (*.jpg;*.jpeg;*.png;*.bmp;*.tif;*.tiff;*.webp)\0"
+        L"*.jpg;*.jpeg;*.png;*.bmp;*.tif;*.tiff;*.webp\0"
         L"所有文件 (*.*)\0"
         L"*.*\0";
 
@@ -36,19 +113,12 @@ std::string OpenFileDialog()
 
     ofn.Flags =
         OFN_PATHMUSTEXIST |
-        OFN_FILEMUSTEXIST;
+        OFN_FILEMUSTEXIST |
+        OFN_NOCHANGEDIR;
 
     if (GetOpenFileNameW(&ofn))
     {
-        // 将宽字符路径转换为 UTF-8 窄字符串
-        int len = WideCharToMultiByte(CP_UTF8, 0, filename, -1, nullptr, 0, nullptr, nullptr);
-        if (len > 0)
-        {
-            std::string result(len, '\0'); // len 含末尾 \0
-            WideCharToMultiByte(CP_UTF8, 0, filename, -1, &result[0], len, nullptr, nullptr);
-            result.resize(len - 1); // 去掉末尾 \0
-            return result;
-        }
+        return WideToUtf8(filename);
     }
 
     return "";
@@ -72,18 +142,11 @@ std::string OpenVideoDialog()
         L"所有文件 (*.*)\0"
         L"*.*\0";
     ofn.nFilterIndex = 1;
-    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
 
     if (GetOpenFileNameW(&ofn))
     {
-        int len = WideCharToMultiByte(CP_UTF8, 0, filename, -1, nullptr, 0, nullptr, nullptr);
-        if (len > 0)
-        {
-            std::string result(len, '\0');
-            WideCharToMultiByte(CP_UTF8, 0, filename, -1, &result[0], len, nullptr, nullptr);
-            result.resize(len - 1);
-            return result;
-        }
+        return WideToUtf8(filename);
     }
     return "";
 }
@@ -103,18 +166,11 @@ std::string OpenFileDialogWithFilter(const wchar_t *filter, const wchar_t *title
     ofn.lpstrFilter = filter;
     ofn.lpstrTitle = title;
     ofn.nFilterIndex = 1;
-    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
 
     if (GetOpenFileNameW(&ofn))
     {
-        int len = WideCharToMultiByte(CP_UTF8, 0, filename, -1, nullptr, 0, nullptr, nullptr);
-        if (len > 0)
-        {
-            std::string result(len, '\0');
-            WideCharToMultiByte(CP_UTF8, 0, filename, -1, &result[0], len, nullptr, nullptr);
-            result.resize(len - 1);
-            return result;
-        }
+        return WideToUtf8(filename);
     }
     return "";
 }
@@ -152,12 +208,7 @@ std::string OpenFolderDialog()
                 PWSTR pszPath = nullptr;
                 if (SUCCEEDED(psi->GetDisplayName(SIGDN_FILESYSPATH, &pszPath)) && pszPath)
                 {
-                    int len = WideCharToMultiByte(CP_UTF8, 0, pszPath, -1, nullptr, 0, nullptr, nullptr);
-                    if (len > 0)
-                    {
-                        result.resize(len - 1);
-                        WideCharToMultiByte(CP_UTF8, 0, pszPath, -1, &result[0], len, nullptr, nullptr);
-                    }
+                    result = WideToUtf8(pszPath);
                     CoTaskMemFree(pszPath);
                 }
                 psi->Release();
@@ -174,67 +225,17 @@ std::string OpenFolderDialog()
 
 // ========================================
 // 扫描文件夹中所有图片文件
-// 支持的格式：jpg, jpeg, png, bmp（大小写不敏感）
-// 按文件名升序排列
+// 支持常用 OpenCV 图片格式，可选递归扫描，按完整路径排序。
 // ========================================
-std::vector<std::string> ScanImageFiles(const std::string &folderPath)
+std::vector<std::string> ScanImageFiles(const std::string &folderPath, bool recursive)
 {
     std::vector<std::string> files;
     if (folderPath.empty())
         return files;
-
-    // 构造搜索路径（支持 Unicode）
-    int wlen = MultiByteToWideChar(CP_UTF8, 0, folderPath.c_str(), -1, nullptr, 0);
-    if (wlen <= 0)
+    const std::wstring wideFolder = Utf8ToWide(folderPath);
+    if (wideFolder.empty())
         return files;
-
-    // wlen 包含末尾 null，resize 去掉它，否则拼接路径会嵌入 \0
-    std::wstring wfolder(wlen - 1, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, folderPath.c_str(), -1, &wfolder[0], wlen);
-
-    std::wstring searchPath = wfolder + L"\\*";
-
-    WIN32_FIND_DATAW fd;
-    HANDLE hFind = FindFirstFileW(searchPath.c_str(), &fd);
-    if (hFind == INVALID_HANDLE_VALUE)
-        return files;
-
-    do
-    {
-        // 跳过目录
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-            continue;
-
-        std::wstring wname(fd.cFileName);
-
-        // 检查扩展名（转小写比较）
-        size_t dotPos = wname.find_last_of(L'.');
-        if (dotPos == std::wstring::npos)
-            continue;
-
-        std::wstring ext = wname.substr(dotPos);
-        for (auto &c : ext)
-            c = (wchar_t)towlower(c);
-
-        if (ext != L".jpg" && ext != L".jpeg" && ext != L".png" && ext != L".bmp")
-            continue;
-
-        // 构造完整路径 → UTF-8
-        std::wstring wfullPath = wfolder + L"\\" + wname;
-        int ulen = WideCharToMultiByte(CP_UTF8, 0, wfullPath.c_str(), -1, nullptr, 0, nullptr, nullptr);
-        if (ulen > 0)
-        {
-            std::string utf8Path(ulen - 1, '\0');
-            WideCharToMultiByte(CP_UTF8, 0, wfullPath.c_str(), -1, &utf8Path[0], ulen, nullptr, nullptr);
-            files.push_back(utf8Path);
-        }
-
-    } while (FindNextFileW(hFind, &fd));
-
-    FindClose(hFind);
-
-    // 按文件名排序
+    ScanDirectory(wideFolder, recursive, files);
     std::sort(files.begin(), files.end());
-
     return files;
 }

@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <sstream>
@@ -26,6 +27,114 @@
 
 extern cv::Mat& g_FrozenTemplate; // 定义在 TemplateMatch.cpp
 extern bool& g_ShowTplEditor;    // 定义在 TemplateMatch.cpp
+static int s_MeasurementROIDrawOwner = -1;
+static bool s_MeasurementROIModifying = false;
+static std::vector<ROI> s_MeasurementROIPendingBackup;
+
+static void BeginMeasurementROIDrawSequence(int mode)
+{
+    switch (std::clamp(mode, 0, 7))
+    {
+    case 0: UI::BeginROIDrawSequence({ROI_TYPE_POINT, ROI_TYPE_POINT}); break;
+    case 1: UI::BeginROIDrawSequence({ROI_TYPE_RECT}); break;
+    case 2: UI::BeginROIDrawSequence({ROI_TYPE_LINE, ROI_TYPE_LINE}); break;
+    case 3: UI::BeginROIDrawSequence({ROI_TYPE_CIRCLE}); break;
+    case 4: UI::BeginROIDrawSequence({ROI_TYPE_RECT}); break;
+    case 5: UI::BeginROIDrawSequence({ROI_TYPE_RECT}); break;
+    case 6: UI::BeginROIDrawSequence({ROI_TYPE_POINT, ROI_TYPE_LINE}); break;
+    case 7: UI::BeginROIDrawSequence({ROI_TYPE_LINE, ROI_TYPE_LINE}); break;
+    default: UI::CancelROIDrawSequence(); break;
+    }
+}
+
+static const char* ROITypeDisplayName(int type)
+{
+    switch (type)
+    {
+    case ROI_TYPE_RECT: return "矩形";
+    case ROI_TYPE_POINT: return "点";
+    case ROI_TYPE_LINE: return "线段";
+    case ROI_TYPE_CIRCLE: return "圆";
+    case ROI_TYPE_POLYGON: return "多边形";
+    default: return "ROI";
+    }
+}
+
+static bool SyncMeasurementRuntimeROIs(ToolInstance& tool)
+{
+    auto sameGeometry = [](const ROI& first, const ROI& second)
+    {
+        constexpr float epsilon = 0.01f;
+        return first.type == second.type &&
+            std::abs(first.start.x - second.start.x) <= epsilon &&
+            std::abs(first.start.y - second.start.y) <= epsilon &&
+            std::abs(first.end.x - second.end.x) <= epsilon &&
+            std::abs(first.end.y - second.end.y) <= epsilon;
+    };
+
+    if (tool.measureRuntimeROIIds.empty() && !tool.searchROIs.empty())
+    {
+        std::vector<std::uint64_t> restoredIds;
+        restoredIds.reserve(tool.searchROIs.size());
+        for (ROI& boundROI : tool.searchROIs)
+        {
+            auto found = std::find_if(UI::gROIs.begin(), UI::gROIs.end(),
+                [&](const ROI& roi) { return sameGeometry(roi, boundROI); });
+            if (found == UI::gROIs.end())
+            {
+                restoredIds.clear();
+                break;
+            }
+            const std::uint64_t id = UI::EnsureROIRuntimeId(*found);
+            boundROI.runtimeId = id;
+            restoredIds.push_back(id);
+        }
+        if (!restoredIds.empty() && restoredIds.size() == tool.searchROIs.size())
+            tool.measureRuntimeROIIds = std::move(restoredIds);
+    }
+
+    if (tool.measureRuntimeROIIds.empty())
+        return false;
+
+    std::vector<ROI> synced;
+    synced.reserve(tool.measureRuntimeROIIds.size());
+    for (std::uint64_t id : tool.measureRuntimeROIIds)
+    {
+        const auto found = std::find_if(UI::gROIs.begin(), UI::gROIs.end(),
+            [id](const ROI& roi) { return roi.runtimeId == id; });
+        if (found == UI::gROIs.end())
+        {
+            tool.measureRuntimeROIIds.clear();
+            return false;
+        }
+        synced.push_back(*found);
+    }
+
+    tool.searchROIs = std::move(synced);
+    tool.lineSaveROIs = tool.searchROIs;
+    tool.useSearchROI = true;
+    return true;
+}
+
+static void RemoveMeasurementRuntimeROIs(ToolInstance& tool)
+{
+    if (!tool.measureRuntimeROIIds.empty())
+    {
+        UI::gROIs.erase(
+            std::remove_if(UI::gROIs.begin(), UI::gROIs.end(), [&](const ROI& roi)
+            {
+                return std::find(tool.measureRuntimeROIIds.begin(),
+                    tool.measureRuntimeROIIds.end(), roi.runtimeId) != tool.measureRuntimeROIIds.end();
+            }),
+            UI::gROIs.end());
+        UI::gSelectedROI = -1;
+        UI::gActiveHandle = HANDLE_NONE;
+    }
+    tool.measureRuntimeROIIds.clear();
+    tool.searchROIs.clear();
+    tool.lineSaveROIs.clear();
+    tool.useSearchROI = false;
+}
 
 static std::string QuoteCommandArg(const std::string& value)
 {
@@ -395,8 +504,10 @@ namespace UI
         {5, "轮廓分析", ToolCategory::Detection, "◇"},
         {6, "形状匹配", ToolCategory::Detection, "△"},
         {13, "文字识别", ToolCategory::Detection, "T"},
+        {14, "二维码/条码识别", ToolCategory::Detection, "▣"},
 
         {7, "直线检测", ToolCategory::Geometry,  "▬"},
+        {15, "工业测量", ToolCategory::Geometry, "M"},
 
         {9, "颜色分析", ToolCategory::Analysis,  "◆"},
         {10, "多点找色", ToolCategory::Detection, "◉"},
@@ -448,6 +559,8 @@ namespace UI
             case 10: return IM_COL32(0, 188, 212, 255);   // multi color
             case 11: return IM_COL32(102, 187, 106, 255); // experiment
             case 13: return IM_COL32(67, 160, 255, 255);  // OCR
+            case 14: return IM_COL32(38, 198, 218, 255);  // QR code
+            case 15: return IM_COL32(255, 193, 7, 255);   // measurement
             default: return IM_COL32(120, 140, 160, 255);
             }
         };
@@ -487,6 +600,16 @@ namespace UI
             case 13:
                 drawList->AddText(ImVec2(p.x + size * 0.27f, p.y + size * 0.16f), white, "T");
                 drawList->AddLine(ImVec2(p.x + 4, p.y + size - 4), ImVec2(p.x + size - 4, p.y + size - 4), white, 1.2f);
+                break;
+            case 14:
+                drawList->AddRect(ImVec2(p.x + 4, p.y + 4), ImVec2(p.x + size - 4, p.y + size - 4), white, 0.0f, 0, 1.3f);
+                drawList->AddRectFilled(ImVec2(p.x + 6, p.y + 6), ImVec2(p.x + 9, p.y + 9), white);
+                drawList->AddRectFilled(ImVec2(p.x + size - 9, p.y + 6), ImVec2(p.x + size - 6, p.y + 9), white);
+                drawList->AddRectFilled(ImVec2(p.x + 6, p.y + size - 9), ImVec2(p.x + 9, p.y + size - 6), white);
+                break;
+            case 15:
+                drawList->AddText(ImVec2(p.x + size * 0.20f, p.y + size * 0.16f), white, "M");
+                drawList->AddLine(ImVec2(p.x + 4, p.y + size - 5), ImVec2(p.x + size - 4, p.y + size - 5), white, 1.2f);
                 break;
             case 6:
                 drawList->AddTriangleFilled(ImVec2(center.x, p.y + 3), ImVec2(p.x + size - 3, p.y + size - 3), ImVec2(p.x + 3, p.y + size - 3), white);
@@ -695,6 +818,7 @@ namespace UI
                 it.mcfUseROI = true;
                 it.colorUseROI = true;
                 it.ocrUseROI = true;
+                it.qrUseROI = true;
                 cv::Rect r = roi.ToCvRect();
                 it.mcfRoiX = r.x;
                 it.mcfRoiY = r.y;
@@ -713,6 +837,7 @@ namespace UI
                 it.mcfUseROI = st.backupUseROI;
                 it.colorUseROI = st.backupUseROI;
                 it.ocrUseROI = st.backupUseROI;
+                it.qrUseROI = st.backupUseROI;
                 if (!it.searchROIs.empty())
                 {
                     cv::Rect r = it.searchROIs[0].ToCvRect();
@@ -781,6 +906,7 @@ namespace UI
                 it.mcfUseROI = false;
                 it.colorUseROI = false;
                 it.ocrUseROI = false;
+                it.qrUseROI = false;
                 it.mcfRoiX = it.mcfRoiY = it.mcfRoiW = it.mcfRoiH = 0;
                 LogSystem::Add(LOG_INFO, color, "查找区域: 已清除当前工具ROI");
                 SaveCurrentRecipe();
@@ -808,7 +934,7 @@ namespace UI
         // ---- Card 面板辅助 ----
         int currentCardType = -1;
         int currentCardInst = -1;
-        auto BeginCard = [isDark, &currentCardType, &currentCardInst](const char *title, const char *icon = "")
+        auto BeginCard = [isDark, &currentCardType, &currentCardInst, &SecondaryButton](const char *title, const char *icon = "")
         {
             ImGui::PushID(currentCardInst * 100 + currentCardType);
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6, 5));
@@ -872,6 +998,176 @@ namespace UI
                 if (ImGui::IsItemDeactivatedAfterEdit())
                     SaveCurrentRecipe();
                 ImGui::EndDisabled();
+                bool showResultLabels = cardTool->showResultLabels;
+                if (ImGui::Checkbox("结果标签", &showResultLabels))
+                {
+                    cardTool->showResultLabels = showResultLabels;
+                    SaveCurrentRecipe();
+                }
+
+                bool resultRoiChanged = false;
+                const char* resultRoiModes[] = {"固定/手工 ROI", "上游第 N 个结果", "上游全部结果"};
+                cardTool->resultRoiMode = std::clamp(cardTool->resultRoiMode, 0, 2);
+                resultRoiChanged |= ImGui::Combo("输入 ROI", &cardTool->resultRoiMode,
+                    resultRoiModes, IM_ARRAYSIZE(resultRoiModes));
+                if (cardTool->resultRoiMode != 0)
+                {
+                    std::string sourcePreview = "未选择";
+                    if (cardTool->resultRoiSourceTool >= 0 &&
+                        cardTool->resultRoiSourceTool < currentCardInst &&
+                        cardTool->resultRoiSourceTool < static_cast<int>(g_ToolInstances.size()))
+                    {
+                        const auto& source = g_ToolInstances[cardTool->resultRoiSourceTool];
+                        const char* sourceName = source.type == 12 ? "原图" : ToolRegistry::GetName(source.type);
+                        sourcePreview = std::to_string(cardTool->resultRoiSourceTool + 1) + ". " +
+                            ToolInstanceTitle(sourceName, source.label);
+                    }
+                    if (ImGui::BeginCombo("上游工具", sourcePreview.c_str()))
+                    {
+                        for (int sourceIndex = 0; sourceIndex < currentCardInst; ++sourceIndex)
+                        {
+                            const auto& source = g_ToolInstances[sourceIndex];
+                            const char* sourceName = source.type == 12 ? "原图" : ToolRegistry::GetName(source.type);
+                            const std::string option = std::to_string(sourceIndex + 1) + ". " +
+                                ToolInstanceTitle(sourceName, source.label);
+                            const bool selected = cardTool->resultRoiSourceTool == sourceIndex;
+                            if (ImGui::Selectable(option.c_str(), selected))
+                            {
+                                cardTool->resultRoiSourceTool = sourceIndex;
+                                resultRoiChanged = true;
+                            }
+                        }
+                        ImGui::EndCombo();
+                    }
+                    if (cardTool->resultRoiMode == 1)
+                    {
+                        int displayIndex = cardTool->resultRoiIndex + 1;
+                        if (ImGui::DragInt("结果序号", &displayIndex, 1.0f, 1, 100000))
+                        {
+                            cardTool->resultRoiIndex = (std::max)(0, displayIndex - 1);
+                            resultRoiChanged = true;
+                        }
+                    }
+                    const char* missingPolicies[] = {"结果不存在时跳过", "结果不存在时判定失败"};
+                    cardTool->resultRoiMissingPolicy = std::clamp(cardTool->resultRoiMissingPolicy, 0, 1);
+                    resultRoiChanged |= ImGui::Combo("缺失处理", &cardTool->resultRoiMissingPolicy,
+                        missingPolicies, IM_ARRAYSIZE(missingPolicies));
+                }
+                if (resultRoiChanged)
+                    SaveCurrentRecipe();
+
+                bool fixtureChanged = ImGui::Checkbox("启用定位坐标系", &cardTool->fixture.enabled);
+                if (cardTool->fixture.enabled)
+                {
+                    std::string fixturePreview = "未选择";
+                    if (cardTool->fixture.sourceToolIndex >= 0 &&
+                        cardTool->fixture.sourceToolIndex < currentCardInst &&
+                        cardTool->fixture.sourceToolIndex < static_cast<int>(g_ToolInstances.size()))
+                    {
+                        const auto& source = g_ToolInstances[cardTool->fixture.sourceToolIndex];
+                        fixturePreview = std::to_string(cardTool->fixture.sourceToolIndex + 1) + ". " +
+                            ToolInstanceTitle(ToolRegistry::GetName(source.type), source.label);
+                    }
+                    if (ImGui::BeginCombo("定位上游", fixturePreview.c_str()))
+                    {
+                        for (int sourceIndex = 0; sourceIndex < currentCardInst; ++sourceIndex)
+                        {
+                            const auto& source = g_ToolInstances[sourceIndex];
+                            if (source.type != 1 && source.type != 6)
+                                continue;
+                            const std::string option = std::to_string(sourceIndex + 1) + ". " +
+                                ToolInstanceTitle(ToolRegistry::GetName(source.type), source.label);
+                            if (ImGui::Selectable(option.c_str(), cardTool->fixture.sourceToolIndex == sourceIndex))
+                            {
+                                cardTool->fixture.sourceToolIndex = sourceIndex;
+                                fixtureChanged = true;
+                            }
+                        }
+                        ImGui::EndCombo();
+                    }
+                    int fixtureResultIndex = cardTool->fixture.resultIndex + 1;
+                    if (ImGui::DragInt("定位结果序号", &fixtureResultIndex, 1.0f, 1, 100000))
+                    {
+                        cardTool->fixture.resultIndex = (std::max)(0, fixtureResultIndex - 1);
+                        fixtureChanged = true;
+                    }
+                    if (SecondaryButton("从当前定位结果记录参考位姿"))
+                    {
+                        const int sourceIndex = cardTool->fixture.sourceToolIndex;
+                        if (sourceIndex >= 0 && sourceIndex < static_cast<int>(g_ToolInstances.size()) &&
+                            g_ToolInstances[sourceIndex].hasLastResult)
+                        {
+                            FixturePose pose;
+                            if (FixtureTransform::TryExtractPose(
+                                g_ToolInstances[sourceIndex].lastResult,
+                                cardTool->fixture.resultIndex,
+                                pose))
+                            {
+                                cardTool->fixture.referenceOrigin = pose.origin;
+                                cardTool->fixture.referenceAngleDegrees = pose.angleDegrees;
+                                fixtureChanged = true;
+                            }
+                        }
+                    }
+                    ImGui::TextDisabled("参考: (%.2f, %.2f), %.2f deg",
+                        cardTool->fixture.referenceOrigin.x,
+                        cardTool->fixture.referenceOrigin.y,
+                        cardTool->fixture.referenceAngleDegrees);
+                    fixtureChanged |= ImGui::Checkbox("定位缺失时判定失败", &cardTool->fixture.failOnMissing);
+                }
+                if (fixtureChanged)
+                    SaveCurrentRecipe();
+
+                bool judgementChanged = false;
+                judgementChanged |= ImGui::Checkbox("启用判定", &cardTool->judgement.enabled);
+                ImGui::SameLine();
+                judgementChanged |= ImGui::Checkbox("失败停止", &cardTool->judgement.stopOnFailure);
+                if (cardTool->judgement.enabled)
+                {
+                    ImGui::SetNextItemWidth(130.0f);
+                    judgementChanged |= ImGui::DragInt("最少结果", &cardTool->judgement.minResultCount, 1.0f, 0, 100000);
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(130.0f);
+                    judgementChanged |= ImGui::DragInt("最多结果", &cardTool->judgement.maxResultCount, 1.0f, -1, 100000);
+                    ImGui::TextDisabled("最多结果 -1 表示不限制");
+
+                    ImGui::SetNextItemWidth(160.0f);
+                    judgementChanged |= ImGui::DragFloat("最低分数", &cardTool->judgement.minScore, 0.01f, -1.0f, 1.0f, "%.3f");
+                    ImGui::SetNextItemWidth(160.0f);
+                    judgementChanged |= ImGui::DragFloat("最小面积", &cardTool->judgement.minArea, 1.0f, -1.0f, 1000000000.0f, "%.1f");
+                    ImGui::SetNextItemWidth(160.0f);
+                    judgementChanged |= ImGui::DragFloat("最大面积", &cardTool->judgement.maxArea, 1.0f, -1.0f, 1000000000.0f, "%.1f");
+
+                    char requiredText[256];
+                    snprintf(requiredText, sizeof(requiredText), "%s", cardTool->judgement.requiredText.c_str());
+                    ImGui::SetNextItemWidth(-1.0f);
+                    if (ImGui::InputText("文本条件", requiredText, IM_ARRAYSIZE(requiredText)))
+                    {
+                        cardTool->judgement.requiredText = requiredText;
+                        judgementChanged = true;
+                    }
+                    const char* textModes[] = {"包含", "完全相等"};
+                    cardTool->judgement.textMatchMode = std::clamp(cardTool->judgement.textMatchMode, 0, 1);
+                    judgementChanged |= ImGui::Combo("文本匹配", &cardTool->judgement.textMatchMode, textModes, IM_ARRAYSIZE(textModes));
+                    judgementChanged |= ImGui::Checkbox("区分大小写", &cardTool->judgement.textCaseSensitive);
+                    ImGui::TextDisabled("分数/面积为 -1 时不参与判定");
+                }
+                if (judgementChanged)
+                    SaveCurrentRecipe();
+
+                if (cardTool->hasLastResult)
+                {
+                    ImVec4 statusColor;
+                    switch (cardTool->lastResult.status)
+                    {
+                    case ToolResultStatus::Pass: statusColor = ImVec4(0.25f, 0.9f, 0.4f, 1.0f); break;
+                    case ToolResultStatus::Fail: statusColor = ImVec4(1.0f, 0.65f, 0.2f, 1.0f); break;
+                    default: statusColor = ImVec4(1.0f, 0.3f, 0.25f, 1.0f); break;
+                    }
+                    ImGui::TextColored(statusColor, "判定: %s", ToolResultStatusName(cardTool->lastResult.status));
+                    if (!cardTool->lastResult.statusReason.empty())
+                        ImGui::TextWrapped("%s", cardTool->lastResult.statusReason.c_str());
+                }
                 ImGui::Separator();
             }
             return true;
@@ -1443,6 +1739,358 @@ namespace UI
             ImGui::Checkbox("使用ROI##ocr", &it.ocrUseROI);
             ImGui::TextDisabled("模型: 默认 PP-OCRv6 tiny");
             ImGui::TextDisabled("状态: NCNN OCR接口已接入，未启用依赖时会提示");
+            EndCard();
+        };
+
+        // 14: 二维码/条码识别
+        g_ToolUIMap[14] = [&](ToolInstance &it, int inst)
+        {
+            BeginCard("二维码/条码识别");
+            if (SecondaryButton("重置参数"))
+            {
+                it.qrUseROI = true;
+                it.qrDetectMulti = true;
+                it.qrEnhance = true;
+                it.qrMinSize = 24;
+                it.qrShowText = true;
+                it.qrEngine = 0;
+                it.qrFormatMask = BarcodeFormatAll;
+                it.qrFilterDuplicates = true;
+            }
+            if (PrimaryButton("执行二维码/条码识别"))
+                RunToolFromCard(inst);
+            DrawSearchROIControls(it, inst);
+
+            SectionHeader("参数");
+            const char *engines[] = {"自动(ZXing优先)", "OpenCV", "ZXing-cpp"};
+            it.qrEngine = std::clamp(it.qrEngine, 0, 2);
+            ImGui::Combo("识别引擎##qr", &it.qrEngine, engines, IM_ARRAYSIZE(engines));
+            ImGui::Checkbox("使用ROI##qr", &it.qrUseROI);
+            ImGui::SameLine();
+            ImGui::Checkbox("识别多个##qr", &it.qrDetectMulti);
+            ImGui::Checkbox("增强识别##qr", &it.qrEnhance);
+            ImGui::SameLine();
+            ImGui::Checkbox("过滤重复码##qr", &it.qrFilterDuplicates);
+            ImGui::SliderInt("最小尺寸##qr", &it.qrMinSize, 8, 512);
+            ImGui::TextDisabled("码制过滤");
+            auto FormatCheckbox = [&](const char* label, std::uint32_t flag)
+            {
+                bool selected = (it.qrFormatMask & flag) != 0;
+                if (ImGui::Checkbox(label, &selected))
+                {
+                    if (selected)
+                        it.qrFormatMask |= flag;
+                    else
+                        it.qrFormatMask &= ~flag;
+                }
+            };
+            FormatCheckbox("QR Code##qrFmt", BarcodeFormatQR);
+            ImGui::SameLine();
+            FormatCheckbox("Code128##qrFmt", BarcodeFormatCode128);
+            ImGui::SameLine();
+            FormatCheckbox("EAN##qrFmt", BarcodeFormatEAN);
+            FormatCheckbox("Data Matrix##qrFmt", BarcodeFormatDataMatrix);
+            ImGui::SameLine();
+            FormatCheckbox("PDF417##qrFmt", BarcodeFormatPDF417);
+            if (it.qrFormatMask == 0)
+                ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.2f, 1.0f), "请至少选择一种码制");
+            if (it.qrEngine == 1 && (it.qrFormatMask & ~BarcodeFormatQR) != 0)
+                ImGui::TextDisabled("OpenCV 引擎仅支持 QR，其他码制请选自动或 ZXing-cpp");
+            ImGui::TextDisabled("解码内容条件在卡片公共“合格判定”中配置");
+            ImGui::TextDisabled("文字显示由卡片顶部的“结果标签”统一控制");
+
+            SectionHeader("结果");
+            if (it.hasLastResult)
+            {
+                ImGui::TextDisabled("二维码/条码: %d 个", static_cast<int>(it.lastResult.texts.size()));
+                if (!it.lastResult.texts.empty())
+                {
+                    const float listHeight = (std::min)(120.0f,
+                        static_cast<float>(it.lastResult.texts.size()) * ImGui::GetTextLineHeightWithSpacing() + 8.0f);
+                    ImGui::BeginChild("##qrResultList", ImVec2(0, listHeight), true);
+                    for (int i = 0; i < static_cast<int>(it.lastResult.texts.size()); ++i)
+                    {
+                        const auto &text = it.lastResult.texts[i];
+                        ImGui::TextWrapped("#%d (%d,%d %dx%d) %s",
+                            i + 1,
+                            text.box.x, text.box.y, text.box.width, text.box.height,
+                            text.text.c_str());
+                    }
+                    ImGui::EndChild();
+                }
+            }
+            EndCard();
+        };
+
+        // 15: 工业测量
+        g_ToolUIMap[15] = [&](ToolInstance &it, int inst)
+        {
+            BeginCard("工业测量");
+            SyncMeasurementRuntimeROIs(it);
+            auto StartMeasurementROIDrawing = [&](bool preserveExisting = false)
+            {
+                s_MeasurementROIModifying = preserveExisting;
+                s_MeasurementROIPendingBackup = preserveExisting ? it.searchROIs : std::vector<ROI>{};
+                s_MeasurementROIDrawOwner = inst;
+                if (preserveExisting && !it.searchROIs.empty())
+                {
+                    UI::CancelROIDrawSequence();
+                    UI::gCurrentROIType = it.searchROIs.front().type;
+                    UI::gSelectedROI = -1;
+                    for (int roiIndex = 0; roiIndex < static_cast<int>(UI::gROIs.size()); ++roiIndex)
+                    {
+                        if (UI::gROIs[roiIndex].runtimeId == it.searchROIs.front().runtimeId)
+                        {
+                            UI::gSelectedROI = roiIndex;
+                            break;
+                        }
+                    }
+                    UI::gDrawingROI = false;
+                }
+                else
+                {
+                    RemoveMeasurementRuntimeROIs(it);
+                    BeginMeasurementROIDrawSequence(it.measureMode);
+                }
+            };
+            if (SecondaryButton("重置参数"))
+            {
+                it.measureMode = 0;
+                it.measureCaliperCount = 16;
+                it.measureSearchLength = 30.0f;
+                it.measureProjectionWidth = 5.0f;
+                it.measureSmoothingSigma = 1.0f;
+                it.measureEdgeThreshold = 12.0f;
+                it.measureMinPairDistance = 3.0f;
+                it.measureEdgePolarity = 0;
+                it.measureSubpixel = true;
+                it.measureFitMethod = 1;
+                it.measureFitInlierThreshold = 1.5f;
+                it.measureMinimumValidCalipers = 3;
+                it.measureMinimumConfidence = 0.0f;
+                it.measureMmPerPixel = 0.0f;
+                it.measureCalibrationPixels = 100.0f;
+                it.measureCalibrationMm = 10.0f;
+                it.measureCalibration = CalibrationModel{};
+                it.measureToleranceEnabled = false;
+                it.measureNominal = 0.0f;
+                it.measureToleranceMinus = 0.0f;
+                it.measureTolerancePlus = 0.0f;
+                StartMeasurementROIDrawing();
+            }
+            if (PrimaryButton("执行测量"))
+                RunToolFromCard(inst);
+
+            SectionHeader("测量参数");
+            const char* modes[] = {
+                "点点距离", "边缘对/宽度卡尺", "线线角度", "圆拟合/直径",
+                "边缘点卡尺", "直线拟合", "点线距离", "线线距离"
+            };
+            it.measureMode = std::clamp(it.measureMode, 0, 7);
+            if (ImGui::Combo("测量类型##measure", &it.measureMode, modes, IM_ARRAYSIZE(modes)))
+            {
+                StartMeasurementROIDrawing();
+                SaveCurrentRecipe();
+            }
+
+            SectionHeader("测量 ROI");
+            if (SecondaryButton("按当前测量类型绘制 ROI"))
+                StartMeasurementROIDrawing();
+
+            if (s_MeasurementROIDrawOwner == inst)
+            {
+                std::vector<ROI> completedROIs;
+                if (ConsumeCompletedROIDrawSequence(completedROIs))
+                {
+                    it.searchROIs = std::move(completedROIs);
+                    it.lineSaveROIs = it.searchROIs;
+                    it.useSearchROI = true;
+                    it.measureRuntimeROIIds.clear();
+                    it.measureRuntimeROIIds.reserve(it.searchROIs.size());
+                    for (const ROI& roi : it.searchROIs)
+                        it.measureRuntimeROIIds.push_back(roi.runtimeId);
+                    s_MeasurementROIPendingBackup.clear();
+                    s_MeasurementROIModifying = false;
+                    s_MeasurementROIDrawOwner = -1;
+                    SaveCurrentRecipe();
+                }
+            }
+
+            if (s_MeasurementROIDrawOwner == inst && s_MeasurementROIModifying)
+            {
+                ImGui::TextColored(ImVec4(0.35f, 0.8f, 1.0f, 1.0f),
+                    "请在图像中拖动 ROI 控制点或中心位置");
+                if (PrimaryButton("完成修改##measurement_roi_apply"))
+                {
+                    SyncMeasurementRuntimeROIs(it);
+                    s_MeasurementROIPendingBackup.clear();
+                    s_MeasurementROIModifying = false;
+                    s_MeasurementROIDrawOwner = -1;
+                    UI::gSelectedROI = -1;
+                    SaveCurrentRecipe();
+                }
+                if (SecondaryButton("取消修改##measurement_roi_cancel"))
+                {
+                    for (const ROI& original : s_MeasurementROIPendingBackup)
+                    {
+                        auto found = std::find_if(UI::gROIs.begin(), UI::gROIs.end(),
+                            [&](const ROI& roi) { return roi.runtimeId == original.runtimeId; });
+                        if (found != UI::gROIs.end())
+                            *found = original;
+                        else
+                            UI::gROIs.push_back(original);
+                    }
+                    it.searchROIs = s_MeasurementROIPendingBackup;
+                    it.lineSaveROIs = it.searchROIs;
+                    it.useSearchROI = !it.searchROIs.empty();
+                    it.measureRuntimeROIIds.clear();
+                    for (const ROI& roi : it.searchROIs)
+                        it.measureRuntimeROIIds.push_back(roi.runtimeId);
+                    s_MeasurementROIPendingBackup.clear();
+                    s_MeasurementROIModifying = false;
+                    s_MeasurementROIDrawOwner = -1;
+                    UI::gSelectedROI = -1;
+                    SaveCurrentRecipe();
+                }
+            }
+            else if (s_MeasurementROIDrawOwner == inst && IsROIDrawSequenceActive())
+            {
+                const int step = ROIDrawSequenceStep();
+                const int count = ROIDrawSequenceCount();
+                ImGui::TextColored(ImVec4(0.35f, 0.8f, 1.0f, 1.0f),
+                    "绘制 %d/%d: %s", step + 1, count, ROITypeDisplayName(gCurrentROIType));
+            }
+            else if (!it.searchROIs.empty())
+            {
+                ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f),
+                    "已绑定 %zu 个测量 ROI", it.searchROIs.size());
+
+                // 状态文字单独占一行，避免窄侧栏把修改按钮裁掉。
+                if (SecondaryButton("修改测量 ROI##measurement_roi_edit"))
+                    StartMeasurementROIDrawing(true);
+                ImGui::SameLine();
+                if (SecondaryButton("清除##measurement_roi_clear"))
+                {
+                    RemoveMeasurementRuntimeROIs(it);
+                    SaveCurrentRecipe();
+                }
+            }
+            else
+            {
+                ImGui::TextDisabled("未绑定测量 ROI");
+            }
+
+            const bool usesCaliper = it.measureMode == 1 || it.measureMode == 3 ||
+                it.measureMode == 4 || it.measureMode == 5;
+            if (usesCaliper)
+            {
+                SectionHeader("卡尺与拟合");
+                ImGui::SliderInt("卡尺数量##measure", &it.measureCaliperCount, 1, 128);
+                ImGui::InputFloat("搜索长度(px)##measure", &it.measureSearchLength, 1.0f, 5.0f, "%.2f");
+                ImGui::InputFloat("投影宽度(px)##measure", &it.measureProjectionWidth, 1.0f, 5.0f, "%.2f");
+                ImGui::InputFloat("平滑 Sigma##measure", &it.measureSmoothingSigma, 0.1f, 0.5f, "%.2f");
+                ImGui::InputFloat("边缘阈值##measure", &it.measureEdgeThreshold, 1.0f, 5.0f, "%.2f");
+                const char* polarities[] = {"任意极性", "暗到明", "明到暗"};
+                it.measureEdgePolarity = std::clamp(it.measureEdgePolarity, 0, 2);
+                ImGui::Combo("边缘极性##measure", &it.measureEdgePolarity,
+                    polarities, IM_ARRAYSIZE(polarities));
+                ImGui::Checkbox("亚像素插值##measure", &it.measureSubpixel);
+                if (it.measureMode == 1)
+                    ImGui::InputFloat("最小边缘间距##measure", &it.measureMinPairDistance, 0.5f, 2.0f, "%.2f");
+                if (it.measureMode == 3 || it.measureMode == 5)
+                {
+                    const char* fitMethods[] = {"最小二乘", "RANSAC"};
+                    it.measureFitMethod = std::clamp(it.measureFitMethod, 0, 1);
+                    ImGui::Combo("拟合方法##measure", &it.measureFitMethod,
+                        fitMethods, IM_ARRAYSIZE(fitMethods));
+                    ImGui::InputFloat("内点阈值(px)##measure", &it.measureFitInlierThreshold,
+                        0.1f, 0.5f, "%.2f");
+                }
+                ImGui::SliderInt("最少有效卡尺##measure", &it.measureMinimumValidCalipers, 1, 128);
+                ImGui::SliderFloat("最低可信度##measure", &it.measureMinimumConfidence, 0.0f, 1.0f, "%.3f");
+                it.measureCaliperCount = std::clamp(it.measureCaliperCount, 1, 128);
+                it.measureSearchLength = (std::max)(1.0f, it.measureSearchLength);
+                it.measureProjectionWidth = (std::max)(1.0f, it.measureProjectionWidth);
+                it.measureSmoothingSigma = (std::max)(0.0f, it.measureSmoothingSigma);
+                it.measureEdgeThreshold = (std::max)(0.0f, it.measureEdgeThreshold);
+                it.measureMinPairDistance = (std::max)(0.0f, it.measureMinPairDistance);
+                it.measureFitInlierThreshold = (std::max)(0.1f, it.measureFitInlierThreshold);
+                it.measureMinimumValidCalipers = std::clamp(it.measureMinimumValidCalipers, 1, 128);
+            }
+
+            SectionHeader("完整标定");
+            ImGui::Checkbox("启用世界坐标(mm)##measure", &it.measureCalibration.enabled);
+            ImGui::InputFloat("参考像素##measure", &it.measureCalibrationPixels, 1.0f, 10.0f, "%.3f");
+            ImGui::InputFloat("实际长度(mm)##measure", &it.measureCalibrationMm, 0.1f, 1.0f, "%.4f");
+            if (SecondaryButton("计算 mm/px") && it.measureCalibrationPixels > 0.0f)
+            {
+                it.measureMmPerPixel = it.measureCalibrationMm / it.measureCalibrationPixels;
+                it.measureCalibration.scaleX = it.measureMmPerPixel;
+                it.measureCalibration.scaleY = it.measureMmPerPixel;
+                it.measureCalibration.enabled = true;
+            }
+            ImGui::InputDouble("X 比例(mm/px)##measure", &it.measureCalibration.scaleX, 0.0001, 0.001, "%.8f");
+            ImGui::InputDouble("Y 比例(mm/px)##measure", &it.measureCalibration.scaleY, 0.0001, 0.001, "%.8f");
+            ImGui::InputDouble("像素原点 X##measure", &it.measureCalibration.pixelOrigin.x, 0.1, 1.0, "%.4f");
+            ImGui::InputDouble("像素原点 Y##measure", &it.measureCalibration.pixelOrigin.y, 0.1, 1.0, "%.4f");
+            ImGui::InputDouble("世界原点 X(mm)##measure", &it.measureCalibration.worldOrigin.x, 0.1, 1.0, "%.4f");
+            ImGui::InputDouble("世界原点 Y(mm)##measure", &it.measureCalibration.worldOrigin.y, 0.1, 1.0, "%.4f");
+
+            ImGui::Checkbox("启用透视矩阵##measure", &it.measureCalibration.homographyEnabled);
+            if (it.measureCalibration.homographyEnabled && ImGui::TreeNode("3x3 像素到世界矩阵##measure"))
+            {
+                for (int row = 0; row < 3; ++row)
+                {
+                    for (int column = 0; column < 3; ++column)
+                    {
+                        char matrixLabel[32] = {};
+                        snprintf(matrixLabel, sizeof(matrixLabel), "H%d%d##measure", row, column);
+                        ImGui::SetNextItemWidth(110.0f);
+                        ImGui::InputDouble(matrixLabel,
+                            &it.measureCalibration.pixelToWorldHomography(row, column),
+                            0.0001, 0.001, "%.8f");
+                        if (column < 2)
+                            ImGui::SameLine();
+                    }
+                }
+                ImGui::TreePop();
+            }
+
+            ImGui::Checkbox("启用镜头畸变校正##measure", &it.measureCalibration.distortionEnabled);
+            if (it.measureCalibration.distortionEnabled && ImGui::TreeNode("相机内参与畸变##measure"))
+            {
+                ImGui::InputDouble("fx##measure", &it.measureCalibration.fx, 1.0, 10.0, "%.6f");
+                ImGui::InputDouble("fy##measure", &it.measureCalibration.fy, 1.0, 10.0, "%.6f");
+                ImGui::InputDouble("cx##measure", &it.measureCalibration.cx, 1.0, 10.0, "%.6f");
+                ImGui::InputDouble("cy##measure", &it.measureCalibration.cy, 1.0, 10.0, "%.6f");
+                ImGui::InputDouble("k1##measure", &it.measureCalibration.k1, 0.0001, 0.001, "%.8f");
+                ImGui::InputDouble("k2##measure", &it.measureCalibration.k2, 0.0001, 0.001, "%.8f");
+                ImGui::InputDouble("p1##measure", &it.measureCalibration.p1, 0.0001, 0.001, "%.8f");
+                ImGui::InputDouble("p2##measure", &it.measureCalibration.p2, 0.0001, 0.001, "%.8f");
+                ImGui::InputDouble("k3##measure", &it.measureCalibration.k3, 0.0001, 0.001, "%.8f");
+                ImGui::TreePop();
+            }
+            it.measureCalibration.scaleX = (std::max)(1.0e-12, it.measureCalibration.scaleX);
+            it.measureCalibration.scaleY = (std::max)(1.0e-12, it.measureCalibration.scaleY);
+
+            SectionHeader("公差");
+            ImGui::Checkbox("启用公差##measure", &it.measureToleranceEnabled);
+            if (it.measureToleranceEnabled)
+            {
+                ImGui::InputFloat("标称值##measure", &it.measureNominal, 0.1f, 1.0f, "%.4f");
+                ImGui::InputFloat("下偏差##measure", &it.measureToleranceMinus, 0.01f, 0.1f, "%.4f");
+                ImGui::InputFloat("上偏差##measure", &it.measureTolerancePlus, 0.01f, 0.1f, "%.4f");
+                it.measureToleranceMinus = (std::max)(0.0f, it.measureToleranceMinus);
+                it.measureTolerancePlus = (std::max)(0.0f, it.measureTolerancePlus);
+            }
+
+            SectionHeader("结果");
+            if (it.hasLastResult)
+            {
+                ImGui::Text("%s", ToolResultStatusName(it.lastResult.status));
+                for (const auto& measurement : it.lastResult.measurements)
+                    ImGui::Text("%s: %.4f %s", measurement.name.c_str(), measurement.value, measurement.unit.c_str());
+            }
             EndCard();
         };
 

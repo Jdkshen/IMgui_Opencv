@@ -2,20 +2,30 @@
 #include "../Algorithm/ColorAnalyzer.h"
 #include "../Algorithm/EdgeTool.h"
 #include "../Algorithm/MorphologyTool.h"
+#include "../Algorithm/CaliperOperators.h"
+#include "../Algorithm/MeasurementTool.h"
 #include "../Algorithm/ThresholdTool.h"
+#include "../Algorithm/TemplateMatchingTool.h"
 #include "../Algorithm/YOLOTool.h"
 #include "../Algorithm/ShapeMatcher.h"
 #include "../Algorithm/ShapeTools.h"
 #include "../Algorithm/MultiColorFinder.h"
 #include "../Algorithm/OCRTool.h"
+#include "../Algorithm/QRCodeTool.h"
 #include "../Algorithm/WindowsPPOCREngine.h"
 #include "../Core/RecipeManager.h"
+#include "../Core/CalibrationModel.h"
 #include "../Core/FrameSourceState.h"
+#include "../Core/FixtureTransform.h"
 #include "../Core/ImageState.h"
+#include "../Core/OpenFileDialog.h"
+#include "../Core/ResultOverlayState.h"
+#include "../Core/ResultROIResolver.h"
 #include "../Core/ResultExporter.h"
 #include "../Core/ROIState.h"
 #include "../Core/ToolChainState.h"
 #include "../Core/ToolExecutor.h"
+#include "../Core/ToolJudgement.h"
 #include "../Core/VisionContext.h"
 #include "../UI/ROIManager.h"
 #include "../UI/ToolsWindow.h"
@@ -144,6 +154,350 @@ void TestYoloToolNoModelPath()
     Require(result.message == "model is not loaded", "YOLO failure message regressed");
 }
 
+void TestQRCodeToolRecognizesBundledSample()
+{
+    const std::filesystem::path imagePath =
+        FindRepoRoot() / "assets" / "images" / "qr_tests" / "qr_test.png";
+    cv::Mat image = cv::imread(imagePath.string(), cv::IMREAD_COLOR);
+    Require(!image.empty(), "QR sample image load failed");
+
+    VisionContext ctx;
+    ctx.image = image;
+    ctx.originalImage = image;
+    ctx.width = image.cols;
+    ctx.height = image.rows;
+
+    QRCodeTool tool;
+    tool.useROI = false;
+    tool.engine = 2;
+    tool.minSize = 1;
+    ToolResult result = tool.Execute(ctx);
+
+    Require(result.success, result.message.c_str());
+    Require(!result.texts.empty(), "QR sample produced no decoded text");
+    Require(!result.texts.front().text.empty(), "QR sample decoded empty text");
+    std::cout << "qr_code_tool: decoded " << result.texts.size()
+              << " item(s) with " << result.message << "\n";
+    std::unique_ptr<ITool> factoryTool = ITool::Create(14);
+    Require(factoryTool != nullptr && factoryTool->GetType() == 14,
+        "QR tool factory registration regressed");
+}
+
+void TestRecursiveImageFolderScanSupportsCommonFormats()
+{
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() / "imgui_opencv_image_scan_regression";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root / "nested" / "deep");
+
+    std::ofstream(root / "root.JPG").put('\0');
+    std::ofstream(root / "ignored.txt").put('\0');
+    std::ofstream(root / "nested" / "image.jpeg").put('\0');
+    std::ofstream(root / "nested" / "image.tif").put('\0');
+    std::ofstream(root / "nested" / "deep" / "image.tiff").put('\0');
+    std::ofstream(root / "nested" / "deep" / "image.webp").put('\0');
+
+    const std::vector<std::string> flat = ScanImageFiles(root.string(), false);
+    const std::vector<std::string> recursive = ScanImageFiles(root.string(), true);
+    Require(flat.size() == 1, "flat image scan should only include root files");
+    Require(recursive.size() == 5, "recursive image scan format support regressed");
+
+    std::filesystem::remove_all(root);
+}
+
+void TestToolJudgementPolicy()
+{
+    ToolJudgementSettings settings;
+    settings.enabled = true;
+    settings.stopOnFailure = true;
+    settings.minResultCount = 2;
+    settings.minScore = 0.8f;
+    settings.minArea = 100.0f;
+    settings.maxArea = 1000.0f;
+    settings.requiredText = "PASS";
+    settings.textMatchMode = 0;
+    settings.textCaseSensitive = false;
+
+    ToolResult result;
+    result.success = true;
+    result.texts.push_back({"station pass", cv::Rect(0, 0, 20, 20), 0.9f});
+    result.texts.push_back({"station pass 2", cv::Rect(20, 0, 20, 20), 0.85f});
+    ToolJudgement::Evaluate(result, settings);
+    Require(result.status == ToolResultStatus::Pass, "matching judgement should pass");
+    Require(!ToolJudgement::ShouldStop(result, settings), "pass result should not stop chain");
+
+    result.texts.resize(1);
+    ToolJudgement::Evaluate(result, settings);
+    Require(result.status == ToolResultStatus::Fail, "result count judgement should fail");
+    Require(ToolJudgement::ShouldStop(result, settings), "configured fail should stop chain");
+
+    result.success = false;
+    result.message = "backend unavailable";
+    ToolJudgement::Evaluate(result, settings);
+    Require(result.status == ToolResultStatus::Error, "execution error status regressed");
+    Require(result.statusReason == result.message, "error reason propagation regressed");
+}
+
+void TestIndustrialMeasurement()
+{
+    VisionContext context;
+    ROI line;
+    line.type = ROI_TYPE_LINE;
+    line.start = ImVec2(0.0f, 0.0f);
+    line.end = ImVec2(30.0f, 40.0f);
+    context.rois.push_back(line);
+
+    MeasurementTool tool;
+    tool.mode = 0;
+    tool.mmPerPixel = 0.1f;
+    tool.toleranceEnabled = true;
+    tool.nominal = 4.0f;
+    tool.toleranceMinus = 0.2f;
+    tool.tolerancePlus = 0.2f;
+
+    ToolResult result = tool.Execute(context);
+    Require(result.success, "distance measurement failed");
+    Require(!result.measurements.empty() && std::abs(result.measurements[0].value - 5.0) < 0.001,
+        "pixel to millimeter calibration regressed");
+    ToolJudgement::Evaluate(result, ToolJudgementSettings{});
+    Require(result.status == ToolResultStatus::Fail, "measurement tolerance NG was lost");
+
+    tool.toleranceEnabled = false;
+    result = tool.Execute(context);
+    ToolJudgementSettings settings;
+    settings.enabled = true;
+    settings.minResultCount = 1;
+    ToolJudgement::Evaluate(result, settings);
+    Require(result.status == ToolResultStatus::Pass,
+        "measurement output was not counted by common judgement");
+
+    VisionContext caliperContext;
+    caliperContext.image = cv::Mat(100, 140, CV_8UC1, cv::Scalar(20));
+    caliperContext.image.rowRange(35, 66).setTo(cv::Scalar(220));
+    ROI caliperROI;
+    caliperROI.type = ROI_TYPE_RECT;
+    caliperROI.start = {10.0f, 15.0f};
+    caliperROI.end = {130.0f, 85.0f};
+    caliperContext.rois.push_back(caliperROI);
+
+    MeasurementTool widthTool;
+    widthTool.mode = 1;
+    widthTool.caliperCount = 12;
+    widthTool.caliper.edgeThreshold = 15.0f;
+    widthTool.caliper.polarity = CaliperOperators::EdgePolarity::DarkToBright;
+    widthTool.minimumValidCalipers = 10;
+    ToolResult widthResult = widthTool.Execute(caliperContext);
+    Require(widthResult.success && widthResult.status == ToolResultStatus::Pass,
+        "industrial edge-pair width measurement failed");
+    Require(!widthResult.measurements.empty() &&
+        std::abs(widthResult.measurements.front().value - 31.0) < 1.0,
+        "industrial edge-pair width value regressed");
+    bool hasConfidence = false;
+    for (const auto& measurement : widthResult.measurements)
+        hasConfidence |= measurement.name == "confidence" && measurement.value > 0.5;
+    Require(hasConfidence, "industrial measurement quality metrics were not published");
+}
+
+void TestCaliperOperators()
+{
+    using namespace CaliperOperators;
+
+    cv::Mat rising(80, 120, CV_8UC1, cv::Scalar(20));
+    rising.colRange(51, rising.cols).setTo(cv::Scalar(220));
+    CaliperParams params;
+    params.searchLength = 60.0f;
+    params.projectionWidth = 9.0f;
+    params.smoothingSigma = 1.0f;
+    params.edgeThreshold = 15.0f;
+    params.polarity = EdgePolarity::DarkToBright;
+    EdgePoint risingEdge = FindEdge(rising, {50.0f, 40.0f}, {1.0f, 0.0f}, {0.0f, 1.0f}, params);
+    Require(risingEdge.valid, "dark-to-bright caliper edge was not found");
+    Require(std::abs(risingEdge.position.x - 50.5f) < 0.75f,
+        "dark-to-bright subpixel edge position regressed");
+
+    params.polarity = EdgePolarity::BrightToDark;
+    EdgePoint rejected = FindEdge(rising, {50.0f, 40.0f}, {1.0f, 0.0f}, {0.0f, 1.0f}, params);
+    Require(!rejected.valid, "caliper polarity filter accepted the wrong edge");
+
+    cv::Mat band(80, 120, CV_8UC1, cv::Scalar(20));
+    band.colRange(35, 76).setTo(cv::Scalar(220));
+    params.polarity = EdgePolarity::DarkToBright;
+    params.searchLength = 80.0f;
+    EdgePair pair = FindEdgePair(band, {55.0f, 40.0f}, {1.0f, 0.0f}, {0.0f, 1.0f}, params);
+    Require(pair.valid, "edge-pair caliper did not find both edges");
+    Require(std::abs(pair.distance - 41.0f) < 1.0f, "edge-pair width regressed");
+
+    std::vector<cv::Point2f> linePoints;
+    for (int x = 0; x < 20; ++x)
+        linePoints.emplace_back(static_cast<float>(x), 2.0f * x + 3.0f);
+    linePoints.emplace_back(5.0f, 80.0f);
+    FittedLine line = FitLine(linePoints, FitMethod::Ransac, 0.5f);
+    Require(line.valid && line.inliers.size() == 20, "RANSAC line inlier selection regressed");
+    Require(line.quality.maxError < 0.1f, "RANSAC line residual regressed");
+
+    std::vector<cv::Point2f> circlePoints;
+    for (int i = 0; i < 24; ++i) {
+        const float angle = static_cast<float>(2.0 * 3.14159265358979323846 * i / 24.0);
+        circlePoints.emplace_back(40.0f + 15.0f * std::cos(angle), 30.0f + 15.0f * std::sin(angle));
+    }
+    circlePoints.emplace_back(100.0f, 100.0f);
+    FittedCircle circle = FitCircle(circlePoints, FitMethod::Ransac, 0.5f);
+    Require(circle.valid && circle.inliers.size() == 24, "RANSAC circle inlier selection regressed");
+    Require(cv::norm(circle.center - cv::Point2f(40.0f, 30.0f)) < 0.1f &&
+            std::abs(circle.radius - 15.0f) < 0.1f,
+        "RANSAC circle fit regressed");
+}
+
+void TestCalibrationModel()
+{
+    CalibrationModel scale;
+    scale.enabled = true;
+    scale.scaleX = 0.1;
+    scale.scaleY = 0.2;
+    scale.pixelOrigin = {10.0, 20.0};
+    scale.worldOrigin = {1.0, 2.0};
+    const cv::Point2d scaled = scale.PixelToWorld({20.0, 30.0});
+    Require(cv::norm(scaled - cv::Point2d(2.0, 4.0)) < 1.0e-9,
+        "independent X/Y calibration scale regressed");
+
+    CalibrationModel perspective;
+    perspective.enabled = true;
+    perspective.homographyEnabled = true;
+    perspective.pixelToWorldHomography = cv::Matx33d(
+        0.5, 0.0, 10.0,
+        0.0, 0.25, 20.0,
+        0.0, 0.0, 1.0);
+    const cv::Point2d transformed = perspective.PixelToWorld({20.0, 40.0});
+    Require(cv::norm(transformed - cv::Point2d(20.0, 30.0)) < 1.0e-9,
+        "homography pixel-to-world conversion regressed");
+
+    CalibrationModel distortion;
+    distortion.distortionEnabled = true;
+    distortion.fx = 800.0;
+    distortion.fy = 800.0;
+    distortion.cx = 320.0;
+    distortion.cy = 240.0;
+    const cv::Point2d unchanged = distortion.UndistortPixel({100.0, 120.0});
+    Require(cv::norm(unchanged - cv::Point2d(100.0, 120.0)) < 1.0e-6,
+        "zero lens distortion should preserve pixel coordinates");
+}
+
+void TestFixtureTransform()
+{
+    ToolResult result;
+    ToolResult::Region region;
+    region.bbox = cv::Rect(90, 40, 20, 20);
+    region.angle = 90.0f;
+    result.regions.push_back(region);
+
+    FixturePose current;
+    Require(FixtureTransform::TryExtractPose(result, 0, current),
+        "fixture pose extraction from region failed");
+    FixturePose reference;
+    reference.valid = true;
+    reference.origin = {50.0f, 50.0f};
+    reference.angleDegrees = 0.0f;
+
+    const cv::Point2f transformed = FixtureTransform::TransformPoint({60.0f, 50.0f}, reference, current);
+    Require(cv::norm(transformed - cv::Point2f(100.0f, 60.0f)) < 0.001f,
+        "fixture rigid point transform regressed");
+
+    ROI rectangle;
+    rectangle.type = ROI_TYPE_RECT;
+    rectangle.start = {55.0f, 45.0f};
+    rectangle.end = {65.0f, 55.0f};
+    const ROI transformedROI = FixtureTransform::TransformROI(rectangle, reference, current);
+    Require(transformedROI.type == ROI_TYPE_POLYGON && transformedROI.points.size() == 4,
+        "rotated fixture rectangle should become a polygon ROI");
+}
+
+void TestResultROIResolution()
+{
+    ToolResult source;
+    source.detections.push_back({cv::Rect(10, 20, 30, 40), 0, 0.9f, "A"});
+    source.detections.push_back({cv::Rect(50, 60, 20, 10), 1, 0.8f, "B"});
+
+    ResultROIRequest request;
+    request.mode = ResultROIMode::NthResult;
+    request.resultIndex = 1;
+    ResultROIResolution resolution = ResultROIResolver::Resolve(source, request, cv::Size(100, 100));
+    Require(resolution.available && resolution.rois.size() == 1,
+        "Nth result ROI resolution failed");
+    Require(resolution.rois[0].ToCvRect() == cv::Rect(50, 60, 20, 10),
+        "Nth result ROI geometry regressed");
+
+    request.mode = ResultROIMode::AllResults;
+    resolution = ResultROIResolver::Resolve(source, request, cv::Size(100, 100));
+    Require(resolution.available && resolution.rois.size() == 2,
+        "all result ROI resolution failed");
+
+    request.resultIndex = 9;
+    request.mode = ResultROIMode::NthResult;
+    resolution = ResultROIResolver::Resolve(source, request);
+    Require(!resolution.available && !resolution.reason.empty(),
+        "missing result ROI policy input was not reported");
+}
+
+void TestTemplateMatchingToolUsesInstanceParameters()
+{
+    VisionContext context;
+    context.image = cv::Mat::zeros(120, 160, CV_8UC1);
+    cv::rectangle(context.image, cv::Rect(55, 35, 24, 18), cv::Scalar(180), cv::FILLED);
+    cv::line(context.image, cv::Point(55, 35), cv::Point(78, 52), cv::Scalar(255), 2);
+
+    TemplateMatchingTool tool;
+    tool.templateImg = context.image(cv::Rect(55, 35, 24, 18)).clone();
+    tool.matchThreshold = 0.95f;
+    tool.maxResults = 1;
+    tool.maxImageDim = 1000;
+
+    ToolResult result = tool.Execute(context);
+    Require(result.success && result.regions.size() == 1,
+        "instance-based template matching failed");
+    Require(std::abs(result.regions[0].bbox.x - 55) <= 1 &&
+        std::abs(result.regions[0].bbox.y - 35) <= 1,
+        "template matching coordinates regressed");
+}
+
+void TestToolChainReorderRemapsResultROISource()
+{
+    auto savedTools = std::move(ToolChainState::Tools());
+    const int savedActive = ToolChainState::ActiveIndex();
+    const int savedLive = ToolChainState::YoloLiveInstanceIndex();
+
+    auto& tools = ToolChainState::Tools();
+    tools.clear();
+    ToolInstance detector;
+    detector.type = 4;
+    ToolInstance consumer;
+    consumer.type = 2;
+    consumer.resultRoiMode = 1;
+    consumer.resultRoiSourceTool = 0;
+    consumer.fixture.enabled = true;
+    consumer.fixture.sourceToolIndex = 0;
+    ToolInstance original;
+    original.type = 12;
+    tools.push_back(std::move(detector));
+    tools.push_back(std::move(consumer));
+    tools.push_back(std::move(original));
+    ToolChainState::SetActiveIndex(1);
+    ToolChainState::SetYoloLiveInstanceIndex(0);
+
+    ToolChainState::MoveOriginalToolToFront();
+    Require(tools[0].type == 12 && tools[2].type == 2,
+        "original tool reorder regressed");
+    Require(tools[2].resultRoiSourceTool == 1,
+        "result ROI source index was not remapped after reorder");
+    Require(tools[2].fixture.sourceToolIndex == 1,
+        "fixture source index was not remapped after reorder");
+    Require(ToolChainState::ActiveIndex() == 2 && ToolChainState::YoloLiveInstanceIndex() == 1,
+        "runtime tool indices were not remapped after reorder");
+
+    tools = std::move(savedTools);
+    ToolChainState::SetActiveIndex(savedActive);
+    ToolChainState::SetYoloLiveInstanceIndex(savedLive);
+}
+
 void TestRecipeRoundTrip()
 {
     RecipeData data;
@@ -163,6 +517,16 @@ void TestRecipeRoundTrip()
     tool.yoloConfThreshold = 0.67f;
     tool.yoloNmsThreshold = 0.45f;
     tool.yoloUseROI = true;
+    tool.judgement.enabled = true;
+    tool.judgement.stopOnFailure = true;
+    tool.judgement.minResultCount = 2;
+    tool.judgement.maxResultCount = 5;
+    tool.judgement.minScore = 0.75f;
+    tool.judgement.requiredText = "target";
+    tool.resultRoiMode = 1;
+    tool.resultRoiSourceTool = 0;
+    tool.resultRoiIndex = 2;
+    tool.resultRoiMissingPolicy = 1;
     tool.searchROIs.push_back({5.0f, 6.0f, 20.0f, 21.0f, 0});
     data.tools.push_back(tool);
 
@@ -186,6 +550,48 @@ void TestRecipeRoundTrip()
     mcf.mcfPointsJson = R"({"points":[{"x":1,"y":2,"b":3,"g":4,"r":5,"tolerance":6}]})";
     data.tools.push_back(mcf);
 
+    RecipeToolInstance qr;
+    qr.type = 14;
+    qr.qrUseROI = false;
+    qr.qrDetectMulti = false;
+    qr.qrEnhance = false;
+    qr.qrMinSize = 37;
+    qr.qrShowText = false;
+    qr.qrEngine = 2;
+    qr.qrFormatMask = BarcodeFormatCode128 | BarcodeFormatDataMatrix;
+    qr.qrFilterDuplicates = false;
+    data.tools.push_back(qr);
+
+    RecipeToolInstance measurement;
+    measurement.type = 15;
+    measurement.measureMode = 3;
+    measurement.measureCaliperCount = 24;
+    measurement.measureSearchLength = 18.0f;
+    measurement.measureProjectionWidth = 7.0f;
+    measurement.measureEdgePolarity = 2;
+    measurement.measureSubpixel = true;
+    measurement.measureFitMethod = 1;
+    measurement.measureFitInlierThreshold = 0.8f;
+    measurement.measureMinimumValidCalipers = 12;
+    measurement.measureMinimumConfidence = 0.75f;
+    measurement.measureMmPerPixel = 0.025f;
+    measurement.measureCalibration.enabled = true;
+    measurement.measureCalibration.scaleX = 0.02;
+    measurement.measureCalibration.scaleY = 0.03;
+    measurement.measureCalibration.homographyEnabled = true;
+    measurement.measureCalibration.pixelToWorldHomography(0, 2) = 4.5;
+    measurement.measureCalibration.distortionEnabled = true;
+    measurement.measureCalibration.fx = 800.0;
+    measurement.fixture.enabled = true;
+    measurement.fixture.sourceToolIndex = 0;
+    measurement.fixture.referenceOrigin = {12.0f, 34.0f};
+    measurement.fixture.referenceAngleDegrees = 5.0f;
+    measurement.measureToleranceEnabled = true;
+    measurement.measureNominal = 12.0f;
+    measurement.measureToleranceMinus = 0.1f;
+    measurement.measureTolerancePlus = 0.2f;
+    data.tools.push_back(measurement);
+
     std::filesystem::path path = std::filesystem::temp_directory_path() / "imgui_opencv_regression.recipe";
     std::filesystem::remove(path);
 
@@ -198,12 +604,22 @@ void TestRecipeRoundTrip()
     Require(loaded.threshold.useGray == data.threshold.useGray, "threshold round-trip regressed");
     Require(loaded.threshold.thresholdValue == data.threshold.thresholdValue, "threshold value round-trip regressed");
     Require(loaded.rois.size() == 1 && loaded.rois[0].endX == 30.0f, "ROI round-trip regressed");
-    Require(loaded.tools.size() == 2, "tool count round-trip regressed");
+    Require(loaded.tools.size() == 4, "tool count round-trip regressed");
     Require(loaded.tools[0].type == 4, "YOLO tool type round-trip regressed");
     Require(loaded.tools[0].label == "定位A", "tool label round-trip regressed");
     Require(loaded.tools[0].yoloUseROI, "YOLO ROI flag round-trip regressed");
+    Require(loaded.tools[0].judgement.enabled && loaded.tools[0].judgement.stopOnFailure,
+        "judgement flags round-trip regressed");
+    Require(loaded.tools[0].judgement.minResultCount == 2 && loaded.tools[0].judgement.maxResultCount == 5,
+        "judgement count round-trip regressed");
+    Require(std::abs(loaded.tools[0].judgement.minScore - 0.75f) < 0.001f &&
+        loaded.tools[0].judgement.requiredText == "target",
+        "judgement conditions round-trip regressed");
     Require(std::abs(loaded.tools[0].yoloConfThreshold - 0.67f) < 0.001f,
         "YOLO confidence round-trip regressed");
+    Require(loaded.tools[0].resultRoiMode == 1 && loaded.tools[0].resultRoiSourceTool == 0 &&
+        loaded.tools[0].resultRoiIndex == 2 && loaded.tools[0].resultRoiMissingPolicy == 1,
+        "result ROI settings round-trip regressed");
     Require(loaded.tools[1].type == 10, "multi-color tool type round-trip regressed");
     Require(loaded.tools[1].mcfUseROI, "multi-color ROI flag round-trip regressed");
     Require(loaded.tools[1].mcfMaxResults == 7, "multi-color max results round-trip regressed");
@@ -216,6 +632,34 @@ void TestRecipeRoundTrip()
     Require(loaded.tools[1].mcfRoiX == 2 && loaded.tools[1].mcfRoiH == 41, "multi-color ROI rect round-trip regressed");
     Require(loaded.tools[1].mcfRefImageBase64 == "iVBORw0KGgr/", "multi-color reference image base64 conversion regressed");
     Require(loaded.tools[1].mcfPointsJson == mcf.mcfPointsJson, "multi-color points round-trip regressed");
+    Require(loaded.tools[2].type == 14, "QR tool type round-trip regressed");
+    Require(!loaded.tools[2].qrUseROI && !loaded.tools[2].qrDetectMulti && !loaded.tools[2].qrEnhance,
+        "QR boolean parameters round-trip regressed");
+    Require(loaded.tools[2].qrMinSize == 37 && loaded.tools[2].qrEngine == 2,
+        "QR numeric parameters round-trip regressed");
+    Require(!loaded.tools[2].qrShowText, "QR label flag round-trip regressed");
+    Require(loaded.tools[2].qrFormatMask == (BarcodeFormatCode128 | BarcodeFormatDataMatrix),
+        "barcode format filter round-trip regressed");
+    Require(!loaded.tools[2].qrFilterDuplicates, "barcode duplicate filter round-trip regressed");
+    Require(loaded.tools[3].type == 15 && loaded.tools[3].measureMode == 3,
+        "measurement tool recipe type regressed");
+    Require(std::abs(loaded.tools[3].measureMmPerPixel - 0.025f) < 0.0001f &&
+        loaded.tools[3].measureToleranceEnabled &&
+        std::abs(loaded.tools[3].measureTolerancePlus - 0.2f) < 0.0001f,
+        "measurement calibration/tolerance round-trip regressed");
+    Require(loaded.tools[3].measureCaliperCount == 24 &&
+        loaded.tools[3].measureEdgePolarity == 2 &&
+        std::abs(loaded.tools[3].measureMinimumConfidence - 0.75f) < 0.0001f,
+        "measurement caliper parameters round-trip regressed");
+    Require(loaded.tools[3].measureCalibration.enabled &&
+        loaded.tools[3].measureCalibration.homographyEnabled &&
+        loaded.tools[3].measureCalibration.distortionEnabled &&
+        std::abs(loaded.tools[3].measureCalibration.scaleY - 0.03) < 1.0e-9 &&
+        std::abs(loaded.tools[3].measureCalibration.pixelToWorldHomography(0, 2) - 4.5) < 1.0e-9,
+        "full calibration round-trip regressed");
+    Require(loaded.tools[3].fixture.enabled && loaded.tools[3].fixture.sourceToolIndex == 0 &&
+        cv::norm(loaded.tools[3].fixture.referenceOrigin - cv::Point2f(12.0f, 34.0f)) < 0.001f,
+        "fixture settings round-trip regressed");
 
     std::filesystem::remove(path);
 }
@@ -868,14 +1312,120 @@ void TestResultExporterWritesResultsAndReport()
     Require(reportText.find("结果图像: result.png") != std::string::npos, "run report missing result image path");
     Require(reportText.find("多点找色") != std::string::npos, "run report missing tool name");
 }
+
+void TestToolExecutorResolvesMovedRuntimeRoi()
+{
+    gImage = cv::Mat::zeros(80, 120, CV_8UC1);
+    gOriginalImage = gImage.clone();
+    gContext.Clear();
+    ROIState::Items().clear();
+
+    ROI configured;
+    configured.runtimeId = 42;
+    configured.type = ROI_TYPE_LINE;
+    configured.start = {5.0f, 10.0f};
+    configured.end = {25.0f, 10.0f};
+
+    ROI moved = configured;
+    moved.start = {60.0f, 50.0f};
+    moved.end = {90.0f, 50.0f};
+    ROIState::Items().push_back(moved);
+
+    ToolInstance measurement;
+    measurement.type = 15;
+    measurement.measureMode = 0;
+    measurement.searchROIs.push_back(configured);
+    ToolExecutor::Execute(measurement.type, measurement);
+
+    Require(measurement.hasLastResult && measurement.lastResult.success,
+        "runtime-linked measurement execution failed");
+    Require(!measurement.lastResult.lines.empty() &&
+        measurement.lastResult.lines.front().p1 == cv::Point(60, 50) &&
+        measurement.lastResult.lines.front().p2 == cv::Point(90, 50),
+        "tool executor used stale ROI coordinates after visible ROI movement");
 }
 
-int main()
+void TestResultOverlayStatePolicy()
+{
+    auto& settings = ResultOverlayState::MutableSettings();
+    const auto oldSettings = settings;
+    auto& tools = ToolChainState::Tools();
+    const auto oldTools = tools;
+
+    settings.showLabels = true;
+    settings.avoidLabelOverlap = true;
+    settings.maxVisibleLabels = 30;
+    tools.clear();
+    ToolInstance tool;
+    tool.type = 10;
+    tool.showResultLabels = false;
+    tools.push_back(tool);
+
+    ToolResult result;
+    result.sourceToolIndex = 0;
+    Require(!ResultOverlayState::ShouldDrawResultLabels(result), "per-tool result label switch regressed");
+
+    tools[0].showResultLabels = true;
+    Require(ResultOverlayState::ShouldDrawResultLabels(result), "enabled result labels should draw");
+
+    settings.showLabels = false;
+    Require(!ResultOverlayState::ShouldDrawResultLabels(result), "global result label switch regressed");
+
+    settings.showLabels = true;
+    settings.maxVisibleLabels = 0;
+    Require(ResultOverlayState::MaxVisibleLabels() == 0, "max visible label setting regressed");
+
+    ToolResult textResult;
+    ToolResult::TextItem text;
+    text.text = "abc";
+    textResult.texts.push_back(text);
+    Require(!ResultOverlayState::ShouldDrawRegionLabel(textResult, "abc"), "duplicate text/region label filter regressed");
+
+    settings = oldSettings;
+    tools = oldTools;
+}
+}
+
+int main(int argc, char** argv)
 {
     try {
+        if (argc > 1 && std::string(argv[1]) == "--qr-only") {
+            TestQRCodeToolRecognizesBundledSample();
+            std::cout << "regression_tests: QR checks passed\n";
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--policy-only") {
+            TestRecursiveImageFolderScanSupportsCommonFormats();
+            TestToolJudgementPolicy();
+            TestIndustrialMeasurement();
+            TestResultROIResolution();
+            TestTemplateMatchingToolUsesInstanceParameters();
+            TestToolChainReorderRemapsResultROISource();
+            TestRecipeRoundTrip();
+            TestToolExecutorResolvesMovedRuntimeRoi();
+            std::cout << "regression_tests: import and judgement checks passed\n";
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--caliper-only") {
+            TestCaliperOperators();
+            TestCalibrationModel();
+            TestFixtureTransform();
+            std::cout << "regression_tests: caliper checks passed\n";
+            return 0;
+        }
         TestTemplateMatch();
         TestRoiConversion();
         TestYoloToolNoModelPath();
+        TestQRCodeToolRecognizesBundledSample();
+        TestRecursiveImageFolderScanSupportsCommonFormats();
+        TestToolJudgementPolicy();
+        TestIndustrialMeasurement();
+        TestCaliperOperators();
+        TestCalibrationModel();
+        TestFixtureTransform();
+        TestResultROIResolution();
+        TestTemplateMatchingToolUsesInstanceParameters();
+        TestToolChainReorderRemapsResultROISource();
         TestRecipeRoundTrip();
         TestSampleImageCorePipeline();
         TestLineToolSampleImage();
@@ -895,11 +1445,13 @@ int main()
         TestImageStateOwnsCurrentImageSnapshot();
         TestRecipeCaptureUsesCurrentFramePath();
         TestToolExecutorInjectsImageSnapshot();
+        TestToolExecutorResolvesMovedRuntimeRoi();
         TestToolChainEditActions();
         TestShapeMaxResultsDefaultIsOne();
         TestToolInstanceLabelDefaultIsEmpty();
         TestCoreStateOwnsRoiAndToolChain();
         TestShapeMatcherTemplateLargerThanSearchImage();
+        TestResultOverlayStatePolicy();
         TestResultExporterWritesResultsAndReport();
         std::cout << "regression_tests: all tests passed\n";
         return 0;

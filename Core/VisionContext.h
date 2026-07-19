@@ -1,5 +1,7 @@
 #pragma once
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <vector>
 #include <algorithm>
 #include <opencv2/core/mat.hpp>

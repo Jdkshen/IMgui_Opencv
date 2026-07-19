@@ -3,9 +3,9 @@
 #include "FrameNavigation.h"
 #include "ImageState.h"
 #include "ImageUtils.h"
-#include "LegacyAppState.h"
 #include "ToolChainState.h"
-#include "UIStateBridge.h"
+#include "ToolJudgement.h"
+#include "VisionContext.h"
 #include "../Log/LogSystem.h"
 #include "../Algorithm/YOLODetector.h"
 #include "../Algorithm/TemplateMatch.h"
@@ -111,6 +111,8 @@ namespace ToolController
         s_batchTimerStarted = false;
         s_nextLoopRunAt = std::chrono::high_resolution_clock::now();
         ResetBatchImagesFromSource(!ImageState::Original().empty() ? ImageState::Original() : ImageState::Current());
+        for (auto& tool : ToolChainState::Tools())
+            tool.hasLastResult = false;
         LogSystem::Add(LOG_INFO, ImVec4(0,1,0.5f,1), "[全部执行%s] %zu 个工具",
             s_runtimeMode ? "/运行模式" : "", ToolChainState::ReadOnlyTools().size());
     }
@@ -187,6 +189,26 @@ namespace ToolController
             s_batchTotalMs += s_stepTimeMs;
         if (!ImageState::Current().empty())
             s_lastOutputImage = ImageState::Current();
+
+        if (!s_isStep && it.hasLastResult && ToolJudgement::ShouldStop(it.lastResult, it.judgement))
+        {
+            const char* baseName = (it.type == 12) ? "原图" : ToolRegistry::GetName(it.type);
+            const std::string displayName = ToolInstanceLogName(baseName, it.label);
+            LogSystem::Add(
+                it.lastResult.status == ToolResultStatus::Error ? LOG_ERROR : LOG_WARN,
+                ImVec4(1.0f, 0.45f, 0.2f, 1.0f),
+                "[全部执行] 停止于 %d/%zu: %s | %s%s%s",
+                s_currentIndex + 1,
+                tools.size(),
+                displayName.c_str(),
+                ToolResultStatusName(it.lastResult.status),
+                it.lastResult.statusReason.empty() ? "" : " | ",
+                it.lastResult.statusReason.c_str());
+            s_mode = Mode::Idle;
+            s_loop = false;
+            s_batchTimerStarted = false;
+            return;
+        }
 
         if (s_isStep) {
             s_stepCursor++;

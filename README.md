@@ -36,7 +36,8 @@ IMgui_Opencv/
 │   ├── ToolController.h/cpp    ←   工具调度器（全部/单步/循环/运行模式）
 │   ├── FrameRenderer.cpp/h     ←   每帧渲染提交
 │   ├── ResultPublisher.h       ←   ToolResult 统一发布入口
-│   └── LegacyAppState.h / UIStateBridge.h ← 旧全局状态过渡桥
+│   ├── ToolJudgement.cpp/h   ←   Pass/Fail/Error 判定与失败停止
+│   └── ResultROIResolver.cpp/h ← 上游工具结果转 ROI
 │
 ├── UI/                         ← 界面模块
 │   ├── AppTitleBar.cpp/h       ←   原生标题栏颜色同步/标题区辅助
@@ -61,7 +62,10 @@ IMgui_Opencv/
 │   ├── OpenCVYoloDetector.cpp/h ←   OpenCV DNN YOLO 推理后端
 │   ├── MultiColorFinder.h/cpp  ←   多点找色工具（实现 ITool）
 │   ├── YOLODetector.cpp/h      ←   YOLO 目标检测（ONNX Runtime 推理）
-│   ├── TemplateMatch.cpp/h     ←   模板匹配（多方法/旋转/NMS）
+│   ├── TemplateMatchingTool.cpp/h ← 工具链模板匹配（实例参数/旋转/NMS）
+│   ├── TemplateMatch.cpp/h     ←   旧模板调试窗口兼容层
+│   ├── QRCodeTool.cpp/h        ←   QR/Code128/EAN/Data Matrix/PDF417
+│   ├── MeasurementTool.cpp/h   ←   距离/线宽/角度/圆直径与公差
 │   ├── ContourDetector.cpp/h   ←   轮廓分析（凸包/圆度/近似）
 │   ├── ShapeMatcher.cpp/h      ←   形状匹配（matchTemplate+轮廓比对）
 │   ├── ShapeTools.cpp/h        ←   形状匹配工具适配（实现 ITool）
@@ -93,6 +97,7 @@ IMgui_Opencv/
 │   ├── PROJECT_UPDATE_GUIDE.md ←   后续项目更新同步指南
 │   ├── PERFORMANCE_REVIEW.md   ←   架构性能审查
 │   ├── OPENCV5_EXPERIMENT.md   ←   OpenCV 5.0 YOLO 实验后端说明
+│   ├── INSPECTION_PIPELINE_2026.md ← 导入、判定、条码、测量、结果 ROI 更新
 │   ├── ROADMAP.md              ←   后续开发方向
 │   └── VIDEO_AUDIO.md          ←   视频/音频模块说明
 │

@@ -6,6 +6,10 @@
 #include <opencv2/core/mat.hpp>
 
 #include "ROI.h"
+#include "BarcodeTypes.h"
+#include "FixtureTransform.h"
+#include "CalibrationModel.h"
+#include "ToolJudgement.h"
 #include "../Algorithm/ITool.h"
 
 // =====================================================
@@ -13,8 +17,15 @@
 // =====================================================
 struct ToolInstance
 {
-    int type = 0;                // 0=边缘检测 1=模板匹配 2=Blob分析 3=阈值调试 4=YOLO 5=轮廓 6=形状 7=直线 12=原图 13=OCR
+    int type = 0;                // 0=边缘检测 1=模板匹配 2=Blob分析 3=阈值调试 4=YOLO 5=轮廓 6=形状 7=直线 12=原图 13=OCR 14=二维码
     std::string label;           // 用户标签，空时显示原工具名
+    bool showResultLabels = true;
+    ToolJudgementSettings judgement;
+    int resultRoiMode = 0;        // 0=disabled, 1=Nth result, 2=all results
+    int resultRoiSourceTool = -1;
+    int resultRoiIndex = 0;
+    int resultRoiMissingPolicy = 0; // 0=skip, 1=fail
+    FixtureSettings fixture;
     int inputSourceMode = 2;     // 0=上一步原图, 1=上一步处理图, 2=原图工具输出
     cv::Mat templateImg;         // 该实例的模板图像数据
     bool hasTemplateROI = false; // 是否保存了模板ROI
@@ -147,8 +158,44 @@ struct ToolInstance
     bool ocrDetectOnly = false;
     bool ocrUseROI = true;
 
+    // ---- 二维码识别（type==14） ----
+    bool qrUseROI = true;
+    bool qrDetectMulti = true;
+    bool qrEnhance = true;
+    int qrMinSize = 24;
+    bool qrShowText = true;
+    int qrEngine = 0; // 0=自动, 1=OpenCV, 2=ZXing-cpp
+    std::uint32_t qrFormatMask = BarcodeFormatAll;
+    bool qrFilterDuplicates = true;
+
+    // ---- 工业测量（type==15） ----
+    int measureMode = 0;
+    std::vector<std::uint64_t> measureRuntimeROIIds; // 运行时同步 UI 绘制 ROI，不保存配方
+    int measureCaliperCount = 16;
+    float measureSearchLength = 30.0f;
+    float measureProjectionWidth = 5.0f;
+    float measureSmoothingSigma = 1.0f;
+    float measureEdgeThreshold = 12.0f;
+    float measureMinPairDistance = 3.0f;
+    int measureEdgePolarity = 0;
+    bool measureSubpixel = true;
+    int measureFitMethod = 1;
+    float measureFitInlierThreshold = 1.5f;
+    int measureMinimumValidCalipers = 3;
+    float measureMinimumConfidence = 0.0f;
+    float measureMmPerPixel = 0.0f;
+    float measureCalibrationPixels = 100.0f;
+    float measureCalibrationMm = 10.0f;
+    bool measureToleranceEnabled = false;
+    float measureNominal = 0.0f;
+    float measureToleranceMinus = 0.0f;
+    float measureTolerancePlus = 0.0f;
+    CalibrationModel measureCalibration;
+
     // ---- 新架构：ITool 接口指针（为空时回退旧逻辑） ----
     ITool* toolImpl = nullptr;
+    ToolResult lastResult;       // 运行时缓存，不保存到配方
+    bool hasLastResult = false;
 };
 
 inline std::string ToolInstanceTitle(const char* baseName, const std::string& label)

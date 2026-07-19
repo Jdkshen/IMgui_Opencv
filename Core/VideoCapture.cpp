@@ -5,10 +5,12 @@
 #include "ImageUtils.h"
 #include "OpenCVTest.h"
 #include "ROIState.h"
-#include "UIStateBridge.h"
+#include "ToolChainState.h"
+#include "VisionContext.h"
 #include "AudioPlayer.h"
 #include "../Algorithm/ThresholdTool.h"
 #include "../Algorithm/TemplateMatch.h"
+#include "../Algorithm/YOLODetector.h"
 #include "../Log/LogSystem.h"
 
 #include <opencv2/opencv.hpp>
@@ -185,8 +187,14 @@ namespace VideoCapture
                 s_TempFile.clear();
             }
 
-            // 清除画面显示
-            UI::ClearImage();
+            ToolChainState::SetYoloLiveDetect(false);
+            ToolChainState::SetYoloLiveInstanceIndex(-1);
+            FrameSourceState::Clear();
+            ROIState::ClearInteraction();
+            TemplateMatch::Clear();
+            g_YoloShowOverlay = false;
+            g_YoloOverlays.clear();
+            gContext.ClearUnifiedResults();
 
             LogSystem::Add(LOG_INFO, "视频/摄像头已关闭");
         }
