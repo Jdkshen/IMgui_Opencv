@@ -125,6 +125,7 @@
     <ClCompile Include="..\Core\ImageState.cpp" />
     <ClCompile Include="..\Core\HardwareAdapters.cpp" />
     <ClCompile Include="..\Core\ModbusTcpAdapter.cpp" />
+    <ClCompile Include="..\Core\TcpTextAdapter.cpp" />
     <ClCompile Include="..\Core\ModbusPlcAdapter.cpp" />
     <ClCompile Include="..\Core\OpenCvCameraAdapter.cpp" />
     <ClCompile Include="..\Core\Open62541OpcUaAdapter.cpp" />
@@ -184,6 +185,7 @@
     <ClInclude Include="..\Core\ImageState.h" />
     <ClInclude Include="..\Core\HardwareAdapters.h" />
     <ClInclude Include="..\Core\ModbusTcpAdapter.h" />
+    <ClInclude Include="..\Core\TcpTextAdapter.h" />
     <ClInclude Include="..\Core\ModbusPlcAdapter.h" />
     <ClInclude Include="..\Core\OpenCvCameraAdapter.h" />
     <ClInclude Include="..\Core\Open62541OpcUaAdapter.h" />

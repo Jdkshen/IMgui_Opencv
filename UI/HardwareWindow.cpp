@@ -87,6 +87,9 @@ void ShowHardwareWindow()
     static int outputAddressValue = 0;
     static int outputTimeoutMs = 1500;
     static bool plcHoldingRegister = false;
+    static char tcpPassText[128] = "PASS";
+    static char tcpFailText[128] = "FAIL";
+    static bool tcpAppendCrLf = true;
     static bool outputInvert = false;
     static bool outputAutoPublish = false;
 
@@ -157,7 +160,8 @@ void ShowHardwareWindow()
     if (!snapshot.outputAdapterKey.empty())
         ImGui::TextDisabled("适配器: %s", snapshot.outputAdapterKey.c_str());
 
-    const char* outputTypes[] = {"Modbus TCP 线圈", "Modbus PLC 标签", "OPC UA NodeId"};
+    const char* outputTypes[] = {
+        "Modbus TCP 线圈", "Modbus PLC 标签", "OPC UA NodeId", "TCP 文本"};
     const int previousOutputType = outputType;
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::Combo("##output_type", &outputType, outputTypes,
@@ -168,7 +172,8 @@ void ShowHardwareWindow()
             outputPort = 4840;
         else if (outputType != 2 && outputPort == 4840)
             outputPort = 502;
-        std::snprintf(outputResource, sizeof(outputResource), "%s", outputType == 2 ? "" : "1");
+        std::snprintf(outputResource, sizeof(outputResource), "%s",
+            outputType == 2 || outputType == 3 ? "" : "1");
     }
 
     ImGui::SetNextItemWidth(-1.0f);
@@ -178,12 +183,15 @@ void ShowHardwareWindow()
     ImGui::InputText("##output_address", outputAddress, sizeof(outputAddress));
     ImGui::SetItemTooltip(outputType == 2
         ? "OPC UA 主机或完整 opc.tcp:// URL"
-        : "PLC/Modbus TCP 主机或 IP");
+        : outputType == 3 ? "普通 TCP Server 主机或 IP" : "PLC/Modbus TCP 主机或 IP");
     ImGui::InputInt("端口", &outputPort);
-    ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputText("##output_resource", outputResource, sizeof(outputResource));
-    ImGui::SetItemTooltip(outputType == 2 ? "可选 OPC UA endpoint path" :
-        "Modbus Unit ID，通常为 1；直连设备也可能使用 0 或 255");
+    if (outputType != 3)
+    {
+        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::InputText("##output_resource", outputResource, sizeof(outputResource));
+        ImGui::SetItemTooltip(outputType == 2 ? "可选 OPC UA endpoint path" :
+            "Modbus Unit ID，通常为 1；直连设备也可能使用 0 或 255");
+    }
     ImGui::InputInt("连接超时(ms)", &outputTimeoutMs);
 
     if (outputType == 1 || outputType == 2)
@@ -192,14 +200,33 @@ void ShowHardwareWindow()
         ImGui::InputText("##output_target", outputTarget, sizeof(outputTarget));
         ImGui::SetItemTooltip(outputType == 1 ? "PLC 标签名" : "例如 ns=2;s=Inspection.OK");
     }
-    if (outputType != 2)
+    if (outputType == 0 || outputType == 1)
     {
         ImGui::InputInt(outputType == 0 ? "线圈地址" : "映射地址", &outputAddressValue);
         ImGui::SetItemTooltip("Modbus 协议地址从 0 开始；PLC 显示 00001 时通常填写 0");
         if (outputType == 1)
             ImGui::Checkbox("映射到保持寄存器", &plcHoldingRegister);
     }
-    ImGui::Checkbox("输出反相", &outputInvert);
+    if (outputType == 3)
+    {
+        const float textWidth = (ImGui::GetContentRegionAvail().x -
+            ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+        ImGui::SetNextItemWidth(textWidth);
+        ImGui::InputText("##tcp_pass_text", tcpPassText, sizeof(tcpPassText));
+        ImGui::SetItemTooltip("Pass 输出内容");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(textWidth);
+        ImGui::InputText("##tcp_fail_text", tcpFailText, sizeof(tcpFailText));
+        ImGui::SetItemTooltip("Fail/Error 输出内容");
+        ImGui::Checkbox("追加 CRLF", &tcpAppendCrLf);
+        ImGui::SetItemTooltip("发送文本后不等待服务端响应");
+        ImGui::SameLine();
+        ImGui::Checkbox("输出反相", &outputInvert);
+    }
+    else
+    {
+        ImGui::Checkbox("输出反相", &outputInvert);
+    }
     if (ImGui::Checkbox("批次完成自动发布", &outputAutoPublish) &&
         snapshot.outputState == DeviceConnectionState::Connected)
     {
@@ -209,7 +236,7 @@ void ShowHardwareWindow()
     if (ImGui::Button("连接输出设备"))
     {
         HardwareOutputConnectionConfig config;
-        config.adapterType = static_cast<HardwareOutputAdapterType>(std::clamp(outputType, 0, 2));
+        config.adapterType = static_cast<HardwareOutputAdapterType>(std::clamp(outputType, 0, 3));
         config.endpoint.address = outputAddress;
         config.endpoint.port = ClampPort(outputPort);
         config.endpoint.resource = outputResource;
@@ -218,6 +245,9 @@ void ShowHardwareWindow()
         config.binding.target = outputTarget;
         config.binding.address = ClampAddress(outputAddressValue);
         config.binding.invert = outputInvert;
+        config.binding.passText = tcpPassText;
+        config.binding.failText = tcpFailText;
+        config.binding.appendCrLf = tcpAppendCrLf;
         config.plcUseHoldingRegister = plcHoldingRegister;
         config.autoPublish = outputAutoPublish;
         LogOperation("硬件输出连接", HardwareRuntimeService::ConnectOutput(config));

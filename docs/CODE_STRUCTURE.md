@@ -156,6 +156,7 @@ ROI 交互主要在 `UI/ROIManager.cpp` 中完成，包含控制点、拖动、�
 | `HardwareRuntimeService.*` | 设备连接、异步相机抓帧、结果聚合及 OK/NG 到 PLC/Modbus/OPC UA 的运行协调 |
 | `OpenCvCameraAdapter.*` | UVC、摄像头索引和 OpenCV 视频流 URL 的通用相机实现 |
 | `ModbusTcpAdapter.*` | Winsock Modbus TCP 01/03/05/06 客户端与协议校验 |
+| `TcpTextAdapter.*` | 普通 TCP 文本结果输出，支持可配置 Pass/Fail 内容且不等待响应 |
 | `ModbusPlcAdapter.*` | PLC 标签到 Modbus 线圈/寄存器及工程量的映射 |
 | `Open62541OpcUaAdapter.*` | open62541 原生 OPC UA TCP 客户端、NodeId 与标量读写 |
 | `../UI/HardwareWindow.*` | 工业相机和结果输出配置界面，仅调用 HardwareRuntimeService API |

@@ -27,6 +27,7 @@
 #include "../Core/HardwareAdapters.h"
 #include "../Core/HardwareRuntimeService.h"
 #include "../Core/ModbusTcpAdapter.h"
+#include "../Core/TcpTextAdapter.h"
 #include "../Core/ModbusPlcAdapter.h"
 #include "../Core/OpenCvCameraAdapter.h"
 #include "../Core/Open62541OpcUaAdapter.h"
@@ -445,6 +446,48 @@ struct ScriptedModbusTransport final : IModbusTcpTransport
     std::uint16_t lastPort = 0;
     int lastTimeoutMs = 0;
     std::vector<std::uint8_t> lastRequest;
+};
+
+struct ScriptedTcpTextTransport final : ITcpTextTransport
+{
+    DeviceOperationResult Connect(
+        const std::string& address, std::uint16_t port, int timeoutMs) override
+    {
+        connected = connectSucceeds;
+        lastAddress = address;
+        lastPort = port;
+        lastTimeoutMs = timeoutMs;
+        return connected ? DeviceOperationResult{true, {}}
+                         : DeviceOperationResult{false, "scripted TCP connect failure"};
+    }
+
+    void Disconnect() override
+    {
+        connected = false;
+    }
+
+    DeviceOperationResult Send(const std::string& text) override
+    {
+        if (!connected)
+            return {false, "scripted TCP transport disconnected"};
+        if (failNextSend)
+        {
+            failNextSend = false;
+            return {false, "scripted TCP send failure"};
+        }
+        lastText = text;
+        ++sendCount;
+        return {true, "sent without response"};
+    }
+
+    bool connectSucceeds = true;
+    bool connected = false;
+    bool failNextSend = false;
+    int sendCount = 0;
+    std::string lastAddress;
+    std::uint16_t lastPort = 0;
+    int lastTimeoutMs = 0;
+    std::string lastText;
 };
 
 struct TestOpcUaAdapter final : IOpcUaAdapter
@@ -2082,12 +2125,61 @@ void TestHardwareRuntimeAutomation()
         ToolResultStatus::Error,
         "inspection status aggregation priority regressed");
 
+    auto tcpTransport = std::make_unique<ScriptedTcpTextTransport>();
+    ScriptedTcpTextTransport* tcpTransportView = tcpTransport.get();
+    auto tcpText = std::make_unique<TcpTextAdapter>(std::move(tcpTransport));
+    Require(tcpText->Connect({"192.168.10.5", 5000, {}, 1500}).success &&
+        HardwareAdapterService::Register("tcp-text-output", std::move(tcpText)),
+        "TCP text automation output setup failed");
+    HardwareOutputBinding tcpBinding;
+    tcpBinding.kind = HardwareOutputKind::TcpText;
+    tcpBinding.adapterKey = "tcp-text-output";
+    tcpBinding.passText = "OK";
+    tcpBinding.failText = "NG";
+    tcpBinding.appendCrLf = true;
+    HardwareRuntimeService::ConfigureOutputBinding(tcpBinding, true);
+    Require(HardwareRuntimeService::PublishConfiguredStatus(ToolResultStatus::Pass).success &&
+        tcpTransportView->lastText == "OK\r\n" && tcpTransportView->sendCount == 1,
+        "TCP text Pass output waited for a response or changed the payload");
+    Require(HardwareRuntimeService::PublishConfiguredStatus(ToolResultStatus::Error).success &&
+        tcpTransportView->lastText == "NG\r\n" && tcpTransportView->sendCount == 2,
+        "TCP text Error output did not use the configured Fail payload");
+
     HardwareRuntimeService::Shutdown();
     Require(HardwareAdapterService::Camera() == nullptr &&
         HardwareAdapterService::Keys().empty(),
         "hardware runtime shutdown left registered devices behind");
     FrameSourceState::Clear();
     ImageState::Clear();
+}
+
+void TestConcreteTcpTextAdapter()
+{
+    auto transport = std::make_unique<ScriptedTcpTextTransport>();
+    ScriptedTcpTextTransport* transportView = transport.get();
+    TcpTextAdapter adapter(std::move(transport));
+
+    DeviceEndpoint endpoint;
+    endpoint.address = "192.168.10.5";
+    endpoint.port = 5000;
+    endpoint.timeoutMs = 1500;
+    Require(adapter.Connect(endpoint).success &&
+        adapter.ConnectionState() == DeviceConnectionState::Connected &&
+        transportView->lastAddress == endpoint.address &&
+        transportView->lastPort == endpoint.port &&
+        transportView->lastTimeoutMs == endpoint.timeoutMs,
+        "TCP text adapter did not apply endpoint settings");
+    Require(adapter.SendText("PASS\r\n").success &&
+        transportView->lastText == "PASS\r\n" && transportView->sendCount == 1,
+        "TCP text adapter did not send the exact configured payload");
+
+    transportView->failNextSend = true;
+    Require(!adapter.SendText("FAIL\r\n").success &&
+        adapter.ConnectionState() == DeviceConnectionState::Fault,
+        "TCP text send failure did not fault the connection");
+    adapter.Disconnect();
+    Require(adapter.ConnectionState() == DeviceConnectionState::Disconnected,
+        "TCP text adapter disconnect state regressed");
 }
 
 void TestConcreteModbusTcpAdapterProtocol()
@@ -3342,6 +3434,7 @@ int main(int argc, char** argv)
         TestToolROIServiceOwnsBoundROIEditing();
         TestHardwareAdapterServiceLifecycle();
         TestHardwareRuntimeAutomation();
+        TestConcreteTcpTextAdapter();
         TestConcreteModbusTcpAdapterProtocol();
         TestConcreteOpenCvCameraAdapter();
         TestConcreteOpen62541OpcUaAdapter();

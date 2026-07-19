@@ -87,6 +87,7 @@
     <ClInclude Include="Core\ImageViewState.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\HardwareAdapters.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ModbusTcpAdapter.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\TcpTextAdapter.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ModbusPlcAdapter.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\OpenCvCameraAdapter.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\Open62541OpcUaAdapter.h"><Filter>Core</Filter></ClInclude>
@@ -187,6 +188,7 @@
     <ClCompile Include="Core\ImageViewState.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\HardwareAdapters.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ModbusTcpAdapter.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\TcpTextAdapter.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ModbusPlcAdapter.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\OpenCvCameraAdapter.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\Open62541OpcUaAdapter.cpp"><Filter>Core</Filter></ClCompile>

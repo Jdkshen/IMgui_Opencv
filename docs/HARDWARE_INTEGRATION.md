@@ -91,6 +91,25 @@ inspection-chain failure. Check these items in order:
 Runtime errors include the function code, Unit ID, and protocol address so a packet
 capture or PLC diagnostic log can be compared against the exact request.
 
+## Plain TCP text output
+
+Use `TCP 文本` in the device window when the target is a plain TCP server or network
+debugging tool rather than a Modbus server. Configure independent Pass and Fail payloads
+and optionally append CRLF. The adapter considers a complete socket send successful and
+does not wait for an application response.
+
+For example, the following configuration sends readable lines to a TCP server listening
+on `192.168.10.5:5000`:
+
+```text
+Pass content: PASS
+Fail content: FAIL
+Append CRLF: enabled
+```
+
+This mode must not be used for a PLC endpoint that requires Modbus TCP framing. Select
+the Modbus coil or Modbus PLC output type for those devices.
+
 ## PLC tags over Modbus
 
 `ModbusPlcAdapter` maps named PLC tags onto Modbus coils or holding registers. This lets

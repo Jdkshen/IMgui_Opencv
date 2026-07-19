@@ -7,6 +7,7 @@
 #include "ModbusTcpAdapter.h"
 #include "Open62541OpcUaAdapter.h"
 #include "OpenCvCameraAdapter.h"
+#include "TcpTextAdapter.h"
 #include "VideoCapture.h"
 
 #include <opencv2/core/mat.hpp>
@@ -292,6 +293,10 @@ DeviceOperationResult ConnectOutput(const HardwareOutputConnectionConfig& rawCon
         config.binding.kind = HardwareOutputKind::OpcUaNode;
         adapter = std::make_unique<Open62541OpcUaAdapter>();
         break;
+    case HardwareOutputAdapterType::TcpText:
+        config.binding.kind = HardwareOutputKind::TcpText;
+        adapter = std::make_unique<TcpTextAdapter>();
+        break;
     }
 
     DeviceOperationResult result = adapter->Connect(config.endpoint);
@@ -309,7 +314,9 @@ DeviceOperationResult ConnectOutput(const HardwareOutputConnectionConfig& rawCon
     s_outputBinding = s_outputConfig.binding;
     s_outputAdapterKey = key;
     s_outputAutoPublish = s_outputConfig.autoPublish;
-    s_lastOutputOperation = {true, "硬件输出已连接"};
+    s_lastOutputOperation = {true, result.message.empty()
+        ? "硬件输出已连接"
+        : std::move(result.message)};
     return s_lastOutputOperation;
 }
 
@@ -399,6 +406,16 @@ DeviceOperationResult PublishInspectionStatus(ToolResultStatus status,
         if (!opcUa)
             return {false, "设备适配器不支持 OPC UA 节点写入"};
         return opcUa->WriteNode(binding.target, DeviceValue(pass));
+    }
+    case HardwareOutputKind::TcpText:
+    {
+        auto* tcpText = dynamic_cast<ITcpTextAdapter*>(adapter);
+        if (!tcpText)
+            return {false, "设备适配器不支持 TCP 文本发送"};
+        std::string payload = pass ? binding.passText : binding.failText;
+        if (binding.appendCrLf)
+            payload += "\r\n";
+        return tcpText->SendText(payload);
     }
     }
 

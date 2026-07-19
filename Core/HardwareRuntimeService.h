@@ -11,7 +11,8 @@ enum class HardwareOutputKind
 {
     PlcTag,
     ModbusCoil,
-    OpcUaNode
+    OpcUaNode,
+    TcpText
 };
 
 struct HardwareOutputBinding
@@ -21,13 +22,17 @@ struct HardwareOutputBinding
     std::string target;
     std::uint16_t address = 0;
     bool invert = false;
+    std::string passText = "PASS";
+    std::string failText = "FAIL";
+    bool appendCrLf = true;
 };
 
 enum class HardwareOutputAdapterType
 {
     ModbusTcp,
     ModbusPlc,
-    OpcUa
+    OpcUa,
+    TcpText
 };
 
 struct HardwareCameraConnectionConfig

@@ -78,6 +78,12 @@ public:
         const DeviceValue& value) = 0;
 };
 
+class ITcpTextAdapter : public IDeviceAdapter
+{
+public:
+    virtual DeviceOperationResult SendText(const std::string& text) = 0;
+};
+
 namespace HardwareAdapterService
 {
     void SetCamera(std::unique_ptr<ICameraAdapter> camera);
