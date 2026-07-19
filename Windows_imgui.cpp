@@ -199,7 +199,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		UI::ShowSidebar();					  // 侧边栏控制面板
 		UI::ShowLogWindow();				  // 日志窗口
 		UI::ShowStatsWindow();				  // 性能统计窗口
-		UI::ShowHardwareWindow();			  // 工业设备连接与结果输出
 		UI::ShowOpenCV();					  // 图片显示窗口
 		UI::ShowToolsWindow();				  // 工具窗口（ROI管理+算法入口）
 

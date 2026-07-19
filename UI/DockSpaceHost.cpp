@@ -1,6 +1,7 @@
 #include "../Core/OpenFileDialog.h"
 #include "DockSpaceHost.h"
 #include "ToolsWindow.h"
+#include "Sidebar.h"
 #include "../Core/ThemeManager.h"
 #include "../Core/VisionContext.h"
 #include "../Core/RecipeManager.h"
@@ -83,7 +84,7 @@ bool g_ShowSidebar = true;
 bool g_ShowStats = true;
 bool g_ShowOpenCV = true;
 bool g_ShowTools = true;
-bool g_ShowHardware = false;
+bool g_ShowHardware = true;
 
 namespace UI
 {
@@ -519,7 +520,14 @@ TemplateState::ClearResults();
             if (ImGui::Selectable("功能窗口", g_ShowTools))
                 g_ShowTools = !g_ShowTools;
             if (ImGui::Selectable("设备连接", g_ShowHardware))
+            {
                 g_ShowHardware = !g_ShowHardware;
+                if (g_ShowHardware)
+                {
+                    g_ShowSidebar = true;
+                    UI::RequestHardwarePanelFocus();
+                }
+            }
             ImGui::Separator();
 
             if (ImGui::BeginMenu("主题"))
@@ -539,7 +547,11 @@ TemplateState::ClearResults();
         }
 
         if (ImGui::MenuItem("连接设备(D)", nullptr, g_ShowHardware))
+        {
+            g_ShowSidebar = true;
             g_ShowHardware = true;
+            UI::RequestHardwarePanelFocus();
+        }
 
         if (ImGui::BeginMenu("转到(G)"))
         {
@@ -550,7 +562,11 @@ TemplateState::ClearResults();
             if (ImGui::MenuItem("日志窗口"))
                 g_ShowLog = true;
             if (ImGui::MenuItem("设备连接"))
+            {
+                g_ShowSidebar = true;
                 g_ShowHardware = true;
+                UI::RequestHardwarePanelFocus();
+            }
             ImGui::EndMenu();
         }
 
@@ -675,7 +691,6 @@ TemplateState::ClearResults();
             ImGui::DockBuilderDockWindow("侧边栏",   left);
             ImGui::DockBuilderDockWindow("日志窗口", bottom);
             ImGui::DockBuilderDockWindow("性能统计", bottom);
-            ImGui::DockBuilderDockWindow("设备连接", right);
             // 每个停靠节点的标签栏在单窗口时自动隐藏（节省空间），图钉仍可用
             ImGuiDockNodeFlags autoHideFlags = ImGuiDockNodeFlags_AutoHideTabBar;
             if (auto n = ImGui::DockBuilderGetNode(left))   n->LocalFlags |= autoHideFlags;

@@ -159,7 +159,7 @@ ROI 交互主要在 `UI/ROIManager.cpp` 中完成，包含控制点、拖动、�
 | `TcpTextAdapter.*` | 普通 TCP 文本结果输出，支持可配置 Pass/Fail 内容且不等待响应 |
 | `ModbusPlcAdapter.*` | PLC 标签到 Modbus 线圈/寄存器及工程量的映射 |
 | `Open62541OpcUaAdapter.*` | open62541 原生 OPC UA TCP 客户端、NodeId 与标量读写 |
-| `../UI/HardwareWindow.*` | 工业相机和结果输出配置界面，仅调用 HardwareRuntimeService API |
+| `../UI/HardwareWindow.*` | 内嵌在 Sidebar 控制面板中的工业相机和结果输出配置，仅调用 HardwareRuntimeService API |
 | `LiveYoloRunner.*` | 实时 YOLO 推理调度和耗时统计 |
 | `FrameRenderer.*` | 每帧渲染提交和渲染资源收尾 |
 | `VisionContext.*` | 统一视觉上下文，保存图片、ROI、模板和结果 |

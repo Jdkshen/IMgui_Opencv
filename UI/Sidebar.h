@@ -5,5 +5,6 @@
 // =====================================================
 namespace UI
 {
+    void RequestHardwarePanelFocus();
     void ShowSidebar();
 }
