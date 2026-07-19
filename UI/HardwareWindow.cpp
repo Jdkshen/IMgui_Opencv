@@ -2,6 +2,7 @@
 
 #include "DockSpaceHost.h"
 #include "../Core/HardwareRuntimeService.h"
+#include "../Core/ThemeManager.h"
 #include "../Log/LogSystem.h"
 #include "../include/imgui/imgui.h"
 
@@ -54,6 +55,19 @@ void DrawOperationMessage(const DeviceOperationResult& result)
         : ImVec4(0.95f, 0.38f, 0.32f, 1.0f),
         "%s", result.message.c_str());
     ImGui::PopTextWrapPos();
+}
+
+void DrawSectionTitle(const char* label)
+{
+    const bool isDark = g_CurrentTheme == 0;
+    ImGui::PushStyleColor(ImGuiCol_Text, isDark
+        ? ImVec4(0.42f, 0.78f, 0.84f, 1.0f)
+        : ImVec4(0.05f, 0.39f, 0.46f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Separator, isDark
+        ? ImVec4(0.18f, 0.36f, 0.40f, 1.0f)
+        : ImVec4(0.48f, 0.67f, 0.70f, 1.0f));
+    ImGui::SeparatorText(label);
+    ImGui::PopStyleColor(2);
 }
 
 std::uint16_t ClampPort(int value)
@@ -115,8 +129,7 @@ void DrawHardwarePanel()
 
     HardwareRuntimeSnapshot snapshot = HardwareRuntimeService::Snapshot();
 
-    ImGui::TextUnformatted("工业相机");
-    ImGui::Separator();
+    DrawSectionTitle("工业相机");
     ImGui::TextColored(ConnectionStateColor(snapshot.cameraState), "%s%s%s",
         ConnectionStateName(snapshot.cameraState),
         snapshot.cameraAdapterName.empty() ? "" : " · ",
@@ -172,9 +185,7 @@ void DrawHardwarePanel()
         HardwareRuntimeService::DisconnectCamera();
     DrawOperationMessage(snapshot.lastCameraOperation);
 
-    ImGui::Spacing();
-    ImGui::TextUnformatted("检测结果输出");
-    ImGui::Separator();
+    DrawSectionTitle("检测结果输出");
     ImGui::TextColored(ConnectionStateColor(snapshot.outputState), "%s%s%s",
         ConnectionStateName(snapshot.outputState),
         snapshot.outputAdapterName.empty() ? "" : " · ",

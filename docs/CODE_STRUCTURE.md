@@ -146,7 +146,7 @@ ROI 交互主要在 `UI/ROIManager.cpp` 中完成，包含控制点、拖动、�
 | `OpenFileDialog.*` | 文件/文件夹选择对话框 |
 | `VideoCapture.*` | 视频文件和摄像头播放，基于 `cv::VideoCapture` |
 | `AudioPlayer.*` | 音频播放和视频同步 |
-| `ThemeManager.*` | 白天/夜间主题切换和 `theme.cfg` 持久化 |
+| `ThemeManager.*` | 工业视觉深色/浅色主题、统一控件尺寸和 `theme.cfg` 持久化 |
 | `RecipeManager.*` | 配方保存、加载、应用和工具实例序列化 |
 | `ImageState.*` | 当前图、原图和图像版本状态收口 |
 | `ROI.h` / `ROIState.*` | ROI 数据结构和当前 ROI 选择状态 |

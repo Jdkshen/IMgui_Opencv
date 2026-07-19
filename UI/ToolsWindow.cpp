@@ -579,7 +579,7 @@ namespace UI
         // ---- 调度器：每帧消费执行队列（替代旧 ExecState 状态机） ----
         ToolController::Tick();
 
-        ImGui::TextColored(isDark ? ImVec4(0.72f, 0.82f, 0.94f, 1.0f) : ImVec4(0.16f, 0.30f, 0.50f, 1.0f),
+        ImGui::TextColored(isDark ? ImVec4(0.42f, 0.78f, 0.84f, 1.0f) : ImVec4(0.05f, 0.39f, 0.46f, 1.0f),
             "工具链");
         ImGui::SameLine();
         ImGui::TextDisabled("%zu 个", ToolChainState::Count());
@@ -772,20 +772,29 @@ namespace UI
         // ---- UI 辅助：统一视觉风格 ----
         auto SectionHeader = [isDark](const char *label)
         {
-            ImGui::Spacing();
             ImGui::PushStyleColor(ImGuiCol_Text, isDark
-                ? ImVec4(0.5f, 0.7f, 1.0f, 1.0f)   // 暗色: 浅蓝
-                : ImVec4(0.18f, 0.34f, 0.58f, 1.0f));  // 亮色: 柔和蓝
-            ImGui::Text("[%s]", label);
-            ImGui::PopStyleColor();
-            ImGui::Separator();
-        };
-        auto PrimaryButton = [](const char *label) -> bool
-        {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.45f, 0.75f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.55f, 0.85f, 1.0f));
-            bool clicked = ImGui::Button(label, ImVec2(-1, 28));
+                ? ImVec4(0.42f, 0.78f, 0.84f, 1.0f)
+                : ImVec4(0.05f, 0.39f, 0.46f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Separator, isDark
+                ? ImVec4(0.18f, 0.36f, 0.40f, 1.0f)
+                : ImVec4(0.48f, 0.67f, 0.70f, 1.0f));
+            ImGui::SeparatorText(label);
             ImGui::PopStyleColor(2);
+        };
+        auto PrimaryButton = [isDark](const char *label) -> bool
+        {
+            ImGui::PushStyleColor(ImGuiCol_Button, isDark
+                ? ImVec4(0.10f, 0.40f, 0.48f, 1.0f)
+                : ImVec4(0.12f, 0.49f, 0.57f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, isDark
+                ? ImVec4(0.13f, 0.50f, 0.59f, 1.0f)
+                : ImVec4(0.08f, 0.42f, 0.50f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, isDark
+                ? ImVec4(0.08f, 0.33f, 0.40f, 1.0f)
+                : ImVec4(0.05f, 0.35f, 0.42f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.96f, 0.98f, 0.99f, 1.0f));
+            bool clicked = ImGui::Button(label, ImVec2(-1, 28));
+            ImGui::PopStyleColor(4);
             return clicked;
         };
         auto RunToolFromCard = [](int inst) -> bool
@@ -798,14 +807,9 @@ namespace UI
             ToolController::RequestRun(inst);
             return true;
         };
-        auto SecondaryButton = [isDark](const char *label, float w = 0) -> bool
+        auto SecondaryButton = [](const char *label, float w = 0) -> bool
         {
-            ImGui::PushStyleColor(ImGuiCol_Button, isDark
-                ? ImVec4(0.25f, 0.25f, 0.28f, 1.0f)   // 暗色: 深灰
-                : ImVec4(0.52f, 0.66f, 0.82f, 1.0f));  // 亮色: 工业蓝灰
-            bool clicked = ImGui::Button(label, ImVec2(w, 0));
-            ImGui::PopStyleColor();
-            return clicked;
+            return ImGui::Button(label, ImVec2(w, 0));
         };
         auto ParamLabel = [](const char* label, float labelW = 56.0f)
         {
@@ -859,20 +863,19 @@ namespace UI
 
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 5));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6, 5));
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 5.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 4.0f);
 
-        // ---- Material You 主题色 ----
-        ImVec4 themeCard      = isDark ? ImVec4(0.13f, 0.14f, 0.17f, 1.0f) : ImVec4(0.78f, 0.83f, 0.89f, 1.0f);
-        ImVec4 themeCardHover = isDark ? ImVec4(0.18f, 0.20f, 0.24f, 1.0f) : ImVec4(0.68f, 0.75f, 0.84f, 1.0f);
-        ImVec4 themeActive    = isDark ? ImVec4(0.18f, 0.45f, 0.80f, 0.30f) : ImVec4(0.18f, 0.52f, 0.78f, 0.28f);
+        ImVec4 themeCard      = isDark ? ImVec4(0.095f, 0.110f, 0.130f, 1.0f) : ImVec4(0.965f, 0.975f, 0.980f, 1.0f);
+        ImVec4 themeCardHover = isDark ? ImVec4(0.130f, 0.160f, 0.180f, 1.0f) : ImVec4(0.895f, 0.925f, 0.935f, 1.0f);
+        ImVec4 themeActive    = isDark ? ImVec4(0.12f, 0.34f, 0.39f, 0.72f) : ImVec4(0.66f, 0.83f, 0.86f, 1.0f);
         const int toolsColorStackBase = ImGui::GetCurrentContext()->ColorStack.Size;
         ImGui::PushStyleColor(ImGuiCol_ChildBg, themeCard);
 
         auto ResetCardColor = [isDark]() {
             ImGui::PushStyleColor(ImGuiCol_ChildBg, isDark
-                ? ImVec4(0.13f, 0.14f, 0.17f, 1.0f)   // 暗色
-                : ImVec4(0.78f, 0.83f, 0.89f, 1.0f));  // 亮色
+                ? ImVec4(0.095f, 0.110f, 0.130f, 1.0f)
+                : ImVec4(0.965f, 0.975f, 0.980f, 1.0f));
         };
 
         // ---- Card 面板辅助 ----
@@ -885,7 +888,7 @@ namespace UI
             ImGui::PushID(currentCardInst * 100 + currentCardType);
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6, 5));
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 4));
-            ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 4.0f);
             char childId[96];
             snprintf(childId, sizeof(childId), "##tool_card_%d_%d", currentCardInst, currentCardType);
             ImGui::BeginChild(childId, ImVec2(0.0f, 0.0f),
@@ -896,8 +899,8 @@ namespace UI
                 ? cardTool->label
                 : std::string(title);
             ImGui::TextColored(isDark
-                ? ImVec4(0.6f, 0.8f, 1.0f, 1.0f)
-                : ImVec4(0.18f, 0.34f, 0.58f, 1.0f),
+                ? ImVec4(0.48f, 0.80f, 0.85f, 1.0f)
+                : ImVec4(0.05f, 0.39f, 0.46f, 1.0f),
                 "%s%s", icon, titleText.c_str());
             const float toolMs = ToolController::GetToolTimeMs(currentCardInst);
             if (toolMs > 0.0f)
@@ -3081,8 +3084,8 @@ TemplateState::ClearResults();
                     ImGui::PushStyleColor(ImGuiCol_ChildBg, themeActive);
                 else if (batchHl)
                     ImGui::PushStyleColor(ImGuiCol_ChildBg, isDark
-                        ? ImVec4(0.08f, 0.55f, 0.25f, 0.28f)   // 暗色: 翠绿
-                        : ImVec4(0.15f, 0.75f, 0.35f, 0.22f));  // 亮色: 翠绿
+                        ? ImVec4(0.10f, 0.27f, 0.20f, 1.0f)
+                        : ImVec4(0.72f, 0.86f, 0.77f, 1.0f));
                 else
                     ImGui::PushStyleColor(ImGuiCol_ChildBg, themeCardHover);
 
@@ -3377,15 +3380,15 @@ TemplateState::ClearResults();
             if (runW < 92.0f) runW = 92.0f;
             if (sideW < 66.0f) sideW = 66.0f;
 
-            const ImVec4 runBase = isDark ? ImVec4(0.12f, 0.42f, 0.78f, 1.0f) : ImVec4(0.20f, 0.49f, 0.78f, 1.0f);
-            const ImVec4 runHover = isDark ? ImVec4(0.16f, 0.52f, 0.92f, 1.0f) : ImVec4(0.26f, 0.58f, 0.88f, 1.0f);
-            const ImVec4 runActive = isDark ? ImVec4(0.08f, 0.32f, 0.62f, 1.0f) : ImVec4(0.14f, 0.38f, 0.66f, 1.0f);
-            const ImVec4 subBase = isDark ? ImVec4(0.20f, 0.24f, 0.30f, 1.0f) : ImVec4(0.48f, 0.62f, 0.78f, 1.0f);
-            const ImVec4 subHover = isDark ? ImVec4(0.28f, 0.34f, 0.42f, 1.0f) : ImVec4(0.56f, 0.70f, 0.86f, 1.0f);
-            const ImVec4 subActive = isDark ? ImVec4(0.15f, 0.19f, 0.25f, 1.0f) : ImVec4(0.38f, 0.52f, 0.70f, 1.0f);
-            const ImVec4 loopBase = s_looping ? ImVec4(0.14f, 0.58f, 0.30f, 1.0f) : subBase;
-            const ImVec4 loopHover = s_looping ? ImVec4(0.18f, 0.70f, 0.38f, 1.0f) : subHover;
-            const ImVec4 loopActive = s_looping ? ImVec4(0.10f, 0.46f, 0.24f, 1.0f) : subActive;
+            const ImVec4 runBase = isDark ? ImVec4(0.10f, 0.40f, 0.48f, 1.0f) : ImVec4(0.12f, 0.49f, 0.57f, 1.0f);
+            const ImVec4 runHover = isDark ? ImVec4(0.13f, 0.50f, 0.59f, 1.0f) : ImVec4(0.08f, 0.42f, 0.50f, 1.0f);
+            const ImVec4 runActive = isDark ? ImVec4(0.08f, 0.33f, 0.40f, 1.0f) : ImVec4(0.05f, 0.35f, 0.42f, 1.0f);
+            const ImVec4 subBase = isDark ? ImVec4(0.15f, 0.18f, 0.22f, 1.0f) : ImVec4(0.84f, 0.87f, 0.89f, 1.0f);
+            const ImVec4 subHover = isDark ? ImVec4(0.20f, 0.27f, 0.30f, 1.0f) : ImVec4(0.76f, 0.84f, 0.86f, 1.0f);
+            const ImVec4 subActive = isDark ? ImVec4(0.12f, 0.23f, 0.27f, 1.0f) : ImVec4(0.65f, 0.78f, 0.81f, 1.0f);
+            const ImVec4 loopBase = s_looping ? (isDark ? ImVec4(0.12f, 0.42f, 0.25f, 1.0f) : ImVec4(0.28f, 0.62f, 0.38f, 1.0f)) : subBase;
+            const ImVec4 loopHover = s_looping ? (isDark ? ImVec4(0.16f, 0.52f, 0.31f, 1.0f) : ImVec4(0.22f, 0.54f, 0.32f, 1.0f)) : subHover;
+            const ImVec4 loopActive = s_looping ? (isDark ? ImVec4(0.09f, 0.34f, 0.20f, 1.0f) : ImVec4(0.18f, 0.47f, 0.27f, 1.0f)) : subActive;
 
             if (RunActionButton("全部执行", ImVec2(runW, actionButtonH), runBase, runHover, runActive))
             {
@@ -3434,7 +3437,7 @@ TemplateState::ClearResults();
 
             const float stepMs = ToolController::GetLastStepTimeMs();
             const float totalMs = ToolController::GetTotalTimeMs();
-            const ImVec4 timeColor = isDark ? ImVec4(0.30f, 0.95f, 0.46f, 1.0f) : ImVec4(0.02f, 0.42f, 0.18f, 1.0f);
+            const ImVec4 timeColor = isDark ? ImVec4(0.34f, 0.78f, 0.48f, 1.0f) : ImVec4(0.05f, 0.40f, 0.19f, 1.0f);
             const ImVec4 progressColor = isDark ? ImVec4(0.72f, 0.78f, 0.86f, 1.0f) : ImVec4(0.22f, 0.28f, 0.36f, 1.0f);
             if (running)
             {

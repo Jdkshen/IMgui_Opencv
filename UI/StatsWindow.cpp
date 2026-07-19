@@ -3,6 +3,7 @@
 #include "../include/imgui/imgui.h"
 #include "../Core/InspectionHistory.h"
 #include "../Core/OpenFileDialog.h"
+#include "../Core/ThemeManager.h"
 #include "../Log/LogSystem.h"
 
 #include <algorithm>
@@ -20,17 +21,27 @@ void ShowStatsWindow()
     ImGui::Begin("性能统计", &g_ShowStats);
 
     ImGuiIO& io = ImGui::GetIO();
+    const bool isDark = g_CurrentTheme == 0;
+    const ImVec4 metricColor = io.Framerate >= 50.0f
+        ? (isDark ? ImVec4(0.34f, 0.78f, 0.48f, 1.0f) : ImVec4(0.05f, 0.40f, 0.19f, 1.0f))
+        : (isDark ? ImVec4(0.95f, 0.68f, 0.26f, 1.0f) : ImVec4(0.70f, 0.36f, 0.05f, 1.0f));
 
-    ImGui::Text("FPS: %.1f", io.Framerate);
-    ImGui::Text("帧耗时: %.3f ms", io.Framerate > 0.0f ? 1000.0f / io.Framerate : 0.0f);
+    if (ImGui::BeginTable("##runtime_metrics", 2,
+        ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_BordersInnerV))
+    {
+        ImGui::TableNextColumn();
+        ImGui::TextDisabled("帧率");
+        ImGui::TextColored(metricColor, "%.1f FPS", io.Framerate);
+        ImGui::TableNextColumn();
+        ImGui::TextDisabled("帧耗时");
+        ImGui::TextColored(metricColor, "%.3f ms", io.Framerate > 0.0f ? 1000.0f / io.Framerate : 0.0f);
+        ImGui::EndTable();
+    }
 
-    ImGui::Separator();
+    ImGui::SeparatorText("渲染后端");
+    ImGui::Text("Direct3D 12");
 
-    ImGui::Text("渲染: DX12 (Direct3D 12)");
-    ImGui::Text("Draw Calls: (可扩展)");
-    ImGui::Text("三角形数: (可接渲染统计)");
-
-    ImGui::Separator();
+    ImGui::SeparatorText("质量统计");
     if (ImGui::CollapsingHeader("SPC 检测历史", ImGuiTreeNodeFlags_DefaultOpen))
     {
         static std::string selectedMeasurement;

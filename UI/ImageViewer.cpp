@@ -11,6 +11,7 @@
 #include "../Core/ImageLoadController.h"
 #include "../Core/ImageImportService.h"
 #include "../Core/ResultOverlayState.h"
+#include "../Core/ThemeManager.h"
 #include "../Algorithm/ITool.h"
 #include "../Log/LogSystem.h"
 
@@ -285,6 +286,7 @@ namespace UI
 
 					ImGui::Begin("图像预览", &g_ShowOpenCV,
 						ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+			const bool isDark = g_CurrentTheme == 0;
 			if (FrameNavigation::ConsumeFitRequest())
 				FitImageToWindow();
 
@@ -469,7 +471,9 @@ namespace UI
 
 			// --- FPS 和状态指示 ---
 			ImGui::TextColored(
-				playing ? ImVec4(0.3f, 1.0f, 0.3f, 1) : ImVec4(0.7f, 0.7f, 0.7f, 1),
+				playing
+					? (isDark ? ImVec4(0.34f, 0.78f, 0.48f, 1.0f) : ImVec4(0.05f, 0.40f, 0.19f, 1.0f))
+					: ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
 				"%.1f fps %s",
 				playback.fps,
 				playback.camera ? "[摄像头]" : "[视频]");
@@ -478,7 +482,9 @@ namespace UI
 		}
 
 		// 为底部浏览工具栏预留空间
-			ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_ChildBg));
+			ImGui::PushStyleColor(ImGuiCol_ChildBg, isDark
+				? ImVec4(0.040f, 0.047f, 0.055f, 1.0f)
+				: ImVec4(0.76f, 0.79f, 0.81f, 1.0f));
 			ImGui::PushStyleColor(ImGuiCol_Border, ImGui::GetStyleColorVec4(ImGuiCol_Border));
 		ImGui::BeginChild("ImageRegion", ImVec2(0, -35.0f), true,
 						  ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_NoScrollWithMouse);

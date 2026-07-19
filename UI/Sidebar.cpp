@@ -21,13 +21,19 @@ namespace UI
         const bool isDark = (g_CurrentTheme == 0);
         auto SectionTitle = [isDark](const char* label)
         {
-            ImGui::Spacing();
-            ImGui::TextColored(isDark ? ImVec4(0.55f, 0.72f, 0.95f, 1.0f) : ImVec4(0.18f, 0.34f, 0.56f, 1.0f), "%s", label);
-            ImGui::Separator();
+            ImGui::PushStyleColor(ImGuiCol_Text, isDark
+                ? ImVec4(0.42f, 0.78f, 0.84f, 1.0f)
+                : ImVec4(0.05f, 0.39f, 0.46f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Separator, isDark
+                ? ImVec4(0.18f, 0.36f, 0.40f, 1.0f)
+                : ImVec4(0.48f, 0.67f, 0.70f, 1.0f));
+            ImGui::SeparatorText(label);
+            ImGui::PopStyleColor(2);
         };
 
-        ImGui::Text("控制面板");
-        ImGui::Separator();
+        ImGui::TextColored(isDark
+            ? ImVec4(0.88f, 0.91f, 0.94f, 1.0f)
+            : ImVec4(0.10f, 0.16f, 0.19f, 1.0f), "控制面板");
 
         // =========================
         // ROI 类型切换

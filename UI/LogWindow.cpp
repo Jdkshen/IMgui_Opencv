@@ -41,6 +41,7 @@ namespace UI
 
         ImGui::Begin("日志窗口", &g_ShowLog);
         const bool isDark = (g_CurrentTheme == 0);
+        auto logs = LogSystem::GetLogs();
 
         if (ImGui::Button("清空日志"))
             LogSystem::Clear();
@@ -57,12 +58,23 @@ namespace UI
             }
         }
 
+        if (logs)
+        {
+            const std::string countText = std::to_string(logs->size()) + " 条";
+            const float countX = ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize(countText.c_str()).x;
+            if (countX > ImGui::GetCursorPosX())
+            {
+                ImGui::SameLine();
+                ImGui::SetCursorPosX(countX);
+                ImGui::TextDisabled("%s", countText.c_str());
+            }
+        }
+
         ImGui::Separator();
 
-        ImGui::BeginChild("滚动区域");
+        ImGui::BeginChild("滚动区域", ImVec2(0.0f, 0.0f), ImGuiChildFlags_Borders);
 
         // ⭐ 优化：shared_ptr COW，零拷贝获取日志列表
-        auto logs = LogSystem::GetLogs();
         if (!logs)
         {
             ImGui::EndChild();
