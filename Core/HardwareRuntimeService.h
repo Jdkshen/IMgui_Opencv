@@ -85,6 +85,7 @@ namespace HardwareRuntimeService
     bool CameraTriggerOnInspectionEnabled();
     DeviceOperationResult SetCameraControl(CameraControl control, double value);
     void RequestCameraFrame(bool runToolChainAfterCapture = false, bool loop = false);
+    void CancelPendingCameraToolRun();
 
     DeviceOperationResult ConnectOutput(const HardwareOutputConnectionConfig& config);
     void DisconnectOutput();

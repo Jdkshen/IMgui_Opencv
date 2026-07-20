@@ -452,5 +452,19 @@ namespace ToolController
         ClearRuntimeCaches();
     }
 
-    void Reset() { s_mode = Mode::Idle; s_currentIndex = -1; s_stepCursor = 0; s_isStep = false; s_queue = {}; s_loop = false; s_batchTimerStarted = false; s_nextLoopRunAt = std::chrono::high_resolution_clock::now(); s_toolTimesMs.clear(); s_stepTimeMs = 0; s_batchTotalMs = 0; }
+    void Reset()
+    {
+        HardwareRuntimeService::CancelPendingCameraToolRun();
+        s_mode = Mode::Idle;
+        s_currentIndex = -1;
+        s_stepCursor = 0;
+        s_isStep = false;
+        s_queue = {};
+        s_loop = false;
+        s_batchTimerStarted = false;
+        s_nextLoopRunAt = std::chrono::high_resolution_clock::now();
+        s_toolTimesMs.clear();
+        s_stepTimeMs = 0;
+        s_batchTotalMs = 0;
+    }
 }

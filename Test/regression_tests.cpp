@@ -2293,7 +2293,17 @@ void TestHardwareRuntimeAutomation()
     }
     Require(linkedLoopContinued,
         "camera-triggered inspection loop did not request the next frame");
+
+    ToolController::Tick();
     ToolController::Reset();
+    for (int attempt = 0; attempt < 20; ++attempt)
+    {
+        HardwareRuntimeService::Tick();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    Require(ToolController::GetMode() == ToolController::Mode::Idle &&
+        !HardwareRuntimeService::Snapshot().cameraToolRunPending,
+        "stopping the camera inspection loop left a pending tool run");
     ToolChainState::ClearTools();
 
     auto modbus = std::make_unique<TestModbusAdapter>();

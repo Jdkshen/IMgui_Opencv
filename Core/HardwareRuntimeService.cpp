@@ -304,6 +304,21 @@ void RequestCameraFrame(bool runToolChainAfterCapture, bool loop)
     s_cameraWorkerCondition.notify_all();
 }
 
+void CancelPendingCameraToolRun()
+{
+    {
+        std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
+        const bool hadPendingToolRun = s_runToolChainAfterFrameIndex >= 0 ||
+            s_cameraToolRunPending;
+        s_runToolChainAfterFrameIndex = -1;
+        s_cameraToolRunPending = false;
+        s_cameraToolRunLoop = false;
+        if (hadPendingToolRun && !s_cameraAutoCapture)
+            s_cameraFrameRequested = false;
+    }
+    s_cameraWorkerCondition.notify_all();
+}
+
 DeviceOperationResult ConnectOutput(const HardwareOutputConnectionConfig& rawConfig)
 {
     HardwareOutputConnectionConfig config = rawConfig;
