@@ -414,7 +414,7 @@ void SyncIToolParams(ToolInstance& it, const VisionContext& context)
             bt->maxCircularity = it.blobMaxCircularity;
             bt->minAspectRatio = it.blobMinAspectRatio;
             bt->maxAspectRatio = it.blobMaxAspectRatio;
-            bt->showLabels = it.blobShowLabels;
+            bt->showLabels = it.showResultLabels;
         }
     } else if (t == 16) {
         if (auto* dt = dynamic_cast<DifferenceTool*>(it.toolImpl)) {
@@ -425,7 +425,7 @@ void SyncIToolParams(ToolInstance& it, const VisionContext& context)
             dt->morphKernelSize = it.differenceMorphKernelSize;
             dt->morphIterations = it.differenceMorphIterations;
             dt->invert = it.differenceInvert;
-            dt->showLabels = it.differenceShowLabels;
+            dt->showLabels = it.showResultLabels;
         }
     } else if (t == 3) {
         if (auto* tt = dynamic_cast<ThresholdITool*>(it.toolImpl)) {
@@ -455,7 +455,7 @@ void SyncIToolParams(ToolInstance& it, const VisionContext& context)
             ct->retrMode = it.cntRetrMode; ct->approxMethod = it.cntApproxMethod;
             ct->minArea = it.cntMinArea; ct->maxContours = it.cntMaxContours;
             ct->filterConvex = it.cntFilterConvex; ct->approxEps = it.cntApproxEps;
-            ct->lineThick = it.cntLineThick; ct->showLabels = it.cntShowLabels;
+            ct->lineThick = it.cntLineThick; ct->showLabels = it.showResultLabels;
             ct->fillContours = it.cntFillContours;
             ct->matchROI = it.cntMatchROI; ct->matchThresh = it.cntMatchThresh;
         }
@@ -465,7 +465,7 @@ void SyncIToolParams(ToolInstance& it, const VisionContext& context)
             st->tplRetr = it.shpTplRetr; st->tplMinArea = it.shpTplMinArea;
             st->minScore = it.shpMinScore; st->shapeScore = it.shpShapeScore;
             st->lineThick = it.shpLineThick; st->method = it.shpMethod;
-            st->showLabels = it.shpShowLabels; st->maxResults = it.shpMaxResults;
+            st->showLabels = it.showResultLabels; st->maxResults = it.shpMaxResults;
             st->tplGray = it.shpTplGray; st->tplBinary = it.shpTplBinary;
             st->tplBinThresh = it.shpTplBinThresh;
             st->tplBlur = it.shpTplBlur; st->tplBlurK = it.shpTplBlurK;
@@ -477,7 +477,7 @@ void SyncIToolParams(ToolInstance& it, const VisionContext& context)
             lt->minLength = it.lineMinLength; lt->maxGap = it.lineMaxGap;
             lt->minAngle = it.lineMinAngle; lt->maxAngle = it.lineMaxAngle;
             lt->thickness = it.lineThickness; lt->maxLines = it.lineMaxLines;
-            lt->showLabels = it.lineShowLabels; lt->useROI = !context.rois.empty();
+            lt->showLabels = it.showResultLabels; lt->useROI = !context.rois.empty();
         }
     } else if (t == 8) {
         if (auto* mt = dynamic_cast<MorphologyITool*>(it.toolImpl)) {
@@ -540,7 +540,7 @@ void SyncIToolParams(ToolInstance& it, const VisionContext& context)
             qt->detectMulti = it.qrDetectMulti;
             qt->enhance = it.qrEnhance;
             qt->minSize = it.qrMinSize;
-            qt->showText = it.showResultLabels && it.qrShowText;
+            qt->showText = it.showResultLabels;
             qt->engine = it.qrEngine;
             qt->formatMask = it.qrFormatMask;
             qt->filterDuplicates = it.qrFilterDuplicates;
@@ -800,6 +800,7 @@ bool RunViaIToolInternal(ToolInstance& it, VisionContext& ctx, ToolRunTimings* t
 
     it.lastResult = result;
     it.hasLastResult = true;
+    it.parametersDirty = false;
 
     PublishResult(t, std::move(result), ms);
     auto tPublish1 = std::chrono::steady_clock::now();

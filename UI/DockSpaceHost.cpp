@@ -15,6 +15,7 @@
 #include "../Log/LogSystem.h"
 #include "../include/imgui/imgui_internal.h"
 #include <shellapi.h>
+#include <chrono>
 
 // =========================
 // UTF-8 ↔ 宽字符转换工具
@@ -96,14 +97,55 @@ namespace UI
     static bool g_AutoRunAfterRecipeLoad = false;
     static bool g_PendingAutoRunAfterRecipeLoad = false;
     static std::string g_LastExportPath;
+    static bool g_CurrentRecipeDirty = false;
+    static std::chrono::steady_clock::time_point g_CurrentRecipeSaveDeadline{};
+
+    std::string CurrentRecipePath()
+    {
+        const std::wstring path = GetRecipesDirW() +
+            ToWide(g_CurrentRecipeName) + L".recipe";
+        return ToNarrow(path);
+    }
+
+    const char* CurrentRecipeName()
+    {
+        return g_CurrentRecipeName;
+    }
+
+    bool IsCurrentRecipeDirty()
+    {
+        return g_CurrentRecipeDirty;
+    }
+
+    void MarkCurrentRecipeDirty()
+    {
+        g_CurrentRecipeDirty = true;
+        g_CurrentRecipeSaveDeadline = std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(350);
+    }
 
     bool SaveCurrentRecipe()
     {
-        std::wstring dir = GetRecipesDirW();
+        const std::wstring dir = GetRecipesDirW();
         CreateDirectoryW(dir.c_str(), nullptr);
-        std::wstring path = dir + ToWide(g_CurrentRecipeName) + L".recipe";
+        const std::string path = CurrentRecipePath();
         RecipeData data = RecipeManager::Capture(g_CurrentRecipeName);
-        return RecipeManager::Save(ToNarrow(path).c_str(), data);
+        const bool saved = RecipeManager::Save(path.c_str(), data);
+        if (saved)
+            g_CurrentRecipeDirty = false;
+        return saved;
+    }
+
+    void UpdateCurrentRecipeAutoSave()
+    {
+        if (!g_CurrentRecipeDirty)
+            return;
+        if (ImGui::IsAnyItemActive() &&
+            std::chrono::steady_clock::now() < g_CurrentRecipeSaveDeadline)
+        {
+            return;
+        }
+        SaveCurrentRecipe();
     }
 
     static std::string ExportPrefix(const char* kind)
@@ -434,6 +476,7 @@ TemplateState::ClearResults();
 
     void DrawAppMainMenuItems()
     {
+        UpdateCurrentRecipeAutoSave();
         ProcessPendingAutoRunAfterRecipeLoad();
 
         if (ImGui::BeginMenu("文件(F)"))

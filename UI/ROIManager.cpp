@@ -1,4 +1,5 @@
 #include "ROIManager.h"
+#include "DockSpaceHost.h"
 #include "../Core/DX12Context.h"
 #include "../Core/ROIState.h"
 #include "../Core/ImageViewState.h"
@@ -222,6 +223,7 @@ int& s_selectedROI = ROIState::SelectedIndexRef();
                     EnsureROIRuntimeId(roi);
                     ROIState::Add(roi, false);
                     AdvanceROIDrawSequence(roi);
+                    MarkCurrentRecipeDirty();
                 }
             }
             gDrawingROI = false;
@@ -230,6 +232,8 @@ int& s_selectedROI = ROIState::SelectedIndexRef();
         // 左键释放：停止拖动/缩放
         if (ImGui::IsMouseReleased(ImGuiMouseButton_Left))
         {
+            if (gActiveHandle != HANDLE_NONE && s_selectedROI >= 0)
+                MarkCurrentRecipeDirty();
             gDraggingROI = false;
             gActiveHandle = HANDLE_NONE;
         }
@@ -367,7 +371,8 @@ int& s_selectedROI = ROIState::SelectedIndexRef();
         // Delete键：删除选中的ROI
         if (canvasHovered && s_selectedROI >= 0 && ImGui::IsKeyPressed(ImGuiKey_Delete))
         {
-            ROIState::RemoveAt(s_selectedROI);
+            if (ROIState::RemoveAt(s_selectedROI))
+                MarkCurrentRecipeDirty();
             gActiveHandle = HANDLE_NONE;
             gDraggingROI = false;
         }

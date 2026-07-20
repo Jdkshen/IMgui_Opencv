@@ -74,10 +74,14 @@ namespace UI
             {
                 while (selectedROI->angle > 180.0f) selectedROI->angle -= 360.0f;
                 while (selectedROI->angle <= -180.0f) selectedROI->angle += 360.0f;
+                MarkCurrentRecipeDirty();
             }
             ImGui::SameLine();
             if (ImGui::Button("归零##roi_angle_reset"))
+            {
                 selectedROI->angle = 0.0f;
+                MarkCurrentRecipeDirty();
+            }
         }
 
         if (ImGui::Button("清除当前类型 ROI", ImVec2(-1, 0)))
@@ -90,6 +94,7 @@ namespace UI
                 rois.end());
             ROIState::SetSelectedIndex(-1);
             gActiveHandle = HANDLE_NONE;
+            MarkCurrentRecipeDirty();
         }
 
         // 快捷操作

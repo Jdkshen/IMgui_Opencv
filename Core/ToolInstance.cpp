@@ -198,6 +198,7 @@ nlohmann::json ToolInstance::ToRecipeJson() const
     SAVE_FIELD(colorShowHist);
     SAVE_FIELD(colorUseROI);
     SAVE_FIELD(colorHistHeight);
+    SAVE_FIELD(mcfShowPreview);
     SAVE_FIELD(mcfAnchorX);
     SAVE_FIELD(mcfAnchorY);
     SAVE_FIELD(mcfImgGray);
@@ -455,6 +456,7 @@ void ToolInstance::LoadRecipeJson(const nlohmann::json& source)
     LOAD_FIELD(colorShowHist);
     LOAD_FIELD(colorUseROI);
     LOAD_FIELD(colorHistHeight);
+    LOAD_FIELD(mcfShowPreview);
     LOAD_FIELD(mcfAnchorX);
     LOAD_FIELD(mcfAnchorY);
     LOAD_FIELD(mcfImgGray);
@@ -514,6 +516,22 @@ void ToolInstance::LoadRecipeJson(const nlohmann::json& source)
     LOAD_FIELD(measureTolerancePlus);
     LOAD_FIELD(geometryDrawType);
 #undef LOAD_FIELD
+
+    // Recipes created before the common result-label switch stored this option
+    // in individual tool fields. Preserve that behavior during migration.
+    if (!source.contains("showResultLabels"))
+    {
+        switch (type)
+        {
+        case 2: showResultLabels = blobShowLabels; break;
+        case 5: showResultLabels = cntShowLabels; break;
+        case 6: showResultLabels = shpShowLabels; break;
+        case 7: showResultLabels = lineShowLabels; break;
+        case 14: showResultLabels = qrShowText; break;
+        case 16: showResultLabels = differenceShowLabels; break;
+        default: break;
+        }
+    }
 
     geometryItems.clear();
     if (source.contains("geometryItems") && source["geometryItems"].is_array())
@@ -628,6 +646,7 @@ void ToolInstance::ClearRuntimeState()
     toolImpl = nullptr;
     lastResult = ToolResult{};
     hasLastResult = false;
+    parametersDirty = false;
     measureRuntimeROIIds.clear();
     measureCalibrationRmsError = 0.0;
     measureCalibrationMaxError = 0.0;

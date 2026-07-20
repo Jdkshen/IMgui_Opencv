@@ -167,6 +167,7 @@ struct ToolInstance
 
     // ---- 多点找色（type==10） ----
     cv::Mat mcfRefImage;            // 参考图
+    bool mcfShowPreview = true;
     int mcfAnchorX = 0, mcfAnchorY = 0;
     bool mcfImgGray = false, mcfImgBinary = false;
     int  mcfImgBinThresh = 128;
@@ -240,6 +241,7 @@ struct ToolInstance
     ITool* toolImpl = nullptr;
     ToolResult lastResult;       // 运行时缓存，不保存到配方
     bool hasLastResult = false;
+    bool parametersDirty = false; // UI 参数已变更，上次执行结果可能已过期
 
     nlohmann::json ToRecipeJson() const;
     void LoadRecipeJson(const nlohmann::json& json);

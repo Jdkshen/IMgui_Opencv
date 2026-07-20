@@ -1902,6 +1902,7 @@ void TestToolInstanceOwnsRecipeSerialization()
     source.label = "尺寸A";
     source.showResultLabels = false;
     source.showTemplatePreview = false;
+    source.mcfShowPreview = false;
     source.resultRoiMode = 2;
     source.resultRoiSourceToolId = 1234;
     source.fixture.enabled = true;
@@ -1917,6 +1918,7 @@ void TestToolInstanceOwnsRecipeSerialization()
     source.measureCalibration.scaleX = 0.02;
     source.measureCalibration.scaleY = 0.03;
     source.measureCalibrationSamples.push_back({{1.0, 2.0}, {3.0, 4.0}});
+    source.parametersDirty = true;
 
     ROI polygon;
     polygon.type = ROI_TYPE_POLYGON;
@@ -1926,12 +1928,15 @@ void TestToolInstanceOwnsRecipeSerialization()
     source.searchROIs.push_back(polygon);
 
     const nlohmann::json serialized = source.ToRecipeJson();
+    Require(!serialized.contains("parametersDirty"),
+        "runtime parameter dirty state leaked into recipe JSON");
     ToolInstance loaded;
     loaded.LoadRecipeJson(serialized);
 
     Require(loaded.type == source.type && loaded.toolId == source.toolId && !loaded.enabled,
         "ToolInstance identity recipe serialization regressed");
-    Require(loaded.label == source.label && !loaded.showResultLabels && !loaded.showTemplatePreview,
+    Require(loaded.label == source.label && !loaded.showResultLabels &&
+        !loaded.showTemplatePreview && !loaded.mcfShowPreview,
         "ToolInstance display recipe serialization regressed");
     Require(loaded.fixture.sourceToolId == 5678 && loaded.judgement.stopOnFailure,
         "ToolInstance dependency/judgement serialization regressed");
@@ -1942,10 +1947,16 @@ void TestToolInstanceOwnsRecipeSerialization()
         loaded.measureCalibrationSamples.size() == 1,
         "ToolInstance measurement serialization regressed");
 
+    ToolInstance legacyBlob;
+    legacyBlob.LoadRecipeJson({{"type", 2}, {"blobShowLabels", false}});
+    Require(!legacyBlob.showResultLabels,
+        "legacy per-tool label setting did not migrate to the common switch");
+
     loaded.hasLastResult = true;
     loaded.measureRuntimeROIIds.push_back(42);
     loaded.ClearRuntimeState();
-    Require(!loaded.hasLastResult && loaded.measureRuntimeROIIds.empty(),
+    Require(!loaded.hasLastResult && !loaded.parametersDirty &&
+        loaded.measureRuntimeROIIds.empty(),
         "ToolInstance runtime state cleanup regressed");
 }
 
@@ -2998,12 +3009,19 @@ void TestToolExecutorInjectsImageSnapshot()
     it.type = 2;
     it.blobMinArea = 20;
     it.blobMaxArea = 200;
+    it.blobShowLabels = false;
+    it.showResultLabels = true;
+    it.parametersDirty = true;
 
     ToolExecutor::Execute(it.type, it);
     Require(gContext.image.data == ImageState::Current().data,
         "tool executor did not share read-only blob input");
     Require(!gContext.unifiedResults.empty(), "tool executor did not publish result");
     Require(gContext.unifiedResults[0].regions.size() == 1, "tool executor blob result regressed");
+    Require(!gContext.unifiedResults[0].regions[0].label.empty(),
+        "common result label switch did not override legacy Blob label state");
+    Require(!it.parametersDirty,
+        "tool execution did not clear the pending parameter state");
 
     ToolInstance threshold;
     threshold.type = 3;

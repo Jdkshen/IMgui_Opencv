@@ -710,6 +710,14 @@ namespace UI
         }
         ImGui::SetItemTooltip("筛选工具分组");
 
+        ImGui::TextDisabled("当前配方: %s", CurrentRecipeName());
+        ImGui::SetItemTooltip("%s", CurrentRecipePath().c_str());
+        ImGui::SameLine();
+        ImGui::TextColored(IsCurrentRecipeDirty()
+            ? ImVec4(0.95f, 0.72f, 0.22f, 1.0f)
+            : ImVec4(0.35f, 0.78f, 0.48f, 1.0f),
+            "%s", IsCurrentRecipeDirty() ? "保存中" : "已保存");
+
         if (ImGui::Button("+ 添加工具", ImVec2(-1, 0)))
             ImGui::OpenPopup("AddToolPopup");
         if (ImGui::BeginPopup("AddToolPopup"))
@@ -730,7 +738,6 @@ namespace UI
                         {
                             ToolInstance tool{};
                             tool.type = meta.type;
-                            tool.label = meta.name ? meta.name : "";
                             ToolChainState::AddTool(std::move(tool));
                             MoveOriginalToolToFront();
                             SaveCurrentRecipe();
@@ -776,6 +783,21 @@ namespace UI
                 if (m.type == type)
                     return m.name;
             return "?";
+        };
+
+        auto CaptureToolPersistentState = [](const ToolInstance& tool)
+        {
+            nlohmann::json state = tool.ToRecipeJson();
+            if (tool.type == 10 && tool.toolImpl)
+            {
+                if (const auto* finder = dynamic_cast<const MultiColorFinder*>(tool.toolImpl))
+                {
+                    const nlohmann::json finderState = finder->Save();
+                    state["mcfPoints"] = finderState.value(
+                        "points", nlohmann::json::array());
+                }
+            }
+            return state;
         };
 
         // ---- UI 辅助：统一视觉风格 ----
@@ -929,65 +951,69 @@ namespace UI
             ImGui::Separator();
             if (cardTool)
             {
-                static std::unordered_map<int, bool> s_labelEnabled;
-                bool labelEnabled = !cardTool->label.empty() || s_labelEnabled[currentCardInst];
-                if (ImGui::Checkbox("标签", &labelEnabled))
+                if (cardTool->parametersDirty)
                 {
-                    s_labelEnabled[currentCardInst] = labelEnabled;
-                    if (labelEnabled && cardTool->label.empty())
-                    {
-                        cardTool->label = title ? title : "";
-                        SaveCurrentRecipe();
-                    }
-                    if (!labelEnabled)
-                    {
-                        cardTool->label.clear();
-                        SaveCurrentRecipe();
-                    }
+                    ImGui::TextColored(ImVec4(0.95f, 0.72f, 0.22f, 1.0f),
+                        "参数已修改，重新执行后更新结果");
                 }
-                ImGui::SameLine();
+                SectionHeader("实例设置");
+                bool labelEnabled = !cardTool->label.empty();
+                if (ImGui::Checkbox("使用标签", &labelEnabled))
+                {
+                    if (labelEnabled && cardTool->label.empty())
+                        cardTool->label = title ? title : "";
+                    if (!labelEnabled)
+                        cardTool->label.clear();
+                    MarkCurrentRecipeDirty();
+                }
                 ImGui::BeginDisabled(!labelEnabled);
                 if (labelEnabled && cardTool->label.empty())
                     cardTool->label = title ? title : "";
                 char labelBuf[128];
                 snprintf(labelBuf, sizeof(labelBuf), "%s", cardTool->label.c_str());
+                ImGui::TextDisabled("标签名称");
                 ImGui::SetNextItemWidth(-1.0f);
                 if (ImGui::InputText("##tool_label", labelBuf, IM_ARRAYSIZE(labelBuf)))
+                {
                     cardTool->label = labelBuf;
-                if (ImGui::IsItemDeactivatedAfterEdit())
-                    SaveCurrentRecipe();
+                    MarkCurrentRecipeDirty();
+                }
                 ImGui::EndDisabled();
                 bool showResultLabels = cardTool->showResultLabels;
-                if (ImGui::Checkbox("结果标签", &showResultLabels))
-                {
-                    cardTool->showResultLabels = showResultLabels;
-                    SaveCurrentRecipe();
-                }
                 bool enabled = cardTool->enabled;
                 if (ImGui::Checkbox("启用工具", &enabled))
                 {
                     cardTool->enabled = enabled;
-                    SaveCurrentRecipe();
+                    MarkCurrentRecipeDirty();
+                }
+                if (ImGui::GetContentRegionAvail().x > 150.0f)
+                    ImGui::SameLine();
+                if (ImGui::Checkbox("显示结果标签", &showResultLabels))
+                {
+                    cardTool->showResultLabels = showResultLabels;
+                    MarkCurrentRecipeDirty();
                 }
                 char groupBuf[96];
                 snprintf(groupBuf, sizeof(groupBuf), "%s", cardTool->groupName.c_str());
+                ImGui::TextDisabled("分组");
                 ImGui::SetNextItemWidth(-1.0f);
-                if (ImGui::InputText("分组##tool_group", groupBuf, IM_ARRAYSIZE(groupBuf)))
+                if (ImGui::InputText("##tool_group", groupBuf, IM_ARRAYSIZE(groupBuf)))
+                {
                     cardTool->groupName = groupBuf;
-                if (ImGui::IsItemDeactivatedAfterEdit())
-                    SaveCurrentRecipe();
+                    MarkCurrentRecipeDirty();
+                }
                 bool collapsed = cardTool->collapsed;
                 if (ImGui::Checkbox("折叠卡片", &collapsed))
                 {
                     cardTool->collapsed = collapsed;
                     if (collapsed && ToolChainState::ActiveIndex() == currentCardInst)
                         ToolChainState::SetActiveIndex(-1);
-                    SaveCurrentRecipe();
+                    MarkCurrentRecipeDirty();
                 }
                 if (cardTool->type == 4 || cardTool->type == 11 || cardTool->type == 13)
                 {
                     if (ImGui::Checkbox("模型缺失时跳过", &cardTool->skipIfModelMissing))
-                        SaveCurrentRecipe();
+                        MarkCurrentRecipeDirty();
                 }
                 if (SecondaryButton("复制工具"))
                     duplicateToolIndex = currentCardInst;
@@ -1534,7 +1560,6 @@ TemplateState::ClearResults();
             ImGui::SliderFloat("最大圆度", &it.blobMaxCircularity, it.blobMinCircularity, 1.0f, "%.3f");
             ImGui::SliderFloat("最小长宽比", &it.blobMinAspectRatio, 0.0f, 20.0f, "%.2f");
             ImGui::SliderFloat("最大长宽比", &it.blobMaxAspectRatio, it.blobMinAspectRatio, 100.0f, "%.2f");
-            ImGui::Checkbox("显示Blob标签", &it.blobShowLabels);
             EndCard();
         };
 
@@ -1858,7 +1883,6 @@ TemplateState::ClearResults();
             ImGui::SliderInt("形态学核", &it.differenceMorphKernelSize, 1, 15);
             ImGui::SliderInt("形态学迭代", &it.differenceMorphIterations, 1, 10);
             ImGui::Checkbox("反相差分", &it.differenceInvert);
-            ImGui::Checkbox("显示差异标签", &it.differenceShowLabels);
             EndCard();
         };
 
@@ -2385,8 +2409,6 @@ TemplateState::ClearResults();
             ImGui::Checkbox("仅凸包##c", &it.cntFilterConvex);
             ImGui::SliderFloat("精度##c", &it.cntApproxEps, 0.005f, 0.05f, "%.3f");
             ImGui::SliderInt("线宽##c", &it.cntLineThick, 1, 5);
-            ImGui::Checkbox("标签##c", &it.cntShowLabels);
-            ImGui::SameLine();
             ImGui::Checkbox("填充##c", &it.cntFillContours);
             SectionHeader("高级");
             ImGui::Checkbox("ROI模板匹配##c", &it.cntMatchROI);
@@ -2406,6 +2428,7 @@ TemplateState::ClearResults();
                 it.shpLineThick = 2; it.shpMethod = 0; it.shpShowLabels = true; it.shpMaxResults = 1;
                 it.shpTplGray = false; it.shpTplBinary = false; it.shpTplBinThresh = 128;
                 it.shpTplBlur = false; it.shpTplBlurK = 5; it.shpTplInvert = false;
+                it.showTemplatePreview = true;
             }
             if (ShapeMatcher::g_MatchTimeMs > 0)
                 ImGui::TextDisabled("上次: %d个 %.3fms", ShapeMatcher::g_MatchCount, ShapeMatcher::g_MatchTimeMs);
@@ -2472,9 +2495,8 @@ TemplateState::ClearResults();
             // ---- 第二块：预览渲染（独立重新检查） ----
             if (!it.shpTplImage.empty())
             {
-                static bool shpShowPreview = true;
-                ImGui::Checkbox("显示预览##shp", &shpShowPreview);
-                if (shpShowPreview)
+                ImGui::Checkbox("显示预览##shp", &it.showTemplatePreview);
+                if (it.showTemplatePreview)
                 {
                 // 缩放到适合显示，逐像素渲染（应用预处理）
                 cv::Mat tpl = it.shpTplImage.clone();
@@ -2517,7 +2539,7 @@ TemplateState::ClearResults();
                     }
                 ImGui::Dummy(ImVec2(dw * step, dh * step));
                 ImGui::TextDisabled("模板: %dx%d", it.shpTplImage.cols, it.shpTplImage.rows);
-                } // shpShowPreview
+                } // showTemplatePreview
             }
             else if (shapeCaptureROI < 0)
                 ImGui::TextDisabled("未设置模板");
@@ -2544,8 +2566,6 @@ TemplateState::ClearResults();
             ImGui::Combo("方法##shp", &it.shpMethod, methodNames, 3);
             ImGui::SliderInt("线宽##shp", &it.shpLineThick, 1, 5);
             ImGui::SliderInt("最多##shp", &it.shpMaxResults, 1, 200);
-            ImGui::Checkbox("标签##shp", &it.shpShowLabels);
-
             EndCard();
         };
 
@@ -2576,7 +2596,6 @@ TemplateState::ClearResults();
             ImGui::SliderFloat("最大角度##l", &it.lineMaxAngle, 0, 180);
             ImGui::SliderInt("线宽##l", &it.lineThickness, 1, 5);
             ImGui::SliderInt("最多条数##l", &it.lineMaxLines, 1, 100);
-            ImGui::Checkbox("标签##l", &it.lineShowLabels);
             EndCard();
         };
 
@@ -2617,20 +2636,21 @@ TemplateState::ClearResults();
             BeginCard("多点找色");
 
             // 兼容旧配方：只补齐本工具 ROI，不再写入全局 ROI。
-            static std::unordered_map<int, bool> s_mcfRoiRestored;
-            if (it.searchROIs.empty() && it.mcfRoiW > 0 && !s_mcfRoiRestored[inst])
+            static std::unordered_map<std::uint64_t, bool> s_mcfRoiRestored;
+            if (it.searchROIs.empty() && it.mcfRoiW > 0 && !s_mcfRoiRestored[it.toolId])
             {
                 ROI r; r.type = ROI_TYPE_RECT;
                 r.start = ImVec2((float)it.mcfRoiX, (float)it.mcfRoiY);
                 r.end   = ImVec2((float)(it.mcfRoiX + it.mcfRoiW), (float)(it.mcfRoiY + it.mcfRoiH));
                 it.searchROIs.push_back(r);
                 it.lineSaveROIs = it.searchROIs;
-                s_mcfRoiRestored[inst] = true;
+                s_mcfRoiRestored[it.toolId] = true;
             }
 
             if (SecondaryButton("重置参数"))
             {
                 ToolAssetService::ClearAsset(it, ToolAssetKind::MultiColorReference);
+                it.mcfShowPreview = true;
                 it.mcfImgGray = false; it.mcfImgBinary = false; it.mcfImgBinThresh = 128;
                 it.mcfUseROI = false; it.mcfMaxResults = 1;
                 it.mcfMinDist = 5.0f; it.mcfCrossSize = 10; it.mcfCrossThick = 2;
@@ -2715,11 +2735,10 @@ TemplateState::ClearResults();
             {
                 ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1), "参考图 %dx%d", it.mcfRefImage.cols, it.mcfRefImage.rows);
                 ImGui::SameLine();
-                static bool s_mcfPreviewOpen = true;
-                if (SecondaryButton(s_mcfPreviewOpen ? "隐藏预览" : "显示预览"))
-                    s_mcfPreviewOpen = !s_mcfPreviewOpen;
+                if (SecondaryButton(it.mcfShowPreview ? "隐藏预览" : "显示预览"))
+                    it.mcfShowPreview = !it.mcfShowPreview;
 
-                if (s_mcfPreviewOpen)
+                if (it.mcfShowPreview)
                 {
                 cv::Mat ref = it.mcfRefImage.clone();
                 // 应用预处理到参考图预览
@@ -2888,7 +2907,7 @@ TemplateState::ClearResults();
                             mf->points.erase(mf->points.begin() + removeIdx);
                     }
                 }
-                } // s_mcfPreviewOpen
+                } // mcfShowPreview
             }
 
             // ---- 图像预处理 ----
@@ -3092,6 +3111,9 @@ TemplateState::ClearResults();
                     continue;
                 int type = listTool.type;
                 bool expanded = (ToolChainState::ActiveIndex() == inst && !listTool.collapsed);
+                const nlohmann::json persistentStateBefore = expanded
+                    ? CaptureToolPersistentState(listTool)
+                    : nlohmann::json();
                 float toolHeaderY = ImGui::GetCursorPosY();
                 if (s_scrollOpenedToolToTop == inst && expanded)
                 {
@@ -3312,6 +3334,14 @@ TemplateState::ClearResults();
                         currentCardType = -1;
                         currentCardInst = -1;
                     }
+
+                    const nlohmann::json persistentStateAfter =
+                        CaptureToolPersistentState(listTool);
+                    if (persistentStateAfter != persistentStateBefore)
+                    {
+                        listTool.parametersDirty = true;
+                        MarkCurrentRecipeDirty();
+                    }
                 }
             }
 
@@ -3524,6 +3554,7 @@ TemplateState::ClearResults();
             ImGui::PopStyleColor(toolsColorStackNow - toolsColorStackBase);
 
         ImGui::End();
+        UpdateCurrentRecipeAutoSave();
     }
 
 } // namespace UI
