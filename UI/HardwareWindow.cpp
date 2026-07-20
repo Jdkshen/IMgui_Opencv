@@ -3,6 +3,7 @@
 #include "DockSpaceHost.h"
 #include "../Core/FrameArchiveService.h"
 #include "../Core/HardwareRuntimeService.h"
+#include "../Core/HardwareSettingsService.h"
 #include "../Core/OpenFileDialog.h"
 #include "../Core/ThemeManager.h"
 #include "../Log/LogSystem.h"
@@ -157,6 +158,8 @@ void DrawHardwarePanel()
     static bool cameraAutoExposure = true;
     static float cameraExposure = -6.0f;
     static float cameraGain = 0.0f;
+    static bool hardwareUiInitialized = false;
+    static std::string hardwareSettingsError;
     static bool archiveUiInitialized = false;
     static FrameArchiveConfig archiveConfig;
     static char archiveDirectory[512] = {};
@@ -176,6 +179,38 @@ void DrawHardwarePanel()
     static bool outputInvert = false;
     static bool outputAutoPublish = false;
 
+    if (!hardwareUiInitialized)
+    {
+        const HardwarePanelSettings settings = HardwareSettingsService::Load();
+        std::snprintf(cameraAddress, sizeof(cameraAddress), "%s", settings.cameraAddress.c_str());
+        std::snprintf(cameraSourceName, sizeof(cameraSourceName), "%s", settings.cameraSourceName.c_str());
+        cameraBackend = settings.cameraBackend;
+        cameraTimeoutMs = settings.cameraTimeoutMs;
+        cameraIntervalMs = settings.cameraIntervalMs;
+        cameraAutoCapture = settings.cameraAutoCapture;
+        cameraRunAfterCapture = settings.cameraRunAfterCapture;
+        cameraTriggerBeforeRun = settings.cameraTriggerBeforeRun;
+        cameraAutoExposure = settings.cameraAutoExposure;
+        cameraExposure = settings.cameraExposure;
+        cameraGain = settings.cameraGain;
+
+        outputType = settings.outputType;
+        std::snprintf(outputKey, sizeof(outputKey), "%s", settings.outputKey.c_str());
+        std::snprintf(outputAddress, sizeof(outputAddress), "%s", settings.outputAddress.c_str());
+        outputPort = settings.outputPort;
+        std::snprintf(outputResource, sizeof(outputResource), "%s", settings.outputResource.c_str());
+        std::snprintf(outputTarget, sizeof(outputTarget), "%s", settings.outputTarget.c_str());
+        outputAddressValue = settings.outputAddressValue;
+        outputTimeoutMs = settings.outputTimeoutMs;
+        plcHoldingRegister = settings.plcHoldingRegister;
+        std::snprintf(tcpPassText, sizeof(tcpPassText), "%s", settings.tcpPassText.c_str());
+        std::snprintf(tcpFailText, sizeof(tcpFailText), "%s", settings.tcpFailText.c_str());
+        tcpAppendCrLf = settings.tcpAppendCrLf;
+        outputInvert = settings.outputInvert;
+        outputAutoPublish = settings.outputAutoPublish;
+        hardwareUiInitialized = true;
+    }
+
     if (!archiveUiInitialized)
     {
         archiveConfig = FrameArchiveService::Config();
@@ -185,6 +220,7 @@ void DrawHardwarePanel()
     }
 
     HardwareRuntimeSnapshot snapshot = HardwareRuntimeService::Snapshot();
+    bool hardwareSettingsChanged = false;
 
     DrawSectionTitle("工业相机");
     ImGui::TextColored(ConnectionStateColor(snapshot.cameraState), "%s%s%s",
@@ -199,49 +235,64 @@ void DrawHardwarePanel()
     if (BeginPropertyTable("##camera_properties"))
     {
         PropertyRow("相机地址");
-        ImGui::InputText("##camera_address", cameraAddress, sizeof(cameraAddress));
+        hardwareSettingsChanged |= ImGui::InputText("##camera_address", cameraAddress, sizeof(cameraAddress));
         ImGui::SetItemTooltip("相机索引（例如 0）或 RTSP/HTTP 视频流 URL");
 
         PropertyRow("采集后端");
-        ImGui::Combo("##camera_backend", &cameraBackend, cameraBackends,
+        hardwareSettingsChanged |= ImGui::Combo("##camera_backend", &cameraBackend, cameraBackends,
             static_cast<int>(std::size(cameraBackends)));
 
         PropertyRow("来源名称");
-        ImGui::InputText("##camera_source_name", cameraSourceName, sizeof(cameraSourceName));
+        hardwareSettingsChanged |= ImGui::InputText("##camera_source_name", cameraSourceName, sizeof(cameraSourceName));
 
         PropertyRow("抓帧超时");
-        ImGui::DragInt("##camera_timeout", &cameraTimeoutMs, 1.0f, 1, 10000, "%d ms");
+        hardwareSettingsChanged |= ImGui::DragInt("##camera_timeout", &cameraTimeoutMs, 1.0f, 1, 10000, "%d ms");
         ImGui::SetItemTooltip("单位：毫秒");
 
         PropertyRow("抓帧间隔");
-        ImGui::DragInt("##camera_interval", &cameraIntervalMs, 1.0f, 1, 10000, "%d ms");
+        hardwareSettingsChanged |= ImGui::DragInt("##camera_interval", &cameraIntervalMs, 1.0f, 1, 10000, "%d ms");
         ImGui::SetItemTooltip("单位：毫秒；循环触发时控制相机采集节奏");
 
         PropertyRow("曝光模式");
         if (ImGui::Checkbox("自动曝光##camera_auto_exposure", &cameraAutoExposure))
+        {
+            hardwareSettingsChanged = true;
             HardwareRuntimeService::SetCameraControl(
                 CameraControl::AutoExposure, cameraAutoExposure ? 1.0 : 0.0);
+        }
 
         PropertyRow("曝光值");
         ImGui::BeginDisabled(cameraAutoExposure);
         if (ImGui::DragFloat("##camera_exposure", &cameraExposure, 0.1f, -13.0f, 5.0f, "%.2f"))
+        {
+            hardwareSettingsChanged = true;
             HardwareRuntimeService::SetCameraControl(CameraControl::Exposure, cameraExposure);
+        }
         ImGui::EndDisabled();
 
         PropertyRow("增益");
         if (ImGui::DragFloat("##camera_gain", &cameraGain, 0.5f, 0.0f, 100.0f, "%.1f"))
+        {
+            hardwareSettingsChanged = true;
             HardwareRuntimeService::SetCameraControl(CameraControl::Gain, cameraGain);
+        }
 
         PropertyRow("采集模式");
         if (ImGui::Checkbox("自动抓帧##camera_auto_capture", &cameraAutoCapture))
+        {
+            hardwareSettingsChanged = true;
             HardwareRuntimeService::SetCameraAutoCapture(cameraAutoCapture);
+        }
 
         PropertyRow("执行联动");
-        ImGui::Checkbox("抓帧后执行##camera_run_after", &cameraRunAfterCapture);
+        hardwareSettingsChanged |= ImGui::Checkbox("抓帧后执行##camera_run_after", &cameraRunAfterCapture);
         if (!IsNarrowPanel())
             ImGui::SameLine();
         if (ImGui::Checkbox("执行前触发##camera_trigger_before", &cameraTriggerBeforeRun))
+        {
+            hardwareSettingsChanged = true;
             HardwareRuntimeService::SetCameraTriggerOnInspection(cameraTriggerBeforeRun);
+        }
         ImGui::EndTable();
     }
 
@@ -369,7 +420,7 @@ void DrawHardwarePanel()
     if (BeginPropertyTable("##output_properties"))
     {
         PropertyRow("输出类型");
-        ImGui::Combo("##output_type", &outputType, outputTypes,
+        hardwareSettingsChanged |= ImGui::Combo("##output_type", &outputType, outputTypes,
             static_cast<int>(std::size(outputTypes)));
         if (outputType != previousOutputType)
         {
@@ -382,67 +433,68 @@ void DrawHardwarePanel()
         }
 
         PropertyRow("适配器标识");
-        ImGui::InputText("##output_key", outputKey, sizeof(outputKey));
+        hardwareSettingsChanged |= ImGui::InputText("##output_key", outputKey, sizeof(outputKey));
 
         PropertyRow("主机地址");
-        ImGui::InputText("##output_address", outputAddress, sizeof(outputAddress));
+        hardwareSettingsChanged |= ImGui::InputText("##output_address", outputAddress, sizeof(outputAddress));
         ImGui::SetItemTooltip(outputType == 2
             ? "OPC UA 主机或完整 opc.tcp:// URL"
             : outputType == 3 ? "TCP Server 主机或 IP" : "PLC/Modbus TCP 主机或 IP");
 
         PropertyRow("端口");
-        ImGui::DragInt("##output_port", &outputPort, 1.0f, 0, 65535);
+        hardwareSettingsChanged |= ImGui::DragInt("##output_port", &outputPort, 1.0f, 0, 65535);
 
         if (outputType != 3)
         {
             PropertyRow(outputType == 2 ? "端点路径" : "Unit ID");
-            ImGui::InputText("##output_resource", outputResource, sizeof(outputResource));
+            hardwareSettingsChanged |= ImGui::InputText("##output_resource", outputResource, sizeof(outputResource));
         }
 
         PropertyRow("连接超时");
-        ImGui::DragInt("##output_timeout", &outputTimeoutMs, 10.0f, 1, 60000, "%d ms");
+        hardwareSettingsChanged |= ImGui::DragInt("##output_timeout", &outputTimeoutMs, 10.0f, 1, 60000, "%d ms");
         ImGui::SetItemTooltip("单位：毫秒");
 
         if (outputType == 1 || outputType == 2)
         {
             PropertyRow(outputType == 1 ? "PLC 标签" : "NodeId");
-            ImGui::InputText("##output_target", outputTarget, sizeof(outputTarget));
+            hardwareSettingsChanged |= ImGui::InputText("##output_target", outputTarget, sizeof(outputTarget));
             ImGui::SetItemTooltip(outputType == 1 ? "PLC 标签名" : "例如 ns=2;s=Inspection.OK");
         }
 
         if (outputType == 0 || outputType == 1)
         {
             PropertyRow(outputType == 0 ? "线圈地址" : "映射地址");
-            ImGui::DragInt("##output_mapping_address", &outputAddressValue, 1.0f, 0, 65535);
+            hardwareSettingsChanged |= ImGui::DragInt("##output_mapping_address", &outputAddressValue, 1.0f, 0, 65535);
             ImGui::SetItemTooltip("协议地址从 0 开始；PLC 显示 00001 时通常填写 0");
         }
 
         if (outputType == 3)
         {
             PropertyRow("Pass 文本");
-            ImGui::InputText("##tcp_pass_text", tcpPassText, sizeof(tcpPassText));
+            hardwareSettingsChanged |= ImGui::InputText("##tcp_pass_text", tcpPassText, sizeof(tcpPassText));
             PropertyRow("Fail 文本");
-            ImGui::InputText("##tcp_fail_text", tcpFailText, sizeof(tcpFailText));
+            hardwareSettingsChanged |= ImGui::InputText("##tcp_fail_text", tcpFailText, sizeof(tcpFailText));
         }
 
         PropertyRow("输出选项");
         if (outputType == 1)
         {
-            ImGui::Checkbox("保持寄存器##plc_holding", &plcHoldingRegister);
+            hardwareSettingsChanged |= ImGui::Checkbox("保持寄存器##plc_holding", &plcHoldingRegister);
             ImGui::SameLine();
         }
         if (outputType == 3)
         {
-            ImGui::Checkbox("追加 CRLF##tcp_crlf", &tcpAppendCrLf);
+            hardwareSettingsChanged |= ImGui::Checkbox("追加 CRLF##tcp_crlf", &tcpAppendCrLf);
             ImGui::SameLine();
         }
-        ImGui::Checkbox("反相##output_invert", &outputInvert);
+        hardwareSettingsChanged |= ImGui::Checkbox("反相##output_invert", &outputInvert);
 
         PropertyRow("自动发布");
-        if (ImGui::Checkbox("批次完成后发布##output_auto_publish", &outputAutoPublish) &&
-            snapshot.outputState == DeviceConnectionState::Connected)
+        if (ImGui::Checkbox("批次完成后发布##output_auto_publish", &outputAutoPublish))
         {
-            HardwareRuntimeService::SetOutputAutoPublish(outputAutoPublish);
+            hardwareSettingsChanged = true;
+            if (snapshot.outputState == DeviceConnectionState::Connected)
+                HardwareRuntimeService::SetOutputAutoPublish(outputAutoPublish);
         }
         ImGui::EndTable();
     }
@@ -484,6 +536,44 @@ void DrawHardwarePanel()
         LogOperation("测试 Fail 输出", HardwareRuntimeService::PublishConfiguredStatus(ToolResultStatus::Fail));
     ImGui::EndDisabled();
     DrawOperationMessage(snapshot.lastOutputOperation);
+
+    if (hardwareSettingsChanged)
+    {
+        HardwarePanelSettings settings;
+        settings.cameraAddress = cameraAddress;
+        settings.cameraSourceName = cameraSourceName;
+        settings.cameraBackend = cameraBackend;
+        settings.cameraTimeoutMs = cameraTimeoutMs;
+        settings.cameraIntervalMs = cameraIntervalMs;
+        settings.cameraAutoCapture = cameraAutoCapture;
+        settings.cameraRunAfterCapture = cameraRunAfterCapture;
+        settings.cameraTriggerBeforeRun = cameraTriggerBeforeRun;
+        settings.cameraAutoExposure = cameraAutoExposure;
+        settings.cameraExposure = cameraExposure;
+        settings.cameraGain = cameraGain;
+        settings.outputType = outputType;
+        settings.outputKey = outputKey;
+        settings.outputAddress = outputAddress;
+        settings.outputPort = outputPort;
+        settings.outputResource = outputResource;
+        settings.outputTarget = outputTarget;
+        settings.outputAddressValue = outputAddressValue;
+        settings.outputTimeoutMs = outputTimeoutMs;
+        settings.plcHoldingRegister = plcHoldingRegister;
+        settings.tcpPassText = tcpPassText;
+        settings.tcpFailText = tcpFailText;
+        settings.tcpAppendCrLf = tcpAppendCrLf;
+        settings.outputInvert = outputInvert;
+        settings.outputAutoPublish = outputAutoPublish;
+        HardwareSettingsService::Save(settings, {}, &hardwareSettingsError);
+    }
+
+    ImGui::Spacing();
+    ImGui::TextDisabled("设备参数：修改后自动保存");
+    ImGui::TextWrapped("%s", HardwareSettingsService::SettingsPath().c_str());
+    if (!hardwareSettingsError.empty())
+        ImGui::TextColored(ImVec4(0.95f, 0.38f, 0.32f, 1.0f),
+            "保存失败：%s", hardwareSettingsError.c_str());
 
 }
 }

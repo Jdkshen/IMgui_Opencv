@@ -131,6 +131,7 @@
     <ClCompile Include="..\Core\OpenCvCameraAdapter.cpp" />
     <ClCompile Include="..\Core\Open62541OpcUaAdapter.cpp" />
     <ClCompile Include="..\Core\HardwareRuntimeService.cpp" />
+    <ClCompile Include="..\Core\HardwareSettingsService.cpp" />
     <ClCompile Include="..\Core\FrameArchiveService.cpp" />
     <ClCompile Include="..\Core\ImageViewState.cpp" />
     <ClCompile Include="..\Core\OpenFileDialog.cpp" />
@@ -195,6 +196,7 @@
     <ClInclude Include="..\Core\OpenCvCameraAdapter.h" />
     <ClInclude Include="..\Core\Open62541OpcUaAdapter.h" />
     <ClInclude Include="..\Core\HardwareRuntimeService.h" />
+    <ClInclude Include="..\Core\HardwareSettingsService.h" />
     <ClInclude Include="..\Core\FrameArchiveService.h" />
     <ClInclude Include="..\Core\ImageViewState.h" />
     <ClInclude Include="..\Core\OpenFileDialog.h" />

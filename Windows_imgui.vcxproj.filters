@@ -92,6 +92,7 @@
     <ClInclude Include="Core\OpenCvCameraAdapter.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\Open62541OpcUaAdapter.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\HardwareRuntimeService.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\HardwareSettingsService.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\FrameArchiveService.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\FrameRenderer.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ImageLoadController.h"><Filter>Core</Filter></ClInclude>
@@ -198,6 +199,7 @@
     <ClCompile Include="Core\OpenCvCameraAdapter.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\Open62541OpcUaAdapter.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\HardwareRuntimeService.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\HardwareSettingsService.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\FrameArchiveService.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\FrameRenderer.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ImageLoadController.cpp"><Filter>Core</Filter></ClCompile>

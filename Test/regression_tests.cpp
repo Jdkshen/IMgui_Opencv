@@ -28,6 +28,7 @@
 #include "../Core/ImageViewState.h"
 #include "../Core/HardwareAdapters.h"
 #include "../Core/HardwareRuntimeService.h"
+#include "../Core/HardwareSettingsService.h"
 #include "../Core/ModbusTcpAdapter.h"
 #include "../Core/TcpTextAdapter.h"
 #include "../Core/ModbusPlcAdapter.h"
@@ -2420,6 +2421,76 @@ void TestFrameArchiveService()
     fs::remove_all(outputDirectory);
 }
 
+void TestHardwareSettingsPersistence()
+{
+    const fs::path settingsPath = fs::temp_directory_path() /
+        ("imgui_opencv_hardware_settings_" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()) + ".json");
+
+    HardwarePanelSettings source;
+    source.cameraAddress = "rtsp://192.168.10.20/live";
+    source.cameraSourceName = "line-a-camera";
+    source.cameraBackend = 3;
+    source.cameraTimeoutMs = 880;
+    source.cameraIntervalMs = 75;
+    source.cameraAutoCapture = false;
+    source.cameraRunAfterCapture = false;
+    source.cameraTriggerBeforeRun = false;
+    source.cameraAutoExposure = false;
+    source.cameraExposure = -4.25f;
+    source.cameraGain = 12.5f;
+    source.outputType = 3;
+    source.outputKey = "quality-gate";
+    source.outputAddress = "192.168.10.30";
+    source.outputPort = 5000;
+    source.outputResource = "cell-1";
+    source.outputTarget = "ns=3;s=Result.OK";
+    source.outputAddressValue = 125;
+    source.outputTimeoutMs = 2300;
+    source.plcHoldingRegister = true;
+    source.tcpPassText = "OK-A";
+    source.tcpFailText = "NG-A";
+    source.tcpAppendCrLf = false;
+    source.outputInvert = true;
+    source.outputAutoPublish = true;
+
+    std::string error;
+    Require(HardwareSettingsService::Save(source, settingsPath.string(), &error) &&
+        error.empty() && fs::exists(settingsPath),
+        "hardware settings were not saved");
+
+    const HardwarePanelSettings loaded = HardwareSettingsService::Load(settingsPath.string());
+    Require(loaded.cameraAddress == source.cameraAddress &&
+        loaded.cameraSourceName == source.cameraSourceName &&
+        loaded.cameraBackend == source.cameraBackend &&
+        loaded.cameraTimeoutMs == source.cameraTimeoutMs &&
+        loaded.cameraIntervalMs == source.cameraIntervalMs &&
+        loaded.cameraAutoCapture == source.cameraAutoCapture &&
+        loaded.cameraRunAfterCapture == source.cameraRunAfterCapture &&
+        loaded.cameraTriggerBeforeRun == source.cameraTriggerBeforeRun &&
+        loaded.cameraAutoExposure == source.cameraAutoExposure &&
+        std::abs(loaded.cameraExposure - source.cameraExposure) < 0.001f &&
+        std::abs(loaded.cameraGain - source.cameraGain) < 0.001f &&
+        loaded.outputType == source.outputType &&
+        loaded.outputKey == source.outputKey &&
+        loaded.outputAddress == source.outputAddress &&
+        loaded.outputPort == source.outputPort &&
+        loaded.outputResource == source.outputResource &&
+        loaded.outputTarget == source.outputTarget &&
+        loaded.outputAddressValue == source.outputAddressValue &&
+        loaded.outputTimeoutMs == source.outputTimeoutMs &&
+        loaded.plcHoldingRegister == source.plcHoldingRegister &&
+        loaded.tcpPassText == source.tcpPassText &&
+        loaded.tcpFailText == source.tcpFailText &&
+        loaded.tcpAppendCrLf == source.tcpAppendCrLf &&
+        loaded.outputInvert == source.outputInvert &&
+        loaded.outputAutoPublish == source.outputAutoPublish &&
+        !HardwareSettingsService::SettingsPath().empty(),
+        "hardware settings round trip lost camera or output fields");
+
+    fs::remove(settingsPath);
+}
+
 void TestConcreteTcpTextAdapter()
 {
     auto transport = std::make_unique<ScriptedTcpTextTransport>();
@@ -3745,6 +3816,7 @@ int main(int argc, char** argv)
         TestHardwareAdapterServiceLifecycle();
         TestHardwareRuntimeAutomation();
         TestFrameArchiveService();
+        TestHardwareSettingsPersistence();
         TestConcreteTcpTextAdapter();
         TestConcreteModbusTcpAdapterProtocol();
         TestConcreteOpenCvCameraAdapter();
