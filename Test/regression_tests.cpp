@@ -19,6 +19,7 @@
 #include "../Core/CalibrationModel.h"
 #include "../Core/CalibrationFitter.h"
 #include "../Core/FrameSourceState.h"
+#include "../Core/FrameArchiveService.h"
 #include "../Core/FrameNavigation.h"
 #include "../Core/FixtureTransform.h"
 #include "../Core/ImageState.h"
@@ -70,6 +71,8 @@
 
 namespace
 {
+namespace fs = std::filesystem;
+
 class LocalOpcUaTestServer
 {
 public:
@@ -2370,6 +2373,53 @@ void TestHardwareRuntimeAutomation()
     ImageState::Clear();
 }
 
+void TestFrameArchiveService()
+{
+    FrameArchiveService::Shutdown();
+    const fs::path outputDirectory = fs::temp_directory_path() /
+        ("imgui_opencv_frame_archive_" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()));
+
+    FrameArchiveConfig config;
+    config.enabled = true;
+    config.directory = outputDirectory.string();
+    config.format = FrameArchiveFormat::Png;
+    config.saveEveryN = 2;
+    config.maxQueue = 8;
+    FrameArchiveService::Configure(config, false);
+
+    const cv::Mat frame(12, 16, CV_8UC3, cv::Scalar(20, 80, 160));
+    for (int index = 1; index <= 5; ++index)
+        FrameArchiveService::Enqueue(frame, "test-camera", index, 1000.0 + index);
+
+    Require(FrameArchiveService::WaitUntilIdle(3000),
+        "frame archive worker did not become idle");
+    const FrameArchiveSnapshot snapshot = FrameArchiveService::Snapshot();
+    Require(snapshot.savedFrames == 3 && snapshot.failedFrames == 0 &&
+        snapshot.droppedFrames == 0 && fs::exists(outputDirectory),
+        "frame archive sampling or asynchronous save failed");
+
+    std::size_t pngCount = 0;
+    for (const fs::directory_entry& entry : fs::directory_iterator(outputDirectory))
+    {
+        if (entry.is_regular_file() && entry.path().extension() == ".png")
+            ++pngCount;
+    }
+    Require(pngCount == 3 && !snapshot.lastSavedPath.empty() &&
+        !FrameArchiveService::SettingsPath().empty(),
+        "frame archive output paths regressed");
+
+    config.enabled = false;
+    FrameArchiveService::Configure(config, false);
+    FrameArchiveService::Enqueue(frame, "test-camera", 6, 1006.0);
+    Require(FrameArchiveService::WaitUntilIdle(1000) &&
+        FrameArchiveService::Snapshot().savedFrames == 3,
+        "disabled frame archive still saved images");
+
+    FrameArchiveService::Shutdown();
+    fs::remove_all(outputDirectory);
+}
+
 void TestConcreteTcpTextAdapter()
 {
     auto transport = std::make_unique<ScriptedTcpTextTransport>();
@@ -3694,6 +3744,7 @@ int main(int argc, char** argv)
         TestToolROIServiceOwnsBoundROIEditing();
         TestHardwareAdapterServiceLifecycle();
         TestHardwareRuntimeAutomation();
+        TestFrameArchiveService();
         TestConcreteTcpTextAdapter();
         TestConcreteModbusTcpAdapterProtocol();
         TestConcreteOpenCvCameraAdapter();

@@ -1,7 +1,9 @@
 #include "HardwareWindow.h"
 
 #include "DockSpaceHost.h"
+#include "../Core/FrameArchiveService.h"
 #include "../Core/HardwareRuntimeService.h"
+#include "../Core/OpenFileDialog.h"
 #include "../Core/ThemeManager.h"
 #include "../Log/LogSystem.h"
 #include "../include/imgui/imgui.h"
@@ -10,6 +12,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <iterator>
+#include <cstring>
 #include <string>
 
 namespace
@@ -79,6 +82,44 @@ std::uint16_t ClampAddress(int value)
 {
     return static_cast<std::uint16_t>(std::clamp(value, 0, 65535));
 }
+
+bool BeginPropertyTable(const char* id)
+{
+    if (!ImGui::BeginTable(id, 2,
+        ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX))
+    {
+        return false;
+    }
+    const float available = ImGui::GetContentRegionAvail().x;
+    const float labelWidth = available < 260.0f
+        ? std::clamp(available * 0.40f, 68.0f, 82.0f)
+        : 104.0f;
+    ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthFixed, labelWidth);
+    ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch);
+    return true;
+}
+
+void PropertyRow(const char* label)
+{
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("%s", label);
+    ImGui::TableSetColumnIndex(1);
+    ImGui::SetNextItemWidth(-1.0f);
+}
+
+float TwoColumnButtonWidth()
+{
+    return (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+}
+
+constexpr float kActionButtonHeight = 28.0f;
+
+bool IsNarrowPanel()
+{
+    return ImGui::GetContentRegionAvail().x < 260.0f;
+}
 }
 
 namespace UI
@@ -116,6 +157,9 @@ void DrawHardwarePanel()
     static bool cameraAutoExposure = true;
     static float cameraExposure = -6.0f;
     static float cameraGain = 0.0f;
+    static bool archiveUiInitialized = false;
+    static FrameArchiveConfig archiveConfig;
+    static char archiveDirectory[512] = {};
 
     static int outputType = 0;
     static char outputKey[96] = "output-main";
@@ -132,6 +176,14 @@ void DrawHardwarePanel()
     static bool outputInvert = false;
     static bool outputAutoPublish = false;
 
+    if (!archiveUiInitialized)
+    {
+        archiveConfig = FrameArchiveService::Config();
+        std::snprintf(archiveDirectory, sizeof(archiveDirectory), "%s",
+            archiveConfig.directory.c_str());
+        archiveUiInitialized = true;
+    }
+
     HardwareRuntimeSnapshot snapshot = HardwareRuntimeService::Snapshot();
 
     DrawSectionTitle("工业相机");
@@ -139,54 +191,66 @@ void DrawHardwarePanel()
         ConnectionStateName(snapshot.cameraState),
         snapshot.cameraAdapterName.empty() ? "" : " · ",
         snapshot.cameraAdapterName.c_str());
-    if (snapshot.cameraCapturePending)
-    {
-        ImGui::SameLine();
-        ImGui::TextDisabled("抓帧中");
-    }
-    ImGui::TextDisabled("已发布帧: %d", snapshot.cameraFrameIndex);
-
-    ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputText("##camera_address", cameraAddress, sizeof(cameraAddress));
-    ImGui::SetItemTooltip("相机索引，例如 0；也可填写 RTSP/HTTP/视频流 URL");
+    ImGui::SameLine();
+    ImGui::TextDisabled("帧 %d%s", snapshot.cameraFrameIndex,
+        snapshot.cameraCapturePending ? " · 抓取中" : "");
 
     const char* cameraBackends[] = {"自动", "DirectShow", "Media Foundation", "FFmpeg", "GStreamer"};
-    ImGui::SetNextItemWidth(-1.0f);
-    ImGui::Combo("##camera_backend", &cameraBackend, cameraBackends,
-        static_cast<int>(std::size(cameraBackends)));
-    ImGui::SetItemTooltip("OpenCV VideoCapture 后端");
+    if (BeginPropertyTable("##camera_properties"))
+    {
+        PropertyRow("相机地址");
+        ImGui::InputText("##camera_address", cameraAddress, sizeof(cameraAddress));
+        ImGui::SetItemTooltip("相机索引（例如 0）或 RTSP/HTTP 视频流 URL");
 
-    ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputText("##camera_source_name", cameraSourceName, sizeof(cameraSourceName));
-    ImGui::SetItemTooltip("写入 FrameSourceState 的来源名称");
-    ImGui::TextDisabled("抓帧超时 (ms)");
-    ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputInt("##camera_timeout", &cameraTimeoutMs);
-    ImGui::TextDisabled("抓帧间隔 (ms)");
-    ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputInt("##camera_interval", &cameraIntervalMs);
-    if (ImGui::Checkbox("自动曝光", &cameraAutoExposure))
-        HardwareRuntimeService::SetCameraControl(
-            CameraControl::AutoExposure, cameraAutoExposure ? 1.0 : 0.0);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(82.0f);
-    if (ImGui::DragFloat("曝光##camera_exposure", &cameraExposure, 0.1f, -13.0f, 5.0f, "%.2f"))
-        HardwareRuntimeService::SetCameraControl(CameraControl::Exposure, cameraExposure);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(82.0f);
-    if (ImGui::DragFloat("增益##camera_gain", &cameraGain, 0.5f, 0.0f, 100.0f, "%.1f"))
-        HardwareRuntimeService::SetCameraControl(CameraControl::Gain, cameraGain);
-    if (ImGui::Checkbox("自动抓帧", &cameraAutoCapture))
-        HardwareRuntimeService::SetCameraAutoCapture(cameraAutoCapture);
-    ImGui::SameLine();
-    ImGui::Checkbox("抓帧后执行", &cameraRunAfterCapture);
+        PropertyRow("采集后端");
+        ImGui::Combo("##camera_backend", &cameraBackend, cameraBackends,
+            static_cast<int>(std::size(cameraBackends)));
 
-    if (ImGui::Checkbox("执行前触发相机", &cameraTriggerBeforeRun))
-        HardwareRuntimeService::SetCameraTriggerOnInspection(cameraTriggerBeforeRun);
+        PropertyRow("来源名称");
+        ImGui::InputText("##camera_source_name", cameraSourceName, sizeof(cameraSourceName));
 
-    const float twoButtonWidth = (ImGui::GetContentRegionAvail().x -
-        ImGui::GetStyle().ItemSpacing.x) * 0.5f;
-    if (ImGui::Button("连接相机", ImVec2(twoButtonWidth, 0.0f)))
+        PropertyRow("抓帧超时");
+        ImGui::DragInt("##camera_timeout", &cameraTimeoutMs, 1.0f, 1, 10000, "%d ms");
+        ImGui::SetItemTooltip("单位：毫秒");
+
+        PropertyRow("抓帧间隔");
+        ImGui::DragInt("##camera_interval", &cameraIntervalMs, 1.0f, 1, 10000, "%d ms");
+        ImGui::SetItemTooltip("单位：毫秒；循环触发时控制相机采集节奏");
+
+        PropertyRow("曝光模式");
+        if (ImGui::Checkbox("自动曝光##camera_auto_exposure", &cameraAutoExposure))
+            HardwareRuntimeService::SetCameraControl(
+                CameraControl::AutoExposure, cameraAutoExposure ? 1.0 : 0.0);
+
+        PropertyRow("曝光值");
+        ImGui::BeginDisabled(cameraAutoExposure);
+        if (ImGui::DragFloat("##camera_exposure", &cameraExposure, 0.1f, -13.0f, 5.0f, "%.2f"))
+            HardwareRuntimeService::SetCameraControl(CameraControl::Exposure, cameraExposure);
+        ImGui::EndDisabled();
+
+        PropertyRow("增益");
+        if (ImGui::DragFloat("##camera_gain", &cameraGain, 0.5f, 0.0f, 100.0f, "%.1f"))
+            HardwareRuntimeService::SetCameraControl(CameraControl::Gain, cameraGain);
+
+        PropertyRow("采集模式");
+        if (ImGui::Checkbox("自动抓帧##camera_auto_capture", &cameraAutoCapture))
+            HardwareRuntimeService::SetCameraAutoCapture(cameraAutoCapture);
+
+        PropertyRow("执行联动");
+        ImGui::Checkbox("抓帧后执行##camera_run_after", &cameraRunAfterCapture);
+        if (!IsNarrowPanel())
+            ImGui::SameLine();
+        if (ImGui::Checkbox("执行前触发##camera_trigger_before", &cameraTriggerBeforeRun))
+            HardwareRuntimeService::SetCameraTriggerOnInspection(cameraTriggerBeforeRun);
+        ImGui::EndTable();
+    }
+
+    const bool narrowPanel = IsNarrowPanel();
+    const float twoButtonWidth = TwoColumnButtonWidth();
+    const float cameraButtonWidth = narrowPanel ? -1.0f : twoButtonWidth;
+    const bool cameraConnected = snapshot.cameraState == DeviceConnectionState::Connected;
+    if (ImGui::Button(cameraConnected ? "重新连接" : "连接相机",
+        ImVec2(cameraButtonWidth, kActionButtonHeight)))
     {
         static const char* backendValues[] = {"", "dshow", "msmf", "ffmpeg", "gstreamer"};
         HardwareCameraConnectionConfig config;
@@ -203,15 +267,93 @@ void DrawHardwarePanel()
         config.gain = cameraGain;
         LogOperation("工业相机连接", HardwareRuntimeService::ConnectCamera(config));
     }
-    ImGui::SameLine();
+    if (!narrowPanel)
+        ImGui::SameLine();
+    ImGui::BeginDisabled(!cameraConnected);
     if (ImGui::Button(cameraRunAfterCapture ? "抓帧并执行" : "抓取一帧",
-        ImVec2(twoButtonWidth, 0.0f)))
+        ImVec2(cameraButtonWidth, kActionButtonHeight)))
     {
         HardwareRuntimeService::RequestCameraFrame(cameraRunAfterCapture);
     }
-    if (ImGui::Button("断开相机", ImVec2(-1.0f, 0.0f)))
+    ImGui::EndDisabled();
+    ImGui::BeginDisabled(!cameraConnected);
+    if (ImGui::Button("断开相机", ImVec2(-1.0f, kActionButtonHeight)))
         HardwareRuntimeService::DisconnectCamera();
+    ImGui::EndDisabled();
     DrawOperationMessage(snapshot.lastCameraOperation);
+
+    DrawSectionTitle("实时保存");
+    bool archiveChanged = false;
+    if (BeginPropertyTable("##archive_properties"))
+    {
+        PropertyRow("保存开关");
+        archiveChanged |= ImGui::Checkbox("保存相机帧##archive_enabled", &archiveConfig.enabled);
+
+        PropertyRow("保存目录");
+        const float browseWidth = narrowPanel ? 30.0f : 74.0f;
+        ImGui::SetNextItemWidth(std::max(80.0f,
+            ImGui::GetContentRegionAvail().x - browseWidth - ImGui::GetStyle().ItemSpacing.x));
+        archiveChanged |= ImGui::InputText("##archive_directory", archiveDirectory,
+            sizeof(archiveDirectory));
+        ImGui::SameLine();
+        if (ImGui::Button(narrowPanel ? "..." : "浏览...", ImVec2(browseWidth, 0.0f)))
+        {
+            const std::string directory = OpenFolderDialog();
+            if (!directory.empty())
+            {
+                std::snprintf(archiveDirectory, sizeof(archiveDirectory), "%s", directory.c_str());
+                archiveChanged = true;
+            }
+        }
+        ImGui::SetItemTooltip("选择实时保存目录");
+
+        const char* archiveFormats[] = {"JPEG", "PNG", "BMP"};
+        int archiveFormat = static_cast<int>(archiveConfig.format);
+        PropertyRow("图像格式");
+        if (ImGui::Combo("##archive_format", &archiveFormat, archiveFormats,
+            static_cast<int>(std::size(archiveFormats))))
+        {
+            archiveConfig.format = static_cast<FrameArchiveFormat>(archiveFormat);
+            archiveChanged = true;
+        }
+
+        PropertyRow("保存频率");
+        archiveChanged |= ImGui::DragInt("##archive_every_n", &archiveConfig.saveEveryN,
+            1.0f, 1, 10000, "每 %d 帧");
+        ImGui::SetItemTooltip("每 N 帧保存一张；1 表示每帧保存");
+
+        PropertyRow("JPEG 质量");
+        ImGui::BeginDisabled(archiveConfig.format != FrameArchiveFormat::Jpeg);
+        archiveChanged |= ImGui::SliderInt("##archive_jpeg_quality", &archiveConfig.jpegQuality, 20, 100);
+        ImGui::EndDisabled();
+
+        PropertyRow("缓冲队列");
+        archiveChanged |= ImGui::SliderInt("##archive_queue", &archiveConfig.maxQueue, 1, 32);
+        ImGui::SetItemTooltip("磁盘写入落后时使用的最大帧数，满后丢弃最旧帧");
+        ImGui::EndTable();
+    }
+
+    if (archiveChanged)
+    {
+        archiveConfig.directory = archiveDirectory;
+        FrameArchiveService::Configure(archiveConfig, true);
+        archiveConfig = FrameArchiveService::Config();
+    }
+
+    const FrameArchiveSnapshot archive = FrameArchiveService::Snapshot();
+    ImGui::TextDisabled("已保存 %llu · 待写 %zu · 丢弃 %llu · 失败 %llu",
+        static_cast<unsigned long long>(archive.savedFrames), archive.pendingFrames,
+        static_cast<unsigned long long>(archive.droppedFrames),
+        static_cast<unsigned long long>(archive.failedFrames));
+    if (!archive.lastError.empty())
+        ImGui::TextColored(ImVec4(0.95f, 0.38f, 0.32f, 1.0f), "%s", archive.lastError.c_str());
+    else if (!archive.lastSavedPath.empty())
+    {
+        ImGui::TextDisabled("最近保存");
+        ImGui::TextWrapped("%s", archive.lastSavedPath.c_str());
+    }
+    ImGui::TextDisabled("设置文件");
+    ImGui::TextWrapped("%s", FrameArchiveService::SettingsPath().c_str());
 
     DrawSectionTitle("检测结果输出");
     ImGui::TextColored(ConnectionStateColor(snapshot.outputState), "%s%s%s",
@@ -224,83 +366,90 @@ void DrawHardwarePanel()
     const char* outputTypes[] = {
         "Modbus TCP 线圈", "Modbus PLC 标签", "OPC UA NodeId", "TCP 文本"};
     const int previousOutputType = outputType;
-    ImGui::SetNextItemWidth(-1.0f);
-    ImGui::Combo("##output_type", &outputType, outputTypes,
-        static_cast<int>(std::size(outputTypes)));
-    if (outputType != previousOutputType)
+    if (BeginPropertyTable("##output_properties"))
     {
-        if (outputType == 2 && outputPort == 502)
-            outputPort = 4840;
-        else if (outputType != 2 && outputPort == 4840)
-            outputPort = 502;
-        std::snprintf(outputResource, sizeof(outputResource), "%s",
-            outputType == 2 || outputType == 3 ? "" : "1");
-    }
+        PropertyRow("输出类型");
+        ImGui::Combo("##output_type", &outputType, outputTypes,
+            static_cast<int>(std::size(outputTypes)));
+        if (outputType != previousOutputType)
+        {
+            if (outputType == 2 && outputPort == 502)
+                outputPort = 4840;
+            else if (outputType != 2 && outputPort == 4840)
+                outputPort = 502;
+            std::snprintf(outputResource, sizeof(outputResource), "%s",
+                outputType == 2 || outputType == 3 ? "" : "1");
+        }
 
-    ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputText("##output_key", outputKey, sizeof(outputKey));
-    ImGui::SetItemTooltip("Core 设备注册标识");
-    ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputText("##output_address", outputAddress, sizeof(outputAddress));
-    ImGui::SetItemTooltip(outputType == 2
-        ? "OPC UA 主机或完整 opc.tcp:// URL"
-        : outputType == 3 ? "普通 TCP Server 主机或 IP" : "PLC/Modbus TCP 主机或 IP");
-    ImGui::TextDisabled("端口");
-    ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputInt("##output_port", &outputPort);
-    if (outputType != 3)
-    {
-        ImGui::SetNextItemWidth(-1.0f);
-        ImGui::InputText("##output_resource", outputResource, sizeof(outputResource));
-        ImGui::SetItemTooltip(outputType == 2 ? "可选 OPC UA endpoint path" :
-            "Modbus Unit ID，通常为 1；直连设备也可能使用 0 或 255");
-    }
-    ImGui::TextDisabled("连接超时 (ms)");
-    ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputInt("##output_timeout", &outputTimeoutMs);
+        PropertyRow("适配器标识");
+        ImGui::InputText("##output_key", outputKey, sizeof(outputKey));
 
-    if (outputType == 1 || outputType == 2)
-    {
-        ImGui::SetNextItemWidth(-1.0f);
-        ImGui::InputText("##output_target", outputTarget, sizeof(outputTarget));
-        ImGui::SetItemTooltip(outputType == 1 ? "PLC 标签名" : "例如 ns=2;s=Inspection.OK");
-    }
-    if (outputType == 0 || outputType == 1)
-    {
-        ImGui::TextDisabled("%s", outputType == 0 ? "线圈地址" : "映射地址");
-        ImGui::SetNextItemWidth(-1.0f);
-        ImGui::InputInt("##output_mapping_address", &outputAddressValue);
-        ImGui::SetItemTooltip("Modbus 协议地址从 0 开始；PLC 显示 00001 时通常填写 0");
+        PropertyRow("主机地址");
+        ImGui::InputText("##output_address", outputAddress, sizeof(outputAddress));
+        ImGui::SetItemTooltip(outputType == 2
+            ? "OPC UA 主机或完整 opc.tcp:// URL"
+            : outputType == 3 ? "TCP Server 主机或 IP" : "PLC/Modbus TCP 主机或 IP");
+
+        PropertyRow("端口");
+        ImGui::DragInt("##output_port", &outputPort, 1.0f, 0, 65535);
+
+        if (outputType != 3)
+        {
+            PropertyRow(outputType == 2 ? "端点路径" : "Unit ID");
+            ImGui::InputText("##output_resource", outputResource, sizeof(outputResource));
+        }
+
+        PropertyRow("连接超时");
+        ImGui::DragInt("##output_timeout", &outputTimeoutMs, 10.0f, 1, 60000, "%d ms");
+        ImGui::SetItemTooltip("单位：毫秒");
+
+        if (outputType == 1 || outputType == 2)
+        {
+            PropertyRow(outputType == 1 ? "PLC 标签" : "NodeId");
+            ImGui::InputText("##output_target", outputTarget, sizeof(outputTarget));
+            ImGui::SetItemTooltip(outputType == 1 ? "PLC 标签名" : "例如 ns=2;s=Inspection.OK");
+        }
+
+        if (outputType == 0 || outputType == 1)
+        {
+            PropertyRow(outputType == 0 ? "线圈地址" : "映射地址");
+            ImGui::DragInt("##output_mapping_address", &outputAddressValue, 1.0f, 0, 65535);
+            ImGui::SetItemTooltip("协议地址从 0 开始；PLC 显示 00001 时通常填写 0");
+        }
+
+        if (outputType == 3)
+        {
+            PropertyRow("Pass 文本");
+            ImGui::InputText("##tcp_pass_text", tcpPassText, sizeof(tcpPassText));
+            PropertyRow("Fail 文本");
+            ImGui::InputText("##tcp_fail_text", tcpFailText, sizeof(tcpFailText));
+        }
+
+        PropertyRow("输出选项");
         if (outputType == 1)
-            ImGui::Checkbox("映射到保持寄存器", &plcHoldingRegister);
-    }
-    if (outputType == 3)
-    {
-        const float textWidth = (ImGui::GetContentRegionAvail().x -
-            ImGui::GetStyle().ItemSpacing.x) * 0.5f;
-        ImGui::SetNextItemWidth(textWidth);
-        ImGui::InputText("##tcp_pass_text", tcpPassText, sizeof(tcpPassText));
-        ImGui::SetItemTooltip("Pass 输出内容");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(textWidth);
-        ImGui::InputText("##tcp_fail_text", tcpFailText, sizeof(tcpFailText));
-        ImGui::SetItemTooltip("Fail/Error 输出内容");
-        ImGui::Checkbox("追加 CRLF", &tcpAppendCrLf);
-        ImGui::SetItemTooltip("发送文本后不等待服务端响应");
-        ImGui::SameLine();
-        ImGui::Checkbox("输出反相", &outputInvert);
-    }
-    else
-    {
-        ImGui::Checkbox("输出反相", &outputInvert);
-    }
-    if (ImGui::Checkbox("批次完成自动发布", &outputAutoPublish) &&
-        snapshot.outputState == DeviceConnectionState::Connected)
-    {
-        HardwareRuntimeService::SetOutputAutoPublish(outputAutoPublish);
+        {
+            ImGui::Checkbox("保持寄存器##plc_holding", &plcHoldingRegister);
+            ImGui::SameLine();
+        }
+        if (outputType == 3)
+        {
+            ImGui::Checkbox("追加 CRLF##tcp_crlf", &tcpAppendCrLf);
+            ImGui::SameLine();
+        }
+        ImGui::Checkbox("反相##output_invert", &outputInvert);
+
+        PropertyRow("自动发布");
+        if (ImGui::Checkbox("批次完成后发布##output_auto_publish", &outputAutoPublish) &&
+            snapshot.outputState == DeviceConnectionState::Connected)
+        {
+            HardwareRuntimeService::SetOutputAutoPublish(outputAutoPublish);
+        }
+        ImGui::EndTable();
     }
 
-    if (ImGui::Button("连接输出", ImVec2(twoButtonWidth, 0.0f)))
+    const bool outputConnected = snapshot.outputState == DeviceConnectionState::Connected;
+    if (ImGui::Button(outputConnected ? "重新连接输出" : "连接输出",
+        ImVec2(narrowPanel ? -1.0f : twoButtonWidth, kActionButtonHeight)))
     {
         HardwareOutputConnectionConfig config;
         config.adapterType = static_cast<HardwareOutputAdapterType>(std::clamp(outputType, 0, 3));
@@ -319,16 +468,19 @@ void DrawHardwarePanel()
         config.autoPublish = outputAutoPublish;
         LogOperation("硬件输出连接", HardwareRuntimeService::ConnectOutput(config));
     }
-    ImGui::SameLine();
-    if (ImGui::Button("断开输出", ImVec2(twoButtonWidth, 0.0f)))
-        HardwareRuntimeService::DisconnectOutput();
-
-    const bool outputConnected = snapshot.outputState == DeviceConnectionState::Connected;
+    if (!narrowPanel)
+        ImGui::SameLine();
     ImGui::BeginDisabled(!outputConnected);
-    if (ImGui::Button("测试 Pass", ImVec2(twoButtonWidth, 0.0f)))
+    if (ImGui::Button("断开输出", ImVec2(narrowPanel ? -1.0f : twoButtonWidth, kActionButtonHeight)))
+        HardwareRuntimeService::DisconnectOutput();
+    ImGui::EndDisabled();
+
+    ImGui::BeginDisabled(!outputConnected);
+    if (ImGui::Button("测试 Pass", ImVec2(narrowPanel ? -1.0f : twoButtonWidth, kActionButtonHeight)))
         LogOperation("测试 Pass 输出", HardwareRuntimeService::PublishConfiguredStatus(ToolResultStatus::Pass));
-    ImGui::SameLine();
-    if (ImGui::Button("测试 Fail", ImVec2(twoButtonWidth, 0.0f)))
+    if (!narrowPanel)
+        ImGui::SameLine();
+    if (ImGui::Button("测试 Fail", ImVec2(narrowPanel ? -1.0f : twoButtonWidth, kActionButtonHeight)))
         LogOperation("测试 Fail 输出", HardwareRuntimeService::PublishConfiguredStatus(ToolResultStatus::Fail));
     ImGui::EndDisabled();
     DrawOperationMessage(snapshot.lastOutputOperation);

@@ -1,6 +1,7 @@
 #include "HardwareRuntimeService.h"
 
 #include "FrameSourceState.h"
+#include "FrameArchiveService.h"
 #include "ImageState.h"
 #include "ImageUtils.h"
 #include "ModbusPlcAdapter.h"
@@ -63,6 +64,7 @@ DeviceOperationResult NotConnected(const char* name)
 void PublishFrame(const cv::Mat& frame, const std::string& sourceName,
     int frameIndex, double timestampMs)
 {
+    FrameArchiveService::Enqueue(frame, sourceName, frameIndex, timestampMs);
     FrameSourceState::SetCurrentFrame(frame, FrameSourceType::Camera,
         sourceName, frameIndex, timestampMs);
 
@@ -615,6 +617,7 @@ HardwareRuntimeSnapshot Snapshot()
 void Shutdown()
 {
     StopCameraWorker();
+    FrameArchiveService::Shutdown();
     HardwareAdapterService::Clear();
     s_outputAdapterKey.clear();
     s_outputAutoPublish = false;
