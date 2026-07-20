@@ -84,7 +84,7 @@ namespace HardwareRuntimeService
     void SetCameraTriggerOnInspection(bool enabled);
     bool CameraTriggerOnInspectionEnabled();
     DeviceOperationResult SetCameraControl(CameraControl control, double value);
-    void RequestCameraFrame(bool runToolChainAfterCapture = false);
+    void RequestCameraFrame(bool runToolChainAfterCapture = false, bool loop = false);
 
     DeviceOperationResult ConnectOutput(const HardwareOutputConnectionConfig& config);
     void DisconnectOutput();

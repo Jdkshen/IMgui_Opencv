@@ -48,6 +48,7 @@ bool s_cameraAutoCapture = false;
 bool s_cameraTriggerOnInspection = true;
 int s_runToolChainAfterFrameIndex = -1;
 bool s_cameraToolRunPending = false;
+bool s_cameraToolRunLoop = false;
 bool s_outputAutoPublish = false;
 int s_cameraFrameIndex = 0;
 int s_cameraScheduledFrameIndex = 0;
@@ -146,6 +147,7 @@ void StopCameraWorker()
         s_cameraFrameRequested = false;
         s_runToolChainAfterFrameIndex = -1;
         s_cameraToolRunPending = false;
+        s_cameraToolRunLoop = false;
     }
     s_cameraWorkerCondition.notify_all();
     if (s_cameraWorker.joinable())
@@ -288,13 +290,16 @@ DeviceOperationResult SetCameraControl(CameraControl control, double value)
     return camera->SetControl(control, value);
 }
 
-void RequestCameraFrame(bool runToolChainAfterCapture)
+void RequestCameraFrame(bool runToolChainAfterCapture, bool loop)
 {
     {
         std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
         s_cameraFrameRequested = true;
         if (runToolChainAfterCapture)
+        {
             s_runToolChainAfterFrameIndex = s_cameraScheduledFrameIndex + 1;
+            s_cameraToolRunLoop = loop;
+        }
     }
     s_cameraWorkerCondition.notify_all();
 }
@@ -499,6 +504,7 @@ void Tick()
     PendingCameraFrame pending;
     bool hasPendingFrame = false;
     bool runToolChainAfterPublish = false;
+    bool runToolChainLoop = false;
     {
         std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
         if (s_hasPendingCameraFrame)
@@ -512,7 +518,9 @@ void Tick()
             {
                 runToolChainAfterPublish = pending.operation.success &&
                     !pending.frame.empty();
+                runToolChainLoop = s_cameraToolRunLoop;
                 s_runToolChainAfterFrameIndex = -1;
+                s_cameraToolRunLoop = false;
             }
         }
     }
@@ -529,6 +537,7 @@ void Tick()
             {
                 std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
                 s_cameraToolRunPending = true;
+                s_cameraToolRunLoop = runToolChainLoop;
             }
         }
     }
@@ -545,7 +554,13 @@ void Tick()
     }
     if (requestToolRun)
     {
-        ToolController::RequestRunAll(false, false);
+        bool loop = false;
+        {
+            std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
+            loop = s_cameraToolRunLoop;
+            s_cameraToolRunLoop = false;
+        }
+        ToolController::RequestRunAll(loop, false);
         s_lastCameraOperation.message = "工业相机帧已发布，工具链已开始执行";
     }
 }

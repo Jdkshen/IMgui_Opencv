@@ -238,8 +238,8 @@ namespace ToolController
             HardwareRuntimeService::CameraTriggerOnInspectionEnabled())
         {
             s_mode = Mode::Idle;
-            s_loop = false;
-            HardwareRuntimeService::RequestCameraFrame(true);
+            s_loop = loop;
+            HardwareRuntimeService::RequestCameraFrame(true, loop);
             LogSystem::Add(LOG_INFO, ImVec4(0, 1, 0.5f, 1),
                 "[全部执行] 已请求相机新帧，等待发布后执行工具链");
             return;
@@ -371,6 +371,16 @@ namespace ToolController
                     FrameNavigation::NavigateNextImage();
                     FrameNavigation::FitImageToWindow();
                     s_mode = Mode::Idle;  // 简化：循环等下一帧手动触发
+                } else if (s_loop &&
+                           HardwareRuntimeService::Snapshot().cameraState == DeviceConnectionState::Connected &&
+                           HardwareRuntimeService::CameraTriggerOnInspectionEnabled()) {
+                    s_currentIndex = 0;
+                    s_imageDirty = false;
+                    s_batchTimerStarted = false;
+                    HardwareRuntimeService::RequestCameraFrame(true, true);
+                    s_mode = Mode::Idle;
+                    LogSystem::Add(LOG_INFO, ImVec4(0, 1, 0.5f, 1),
+                        "[循环] 当前帧完成，等待相机下一帧");
                 } else if (s_loop) {
                     s_currentIndex = 0; s_imageDirty = false;
                     ResetBatchImagesFromSource(!ImageState::Original().empty() ? ImageState::Original() : ImageState::Current());

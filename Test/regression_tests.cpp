@@ -2261,7 +2261,7 @@ void TestHardwareRuntimeAutomation()
     cameraInputTool.type = 12;
     ToolChainState::AddTool(std::move(cameraInputTool));
     const int firstFrameIndex = cameraSnapshot.cameraFrameIndex;
-    ToolController::RequestRunAll(false);
+    ToolController::RequestRunAll(true);
     bool linkedRunStarted = false;
     for (int attempt = 0; attempt < 200; ++attempt)
     {
@@ -2276,6 +2276,23 @@ void TestHardwareRuntimeAutomation()
     }
     Require(linkedRunStarted,
         "camera capture did not trigger the tool chain after publishing a new frame");
+
+    const int linkedFrameIndex = HardwareRuntimeService::Snapshot().cameraFrameIndex;
+    ToolController::Tick();
+    bool linkedLoopContinued = false;
+    for (int attempt = 0; attempt < 200; ++attempt)
+    {
+        HardwareRuntimeService::Tick();
+        if (HardwareRuntimeService::Snapshot().cameraFrameIndex > linkedFrameIndex &&
+            ToolController::GetMode() == ToolController::Mode::Running)
+        {
+            linkedLoopContinued = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    Require(linkedLoopContinued,
+        "camera-triggered inspection loop did not request the next frame");
     ToolController::Reset();
     ToolChainState::ClearTools();
 
