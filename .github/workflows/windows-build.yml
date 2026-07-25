@@ -3,7 +3,15 @@ name: Windows Build
 on:
   push:
     branches: [ main, master, "codex/**" ]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - ".claude/**"
   pull_request:
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - ".claude/**"
   workflow_dispatch:
 
 jobs:
