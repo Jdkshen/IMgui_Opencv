@@ -3,6 +3,48 @@
 > Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
 
 
+
+
+## 2026-07-25 added code structure
+
+This section records the main code boundaries added or expanded by the `codex/p0-p4-release` merge.
+
+### Algorithm
+
+| File | Responsibility |
+| --- | --- |
+| `Algorithm/GeometryDrawTool.h/.cpp` | Geometry drawing tool for publishing visual geometry results. |
+| `Algorithm/MeasurementTool.cpp` | Expanded measurement execution and result output. |
+| `Algorithm/OCRTool.cpp`, `Algorithm/WindowsPPOCREngine.*` | OCR model, dictionary, execution, and result handling updates. |
+| `Algorithm/OpenCVYoloDetector.*`, `Algorithm/YOLOTool.cpp` | OpenCV DNN YOLO backend and YOLO tool execution updates. |
+| `Algorithm/ShapeMatcher.cpp`, `Algorithm/ShapeTools.cpp` | Shape matching and shape-tool adapter updates. |
+| `Algorithm/TemplateMatchingTool.cpp` | Template matching parameter, ROI, and result publication updates. |
+
+### Core
+
+| File | Responsibility |
+| --- | --- |
+| `Core/FrameArchiveService.h/.cpp` | Archive inspection frames for hardware-triggered traceability and review. |
+| `Core/GeometryPrimitive.h/.cpp` | Store and process line, circle, polygon, and related geometry primitives. |
+| `Core/HardwareSettingsService.h/.cpp` | Persist camera, communication, and hardware connection settings. |
+| `Core/RecipeAutosaveService.h/.cpp` | Autosave recipe and tool-parameter snapshots. |
+| `Core/RotatedROI.h/.cpp` | Restore rotated ROI coordinates and map results back to image space. |
+| `Core/SpcDatabase.h/.cpp` | Store SPC and inspection statistics data. |
+| `Core/ToolExecutionGraph.h/.cpp` | Describe tool dependencies, execution order, and input/output relationships. |
+| `Core/ToolSettings.h` | Shared tool-setting fields. |
+| `Core/HardwareRuntimeService.*`, `Core/OpenCvCameraAdapter.*` | Camera trigger, exposure, inspection loop, and hardware output flow. |
+| `Core/ToolController.*`, `Core/ToolExecutor.*`, `Core/ToolInstance.*`, `Core/ToolChainState.*` | Tool execution, parameter persistence, dependency handling, and UI workflow support. |
+
+### UI and Renderer
+
+| File | Responsibility |
+| --- | --- |
+| `UI/GeometryDrawEditor.h/.cpp` | Parameter editor for geometry drawing tools. |
+| `UI/RunResultWindow.h/.cpp` | Central run-result review window. |
+| `UI/Tools/BasicToolPanels.h/.cpp` | Shared basic tool panels and controls. |
+| `UI/HardwareWindow.cpp` | Camera/communication connection, exposure, trigger, and loop controls. |
+| `UI/ImageViewer.cpp`, `UI/ROIManager.cpp`, `UI/ToolsWindow.cpp` | Image preview, ROI interaction, and tool workflow updates. |
+| `Renderer/PreviewTextureCache.h/.cpp` | Preview texture caching for result and tool preview rendering. |
 本文档根据当前源码整理项目结构、模块职责、主流程和主要数据流，方便后续维护、重构和新增算法工具。
 
 ## 项目定位

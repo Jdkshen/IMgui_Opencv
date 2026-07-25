@@ -14,6 +14,16 @@ caching, frame archiving, recipe autosave, persisted hardware settings, camera
 trigger/exposure flow updates, SPC storage, expanded inspection history/statistics,
 and tool execution/dependency UI refinements.
 
+### Code modules documented for this update
+
+- Geometry drawing: `Algorithm/GeometryDrawTool.*`, `UI/GeometryDrawEditor.*`, `Core/GeometryPrimitive.*`, and `Core/RotatedROI.*`.
+- Result review: `UI/RunResultWindow.*`.
+- Tool UI/settings: `UI/Tools/BasicToolPanels.*` and `Core/ToolSettings.h`.
+- Execution dependency model: `Core/ToolExecutionGraph.*`.
+- Persistence: `Core/RecipeAutosaveService.*` and `Core/HardwareSettingsService.*`.
+- Hardware/camera flow: `Core/HardwareRuntimeService.*`, `Core/OpenCvCameraAdapter.*`, and `UI/HardwareWindow.cpp`.
+- Traceability/statistics: `Core/FrameArchiveService.*`, `Core/SpcDatabase.*`, and `Core/InspectionHistory.*`.
+- Preview performance: `Renderer/PreviewTextureCache.*`.
 ## Local runtime package
 
 Build the Release x64 application first, then run:

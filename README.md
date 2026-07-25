@@ -3,6 +3,24 @@
 > Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
 
 
+
+
+## 2026-07-25 code update notes
+
+This merge documented the code added by `codex/p0-p4-release`:
+
+| Area | Files | Notes |
+| --- | --- | --- |
+| Geometry drawing | `Algorithm/GeometryDrawTool.*`, `UI/GeometryDrawEditor.*`, `Core/GeometryPrimitive.*`, `Core/RotatedROI.*` | Geometry primitives, rotated ROI restoration, draw-tool editing, and overlays. |
+| Run results | `UI/RunResultWindow.*` | Dedicated inspection result review window. |
+| Tool panels/settings | `UI/Tools/BasicToolPanels.*`, `Core/ToolSettings.h` | Shared parameter panels and persisted tool settings. |
+| Execution graph | `Core/ToolExecutionGraph.*` | Tool dependency, input/output, and execution order support. |
+| Autosave/settings | `Core/RecipeAutosaveService.*`, `Core/HardwareSettingsService.*` | Recipe autosave and hardware connection persistence. |
+| Hardware/camera | `Core/HardwareRuntimeService.*`, `Core/OpenCvCameraAdapter.*`, `UI/HardwareWindow.cpp` | Camera trigger, exposure, pending-loop handling, and hardware output updates. |
+| Traceability/SPC | `Core/FrameArchiveService.*`, `Core/SpcDatabase.*`, `Core/InspectionHistory.*` | Frame archive, SPC storage, and inspection history/statistics. |
+| Preview rendering | `Renderer/PreviewTextureCache.*` | Cached preview textures for result and tool previews. |
+
+See `docs/STATUS_2026-07-25.md` and `docs/RELEASE.md` for the consolidated merge summary.
 基于 **Dear ImGui + DirectX 12 + OpenCV** 的 Windows 桌面视觉工具应用。
 
 ---
