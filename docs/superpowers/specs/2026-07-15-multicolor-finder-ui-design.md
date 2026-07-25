@@ -1,5 +1,8 @@
 # 多点找色工具 UI 优化设计
 
+> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+
+
 ## 改动范围
 
 优化 `UI/ToolsWindow.cpp` 中的多点找色工具卡片，并在 `MultiColorFinder` 中增加可选的 Auto.js 兼容模式。保留现有增强模式，不修改 `ColorPoint` 数据结构、参考图获取流程和其他工具行为。

@@ -1,5 +1,8 @@
 # Unified Subpixel Positioning Implementation Plan
 
+> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Preserve floating-point image coordinates through every spatial tool, ROI transform, UI overlay, and downstream result-ROI path, then add measured local subpixel refinement where the algorithm supports it.

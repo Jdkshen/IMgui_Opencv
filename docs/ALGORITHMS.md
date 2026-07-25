@@ -1,5 +1,8 @@
 # OpenCV 算法文档
 
+> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+
+
 > 本文档列出项目中所有 OpenCV 算法，包含用途、函数签名、处理流程、参数说明和扩展指南。
 
 ---

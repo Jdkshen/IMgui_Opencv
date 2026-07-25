@@ -1,5 +1,8 @@
 # 开发路线
 
+> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+
+
 > 当前版本: 2026-07-19 | 已覆盖 type 0-16（type 12 为原图特殊工具）| 后续按“稳定性 -> 架构收尾 -> 工业能力 -> 工具链体验 -> 发布”推进
 
 ---

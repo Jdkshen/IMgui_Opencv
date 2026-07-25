@@ -1,5 +1,8 @@
 # Development Plan: P0-P4
 
+> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+
+
 This document is the execution checklist for the current architecture cleanup.
 The merge gate for every phase is a clean Release x64 build of both projects
 and a full run of `Test/x64/Release/RegressionTests.exe`.

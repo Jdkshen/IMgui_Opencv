@@ -1,5 +1,8 @@
 # Dear ImGui C++ API 完整参考手册
 
+> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+
+
 > Dear ImGui v1.92.8 WIP | 基于项目 `include/imgui/imgui.h` 整理
 >
 > 每个函数标注：**用途** → **签名** → **关键参数** → **代码示例**

@@ -1,5 +1,8 @@
 # 多点找色紧凑 UI 与 Auto.js 兼容模式实施计划
 
+> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 优化多点找色工具在大量颜色点下的预览和参数编辑体验，并增加行为明确、配方可持久化的 Auto.js 兼容模式。

@@ -1,5 +1,8 @@
 # Hardware Integration
 
+> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+
+
 ## Runtime flow
 
 Hardware adapters live in Core and publish data through the same runtime paths used by

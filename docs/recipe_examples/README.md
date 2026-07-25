@@ -1,5 +1,8 @@
 # Recipe Examples
 
+> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+
+
 All recipes use paths relative to the repository and are resolved from the
 recipe directory or a repository ancestor at load time. Runtime copies are
 placed beside the executable under `x64/Release/recipes` and

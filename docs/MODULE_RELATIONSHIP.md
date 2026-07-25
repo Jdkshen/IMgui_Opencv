@@ -1,5 +1,8 @@
 # 模块关系图
 
+> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+
+
 本文整理 `IMgui_Opencv` 当前代码结构中的核心模块关系，重点说明：
 
 - 核心模块分层与职责

@@ -1,5 +1,8 @@
 # 统一亚像素定位设计
 
+> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+
+
 ## 状态
 
 已确认采用分阶段迁移方案：先统一浮点坐标和坐标变换链路，再逐类增加算法精修，最终删除整数坐标桥接。

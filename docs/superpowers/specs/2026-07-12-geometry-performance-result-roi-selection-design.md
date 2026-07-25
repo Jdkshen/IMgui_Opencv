@@ -1,5 +1,8 @@
 # 几何绘制性能与结果 ROI 序号选择设计
 
+> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+
+
 ## 目标
 
 1. 几何绘制继续把像素写入处理图，供后续工具使用，同时减少整图复制。

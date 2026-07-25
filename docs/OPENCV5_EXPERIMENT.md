@@ -1,5 +1,8 @@
 # OpenCV 5.0 YOLO 实验功能
 
+> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+
+
 当前工程已统一切到仓库内置 OpenCV 5.0；`YOLO OpenCV 5.0` 仍保留为 OpenCV DNN 后端，用于和 ONNX Runtime YOLO 工具对比。
 
 ## 当前状态

@@ -1,5 +1,8 @@
 # Windows_imgui 代码解析
 
+> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+
+
 ## 📖 项目概述
 
 这是一个基于 **Dear ImGui + DirectX 12 + OpenCV** 构建的 Windows 桌面视觉工具应用。用户可以通过图形界面加载图片、进行图像处理（灰度/模糊/二值化/Canny）、通过 ROI（感兴趣区域）进行交互式标注，并在一个可停靠的多窗口 UI 中实时查看结果。

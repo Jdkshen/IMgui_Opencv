@@ -1,5 +1,8 @@
 # 项目后续更新指南
 
+> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+
+
 本文档用于项目后续迭代时保持代码、工程文件、资源和文档同步。
 
 ## 更新原则

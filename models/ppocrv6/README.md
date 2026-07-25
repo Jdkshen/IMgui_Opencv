@@ -1,3 +1,5 @@
+> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+
 PP-OCRv6 ncnn models from Avafly/PaddleOCR-ncnn-CPP v0.3.0.
 
 Default tiny model filenames:

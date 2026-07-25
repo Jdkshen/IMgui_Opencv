@@ -1,5 +1,8 @@
 # 视频播放 & 音频模块开发记录
 
+> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+
+
 > 日期：2026-05-28 ~ 2026-05-29
 
 ---

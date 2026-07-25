@@ -1,5 +1,8 @@
 # 项目架构性能审查
 
+> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+
+
 > 对照 `OPENCV_ALGORITHMS.md §21.4 性能建议` 逐条评估
 >
 > 审查范围: `Core/` `Algorithm/` `UI/` 全部 .cpp 文件

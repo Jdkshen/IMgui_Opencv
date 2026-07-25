@@ -1,5 +1,8 @@
 # IMgui_Opencv 构建基线
 
+> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+
+
 本项目是基于 Dear ImGui、DirectX 12、OpenCV 5.0 和 ONNX Runtime 的 Windows 桌面视觉工具。
 
 ## 基线目标

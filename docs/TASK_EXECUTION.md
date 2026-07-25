@@ -1,5 +1,8 @@
 # 任务执行说明
 
+> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+
+
 本文档用于给开发者或 AI 助手派发项目任务。目标是让每个任务都有明确输入、修改范围、验收标准和文档同步要求。
 
 ## 当前任务队列

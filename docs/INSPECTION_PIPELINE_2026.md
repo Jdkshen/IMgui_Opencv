@@ -1,5 +1,8 @@
 # 检测工具链架构与功能说明
 
+> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+
+
 更新时间：2026-07-19
 
 ## 1. 架构边界
