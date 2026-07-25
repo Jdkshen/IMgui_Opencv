@@ -1,6 +1,7 @@
 #include "../Algorithm/MultiColorFinder.h"
 #include "../Algorithm/ThresholdTool.h"
 #include "../Algorithm/YOLODetector.h"
+#include "../Algorithm/OpenCVYoloDetector.h"
 #include "../Algorithm/ITool.h"
 #include "../Core/RecipeManager.h"
 #include "../Core/ImageState.h"
@@ -102,18 +103,15 @@ void Unload()
 
 namespace OpenCVYoloDetector
 {
-float g_OpenCVYoloPreMs = 0.0f;
-float g_OpenCVYoloInfMs = 0.0f;
-float g_OpenCVYoloPostMs = 0.0f;
-float g_OpenCVYoloTotalMs = 0.0f;
-
 bool LoadModel(const std::string&, const std::string&)
 {
     return false;
 }
 
-std::vector<DetectedObject> Detect(const cv::Mat&, float, float, cv::Rect)
+std::vector<DetectedObject> Detect(const cv::Mat&, float, float, cv::Rect, Timing* timing)
 {
+    if (timing)
+        *timing = Timing{};
     return {};
 }
 }

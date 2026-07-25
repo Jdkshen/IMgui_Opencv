@@ -137,8 +137,10 @@
     <ClCompile Include="..\Core\OpenFileDialog.cpp" />
     <ClCompile Include="..\Core\TemplateState.cpp" />
     <ClCompile Include="..\Core\RecipeManager.cpp" />
+    <ClCompile Include="..\Core\RecipeAutosaveService.cpp" />
     <ClCompile Include="..\Core\ResultExporter.cpp" />
     <ClCompile Include="..\Core\InspectionHistory.cpp" />
+    <ClCompile Include="..\Core\SpcDatabase.cpp" />
     <ClCompile Include="..\Core\ResultROIResolver.cpp" />
     <ClCompile Include="..\Core\ROIState.cpp" />
     <ClCompile Include="..\Core\ROIEditorState.cpp" />
@@ -150,6 +152,7 @@
     <ClCompile Include="..\Core\ToolChainValidator.cpp" />
     <ClCompile Include="..\Core\ToolChainPreflight.cpp" />
     <ClCompile Include="..\Core\ToolController.cpp" />
+    <ClCompile Include="..\Core\ToolExecutionGraph.cpp" />
     <ClCompile Include="..\Core\ToolJudgement.cpp" />
     <ClCompile Include="..\Core\ToolExecutor.cpp" />
     <ClCompile Include="..\Core\ToolInstance.cpp" />
@@ -202,6 +205,7 @@
     <ClInclude Include="..\Core\OpenFileDialog.h" />
     <ClInclude Include="..\Core\TemplateState.h" />
     <ClInclude Include="..\Core\RecipeManager.h" />
+    <ClInclude Include="..\Core\RecipeAutosaveService.h" />
     <ClInclude Include="..\Core\ResultExporter.h" />
     <ClInclude Include="..\Core\InspectionHistory.h" />
     <ClInclude Include="..\Core\ResultROIResolver.h" />

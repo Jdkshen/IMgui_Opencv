@@ -1,6 +1,16 @@
 #pragma once
 
 #include <opencv2/core/mat.hpp>
+#include <memory>
+
+struct ImmutableImageFrame
+{
+    std::shared_ptr<const cv::Mat> current;
+    std::shared_ptr<const cv::Mat> original;
+    int version = 0;
+
+    bool valid() const { return current && !current->empty(); }
+};
 
 // =====================================================
 // ImageState — 统一图像状态管理
@@ -16,6 +26,7 @@ namespace ImageState
     int Width();                    // 图像宽度
     int Height();                   // 图像高度
     int Version();                  // 图像版本号（每次 SetImage 递增）
+    ImmutableImageFrame AcquireImmutableFrame(); // 共享只读帧，不复制像素
 
     // ---- 可写引用（供内部模块使用，避免不必要的拷贝） ----
     cv::Mat& CurrentRef();          // 当前图像可写引用（处理管线修改此图像）

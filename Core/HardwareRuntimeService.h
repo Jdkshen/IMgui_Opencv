@@ -41,11 +41,16 @@ struct HardwareCameraConnectionConfig
     std::string sourceName = "industrial-camera";
     int grabTimeoutMs = 250;
     int captureIntervalMs = 33;
+    int orientation = 0;
     bool autoCapture = true;
     bool triggerOnInspection = true;
     bool autoExposure = true;
     double exposure = -6.0;
     double gain = 0.0;
+    bool autoReconnect = true;
+    int reconnectFailureThreshold = 3;
+    int reconnectInitialDelayMs = 250;
+    int reconnectMaxDelayMs = 5000;
 };
 
 struct HardwareOutputConnectionConfig
@@ -55,6 +60,10 @@ struct HardwareOutputConnectionConfig
     HardwareOutputBinding binding;
     bool plcUseHoldingRegister = false;
     bool autoPublish = false;
+    int maxQueueSize = 32;
+    int retryCount = 2;
+    int retryDelayMs = 150;
+    bool reconnectBeforeRetry = true;
 };
 
 struct HardwareRuntimeSnapshot
@@ -68,8 +77,17 @@ struct HardwareRuntimeSnapshot
     bool cameraCapturePending = false;
     bool cameraToolRunPending = false;
     bool cameraTriggerOnInspection = true;
+    bool cameraReconnecting = false;
     bool outputAutoPublish = false;
+    bool outputQueueBusy = false;
     int cameraFrameIndex = 0;
+    int cameraConsecutiveFailures = 0;
+    int cameraReconnectAttempts = 0;
+    int cameraReconnectDelayMs = 0;
+    std::size_t outputQueueDepth = 0;
+    std::uint64_t outputSentCount = 0;
+    std::uint64_t outputFailedCount = 0;
+    std::uint64_t outputDroppedCount = 0;
     DeviceOperationResult lastCameraOperation;
     DeviceOperationResult lastOutputOperation;
 };
@@ -83,6 +101,7 @@ namespace HardwareRuntimeService
     bool CameraAutoCaptureEnabled();
     void SetCameraTriggerOnInspection(bool enabled);
     bool CameraTriggerOnInspectionEnabled();
+    void SetCameraOrientation(int orientation);
     DeviceOperationResult SetCameraControl(CameraControl control, double value);
     void RequestCameraFrame(bool runToolChainAfterCapture = false, bool loop = false);
     void CancelPendingCameraToolRun();
@@ -101,8 +120,10 @@ namespace HardwareRuntimeService
         const HardwareOutputBinding& binding);
 
     ToolResultStatus AggregateInspectionStatus(const std::vector<ToolResult>& results);
+    DeviceOperationResult EnqueueConfiguredStatus(ToolResultStatus status);
     DeviceOperationResult PublishConfiguredStatus(ToolResultStatus status);
     DeviceOperationResult PublishInspectionResults(const std::vector<ToolResult>& results);
+    bool WaitForOutputIdle(int timeoutMs = 3000);
 
     // Called from the UI thread once per frame. Completed camera grabs are published
     // to ImageState here so worker threads never touch rendering/application state.

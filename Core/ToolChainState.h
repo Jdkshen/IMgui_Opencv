@@ -6,6 +6,14 @@
 
 #include "ToolInstance.h"
 
+struct TaskGroupDefinition
+{
+    std::uint64_t id = 0;
+    std::string name;
+    bool enabled = true;
+    std::string imagePath;
+};
+
 // =====================================================
 // ToolChainState — 工具链全局状态管理
 // 管理工具实例列表、当前激活工具、YOLO 实时检测状态
@@ -29,6 +37,7 @@ namespace ToolChainState
     // Core-owned tool-chain edits keep index remapping and dependency cleanup consistent.
     int FirstMovableIndex();
     bool MoveTool(int from, int to);
+    bool MoveToolWithinTaskGroup(int toolIndex, int direction);
     bool RemoveTool(int index);
 
     // ---- 当前激活工具 ----
@@ -56,6 +65,19 @@ namespace ToolChainState
     bool CopyToolToClipboard(int index);
     bool HasToolClipboard();
     bool PasteToolAfter(int index, int* pastedIndex = nullptr);
+    const std::vector<TaskGroupDefinition>& ReadOnlyTaskGroups();
+    int CreateTaskGroup(const std::string& preferredName = {});
+    void ReplaceTaskGroups(std::vector<TaskGroupDefinition> groups);
+    int TaskGroupIndexByName(const std::string& name);
+    bool RenameTaskGroup(int index, const std::string& name);
+    bool MoveTaskGroup(int from, int to);
+    bool RemoveTaskGroup(int index);
+    bool SetTaskGroupEnabled(int index, bool enabled);
+    bool SetTaskGroupImagePath(int index, const std::string& imagePath);
+    bool AssignToolToTaskGroup(int toolIndex, int groupIndex);
+    bool AssignToolToTaskGroupByName(int toolIndex, const std::string& groupName);
+    std::string NextTaskGroupName();
+    constexpr std::size_t MaximumTaskGroups() { return 16; }
     void SetAllEnabled(bool enabled);
     void SetGroupEnabled(const std::string& groupName, bool enabled);
     void SetAllResultLabelsVisible(bool visible);

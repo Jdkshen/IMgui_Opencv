@@ -34,6 +34,7 @@ namespace UI
     void DrawDockSpaceHost();
     bool SaveCurrentRecipe();
     void MarkCurrentRecipeDirty();
+    void MarkCurrentRecipeAssetsDirty();
     void UpdateCurrentRecipeAutoSave();
     bool IsCurrentRecipeDirty();
     const char* CurrentRecipeName();

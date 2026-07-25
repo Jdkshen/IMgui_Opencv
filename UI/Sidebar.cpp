@@ -64,35 +64,33 @@ namespace UI
         ImGui::PopItemWidth();
         ImGui::SetItemTooltip("右键画框时将创建此类型的ROI");
 
-        ROI* selectedROI = ROIState::MutableAt(ROIState::SelectedIndex());
+        const int selectedROIIndex = ROIState::SelectedIndex();
+        const ROI* selectedROI = ROIState::At(selectedROIIndex);
         if (selectedROI && selectedROI->type == ROI_TYPE_RECT)
         {
+            ROI editedROI = *selectedROI;
             ImGui::TextDisabled("矩形角度");
             ImGui::SetNextItemWidth(-52.0f);
-            if (ImGui::DragFloat("##roi_angle", &selectedROI->angle, 0.1f,
+            if (ImGui::DragFloat("##roi_angle", &editedROI.angle, 0.1f,
                                  -180.0f, 180.0f, "%.2f deg"))
             {
-                while (selectedROI->angle > 180.0f) selectedROI->angle -= 360.0f;
-                while (selectedROI->angle <= -180.0f) selectedROI->angle += 360.0f;
+                while (editedROI.angle > 180.0f) editedROI.angle -= 360.0f;
+                while (editedROI.angle <= -180.0f) editedROI.angle += 360.0f;
+                ROIState::Update(selectedROIIndex, editedROI);
                 MarkCurrentRecipeDirty();
             }
             ImGui::SameLine();
             if (ImGui::Button("归零##roi_angle_reset"))
             {
-                selectedROI->angle = 0.0f;
+                editedROI.angle = 0.0f;
+                ROIState::Update(selectedROIIndex, editedROI);
                 MarkCurrentRecipeDirty();
             }
         }
 
         if (ImGui::Button("清除当前类型 ROI", ImVec2(-1, 0)))
         {
-            auto& rois = ROIState::Items();
-            rois.erase(
-                std::remove_if(rois.begin(), rois.end(),
-                               [](const ROI &r)
-                               { return r.type == gCurrentROIType; }),
-                rois.end());
-            ROIState::SetSelectedIndex(-1);
+            ROIState::RemoveByType(gCurrentROIType);
             gActiveHandle = HANDLE_NONE;
             MarkCurrentRecipeDirty();
         }

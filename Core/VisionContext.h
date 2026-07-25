@@ -4,6 +4,8 @@
 #endif
 #include <vector>
 #include <algorithm>
+#include <memory>
+#include <stop_token>
 #include <opencv2/core/mat.hpp>
 #include "ROI.h"
 #include "../Algorithm/ToolResult.h"
@@ -18,6 +20,8 @@ struct VisionContext
     // ---- 输入图像 ----
     cv::Mat image;              // 当前处理图像 (BGR, 曾为 gImage)
     cv::Mat originalImage;      // 原始图像备份 (曾为 gOriginalImage)
+    std::shared_ptr<const cv::Mat> immutableImageOwner;
+    std::shared_ptr<const cv::Mat> immutableOriginalOwner;
 
     // ---- 帧源（统一输入抽象） ----
     FramePacket frame;          // 当前帧（只读，不关心来源）
@@ -25,6 +29,7 @@ struct VisionContext
     // ---- 图像元数据 ----
     int imageVersion = 0;       // 图像版本号（曾为 g_ImageVersion）
     int width = 0, height = 0;  // 图像尺寸
+    std::stop_token stopToken;  // 后台执行取消令牌
 
     // ---- ROI ----
     std::vector<ROI> rois;      // 本次执行的 ROI 快照
@@ -38,6 +43,7 @@ struct VisionContext
 
     // ---- 便捷函数 ----
     bool HasROI() const { return !rois.empty() && selectedROI >= 0 && selectedROI < (int)rois.size(); }
+    bool IsCancellationRequested() const { return stopToken.stop_requested(); }
 
     // 获取激活ROI的包围矩形（所有类型通用）
     cv::Rect GetActiveROIRect() const
@@ -91,6 +97,8 @@ struct VisionContext
     {
         image.release();
         originalImage.release();
+        immutableImageOwner.reset();
+        immutableOriginalOwner.reset();
         frozenTemplate.release();
         rois.clear();
         selectedROI = -1;
@@ -98,6 +106,7 @@ struct VisionContext
         frame.clear();
         imageVersion = 0;
         width = height = 0;
+        stopToken = {};
     }
 };
 

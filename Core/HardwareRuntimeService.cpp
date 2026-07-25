@@ -13,10 +13,13 @@
 #include "VideoCapture.h"
 
 #include <opencv2/core/mat.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -34,6 +37,7 @@ struct PendingCameraFrame
 };
 
 HardwareCameraConnectionConfig s_cameraConfig;
+std::atomic<int> s_cameraOrientation{0};
 HardwareOutputConnectionConfig s_outputConfig;
 HardwareOutputBinding s_outputBinding;
 std::string s_outputAdapterKey;
@@ -55,6 +59,29 @@ int s_cameraFrameIndex = 0;
 int s_cameraScheduledFrameIndex = 0;
 DeviceOperationResult s_lastCameraOperation;
 DeviceOperationResult s_lastOutputOperation;
+int s_cameraConsecutiveFailures = 0;
+int s_cameraReconnectAttempts = 0;
+int s_cameraReconnectDelayMs = 0;
+bool s_cameraReconnecting = false;
+
+struct PendingOutput
+{
+    ToolResultStatus status = ToolResultStatus::Error;
+    HardwareOutputBinding binding;
+    std::uint64_t sequence = 0;
+};
+
+std::thread s_outputWorker;
+std::mutex s_outputWorkerMutex;
+std::mutex s_outputAdapterMutex;
+std::condition_variable s_outputWorkerCondition;
+std::deque<PendingOutput> s_outputQueue;
+bool s_outputWorkerStop = false;
+bool s_outputWorkerBusy = false;
+std::uint64_t s_outputSequence = 0;
+std::uint64_t s_outputSentCount = 0;
+std::uint64_t s_outputFailedCount = 0;
+std::uint64_t s_outputDroppedCount = 0;
 
 DeviceOperationResult NotConnected(const char* name)
 {
@@ -64,12 +91,35 @@ DeviceOperationResult NotConnected(const char* name)
 void PublishFrame(const cv::Mat& frame, const std::string& sourceName,
     int frameIndex, double timestampMs)
 {
-    FrameArchiveService::Enqueue(frame, sourceName, frameIndex, timestampMs);
-    FrameSourceState::SetCurrentFrame(frame, FrameSourceType::Camera,
+    cv::Mat orientedFrame;
+    switch (s_cameraOrientation.load())
+    {
+    case 1:
+        cv::rotate(frame, orientedFrame, cv::ROTATE_90_CLOCKWISE);
+        break;
+    case 2:
+        cv::rotate(frame, orientedFrame, cv::ROTATE_180);
+        break;
+    case 3:
+        cv::rotate(frame, orientedFrame, cv::ROTATE_90_COUNTERCLOCKWISE);
+        break;
+    case 4:
+        cv::flip(frame, orientedFrame, 1);
+        break;
+    case 5:
+        cv::flip(frame, orientedFrame, 0);
+        break;
+    default:
+        break;
+    }
+    const cv::Mat& outputFrame = orientedFrame.empty() ? frame : orientedFrame;
+
+    FrameArchiveService::Enqueue(outputFrame, sourceName, frameIndex, timestampMs);
+    FrameSourceState::SetCurrentFrame(outputFrame, FrameSourceType::Camera,
         sourceName, frameIndex, timestampMs);
 
     cv::Mat rgba;
-    SafeConvertToRGBA(frame, rgba);
+    SafeConvertToRGBA(outputFrame, rgba);
     if (!rgba.empty())
     {
         ImageState::PendingUploadRef() = std::move(rgba);
@@ -81,6 +131,23 @@ double CurrentTimestampMs()
 {
     return std::chrono::duration<double, std::milli>(
         std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+DeviceOperationResult ApplyCameraControls(
+    ICameraAdapter* camera, const HardwareCameraConnectionConfig& config)
+{
+    DeviceOperationResult result = camera->SetControl(
+        CameraControl::AutoExposure, config.autoExposure ? 1.0 : 0.0);
+    if (!config.autoExposure)
+    {
+        camera->SetControl(CameraControl::Exposure, config.exposure);
+        camera->SetControl(CameraControl::Gain, config.gain);
+    }
+    else
+    {
+        camera->SetControl(CameraControl::Gain, config.gain);
+    }
+    return result;
 }
 
 void CameraWorkerLoop(ICameraAdapter* camera)
@@ -133,6 +200,71 @@ void CameraWorkerLoop(ICameraAdapter* camera)
         pending.operation = camera->GrabFrame(pending.frame, timeoutMs);
 
         lock.lock();
+        if (pending.operation.success && !pending.frame.empty())
+        {
+            s_cameraConsecutiveFailures = 0;
+            s_cameraReconnectDelayMs = 0;
+            s_cameraReconnecting = false;
+        }
+        else
+        {
+            ++s_cameraConsecutiveFailures;
+            const int failureThreshold = (std::max)(1,
+                s_cameraConfig.reconnectFailureThreshold);
+            if (s_cameraConfig.autoReconnect &&
+                s_cameraConsecutiveFailures >= failureThreshold)
+            {
+                const int initialDelay = (std::max)(1,
+                    s_cameraConfig.reconnectInitialDelayMs);
+                const int maximumDelay = (std::max)(initialDelay,
+                    s_cameraConfig.reconnectMaxDelayMs);
+                s_cameraReconnectDelayMs = s_cameraReconnectDelayMs <= 0
+                    ? initialDelay
+                    : (std::min)(maximumDelay, s_cameraReconnectDelayMs * 2);
+                const int reconnectDelay = s_cameraReconnectDelayMs;
+                const HardwareCameraConnectionConfig reconnectConfig = s_cameraConfig;
+                s_cameraReconnecting = true;
+                ++s_cameraReconnectAttempts;
+
+                if (s_hasPendingCameraFrame)
+                    s_lastCameraOperation = s_pendingCameraFrame.operation;
+                s_pendingCameraFrame = std::move(pending);
+                s_hasPendingCameraFrame = true;
+                s_cameraWorkerBusy = false;
+
+                const bool stopped = s_cameraWorkerCondition.wait_for(lock,
+                    std::chrono::milliseconds(reconnectDelay), []
+                    {
+                        return s_cameraWorkerStop;
+                    });
+                if (stopped)
+                    break;
+
+                lock.unlock();
+                camera->StopStream();
+                camera->Disconnect();
+                DeviceOperationResult reconnect = camera->Connect(reconnectConfig.endpoint);
+                if (reconnect.success)
+                    reconnect = camera->StartStream();
+                if (reconnect.success)
+                    ApplyCameraControls(camera, reconnectConfig);
+                lock.lock();
+
+                s_cameraReconnecting = false;
+                if (reconnect.success)
+                {
+                    s_cameraConsecutiveFailures = 0;
+                    s_cameraReconnectDelayMs = 0;
+                    s_lastCameraOperation = {true, "工业相机已自动重连"};
+                    s_cameraFrameRequested = true;
+                }
+                else
+                {
+                    s_lastCameraOperation = reconnect;
+                }
+                continue;
+            }
+        }
         s_cameraWorkerBusy = false;
         s_pendingCameraFrame = std::move(pending);
         s_hasPendingCameraFrame = true;
@@ -162,6 +294,7 @@ void StopCameraWorker()
     s_hasPendingCameraFrame = false;
     s_cameraWorkerBusy = false;
     s_cameraWorkerStop = false;
+    s_cameraReconnecting = false;
 }
 
 void StartCameraWorker(ICameraAdapter* camera)
@@ -179,6 +312,87 @@ DeviceOperationResult InvalidConfiguration(std::string message)
 {
     return {false, std::move(message)};
 }
+
+DeviceOperationResult ReconnectOutputAdapter(const PendingOutput& pending)
+{
+    std::lock_guard<std::mutex> adapterLock(s_outputAdapterMutex);
+    IDeviceAdapter* adapter = HardwareAdapterService::Find(pending.binding.adapterKey);
+    if (!adapter)
+        return {false, "未找到设备适配器: " + pending.binding.adapterKey};
+    adapter->Disconnect();
+    return adapter->Connect(s_outputConfig.endpoint);
+}
+
+void OutputWorkerLoop()
+{
+    std::unique_lock<std::mutex> lock(s_outputWorkerMutex);
+    while (!s_outputWorkerStop)
+    {
+        s_outputWorkerCondition.wait(lock, []
+        {
+            return s_outputWorkerStop || !s_outputQueue.empty();
+        });
+        if (s_outputWorkerStop)
+            break;
+
+        PendingOutput pending = std::move(s_outputQueue.front());
+        s_outputQueue.pop_front();
+        s_outputWorkerBusy = true;
+        const int retries = (std::max)(0, s_outputConfig.retryCount);
+        const int retryDelayMs = (std::max)(1, s_outputConfig.retryDelayMs);
+        const bool reconnectBeforeRetry = s_outputConfig.reconnectBeforeRetry;
+        lock.unlock();
+
+        DeviceOperationResult result;
+        for (int attempt = 0; attempt <= retries; ++attempt)
+        {
+            result = HardwareRuntimeService::PublishInspectionStatus(
+                pending.status, pending.binding);
+            if (result.success)
+                break;
+            if (attempt < retries)
+            {
+                if (reconnectBeforeRetry)
+                    ReconnectOutputAdapter(pending);
+                std::this_thread::sleep_for(std::chrono::milliseconds(retryDelayMs));
+            }
+        }
+
+        lock.lock();
+        s_lastOutputOperation = result;
+        if (result.success)
+            ++s_outputSentCount;
+        else
+            ++s_outputFailedCount;
+        s_outputWorkerBusy = false;
+        s_outputWorkerCondition.notify_all();
+    }
+}
+
+void StartOutputWorker()
+{
+    std::lock_guard<std::mutex> lock(s_outputWorkerMutex);
+    if (s_outputWorker.joinable())
+        return;
+    s_outputWorkerStop = false;
+    s_outputWorker = std::thread(OutputWorkerLoop);
+}
+
+void StopOutputWorker(bool clearQueue)
+{
+    {
+        std::lock_guard<std::mutex> lock(s_outputWorkerMutex);
+        s_outputWorkerStop = true;
+        if (clearQueue)
+            s_outputQueue.clear();
+    }
+    s_outputWorkerCondition.notify_all();
+    if (s_outputWorker.joinable())
+        s_outputWorker.join();
+    std::lock_guard<std::mutex> lock(s_outputWorkerMutex);
+    s_outputWorkerStop = false;
+    s_outputWorkerBusy = false;
+}
 }
 
 namespace HardwareRuntimeService
@@ -190,6 +404,11 @@ DeviceOperationResult ConnectCamera(const HardwareCameraConnectionConfig& rawCon
     HardwareCameraConnectionConfig config = rawConfig;
     config.grabTimeoutMs = (std::max)(1, config.grabTimeoutMs);
     config.captureIntervalMs = (std::max)(1, config.captureIntervalMs);
+    config.orientation = std::clamp(config.orientation, 0, 5);
+    config.reconnectFailureThreshold = (std::max)(1, config.reconnectFailureThreshold);
+    config.reconnectInitialDelayMs = (std::max)(1, config.reconnectInitialDelayMs);
+    config.reconnectMaxDelayMs = (std::max)(
+        config.reconnectInitialDelayMs, config.reconnectMaxDelayMs);
     if (config.endpoint.address.empty())
         return s_lastCameraOperation = InvalidConfiguration("工业相机地址为空");
 
@@ -218,26 +437,26 @@ DeviceOperationResult StartCameraCapture(const HardwareCameraConnectionConfig& r
     HardwareCameraConnectionConfig config = rawConfig;
     config.grabTimeoutMs = (std::max)(1, config.grabTimeoutMs);
     config.captureIntervalMs = (std::max)(1, config.captureIntervalMs);
+    config.orientation = std::clamp(config.orientation, 0, 5);
+    config.reconnectFailureThreshold = (std::max)(1, config.reconnectFailureThreshold);
+    config.reconnectInitialDelayMs = (std::max)(1, config.reconnectInitialDelayMs);
+    config.reconnectMaxDelayMs = (std::max)(
+        config.reconnectInitialDelayMs, config.reconnectMaxDelayMs);
     DeviceOperationResult result = camera->StartStream();
     if (!result.success)
         return s_lastCameraOperation = std::move(result);
 
-    const DeviceOperationResult autoExposure = camera->SetControl(
-        CameraControl::AutoExposure, config.autoExposure ? 1.0 : 0.0);
-    if (!config.autoExposure)
-    {
-        camera->SetControl(CameraControl::Exposure, config.exposure);
-        camera->SetControl(CameraControl::Gain, config.gain);
-    }
-    else
-    {
-        camera->SetControl(CameraControl::Gain, config.gain);
-    }
+    const DeviceOperationResult autoExposure = ApplyCameraControls(camera, config);
     if (!autoExposure.success)
         s_lastCameraOperation = autoExposure;
 
     s_cameraConfig = std::move(config);
+    s_cameraOrientation.store(s_cameraConfig.orientation);
     s_cameraFrameIndex = 0;
+    s_cameraConsecutiveFailures = 0;
+    s_cameraReconnectAttempts = 0;
+    s_cameraReconnectDelayMs = 0;
+    s_cameraReconnecting = false;
     {
         std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
         s_cameraAutoCapture = s_cameraConfig.autoCapture;
@@ -284,6 +503,14 @@ bool CameraTriggerOnInspectionEnabled()
     return s_cameraTriggerOnInspection;
 }
 
+void SetCameraOrientation(int orientation)
+{
+    const int normalized = std::clamp(orientation, 0, 5);
+    s_cameraOrientation.store(normalized);
+    std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
+    s_cameraConfig.orientation = normalized;
+}
+
 DeviceOperationResult SetCameraControl(CameraControl control, double value)
 {
     ICameraAdapter* camera = HardwareAdapterService::Camera();
@@ -323,11 +550,15 @@ void CancelPendingCameraToolRun()
 
 DeviceOperationResult ConnectOutput(const HardwareOutputConnectionConfig& rawConfig)
 {
+    StopOutputWorker(true);
     HardwareOutputConnectionConfig config = rawConfig;
     if (config.binding.adapterKey.empty())
         return s_lastOutputOperation = InvalidConfiguration("设备适配器标识为空");
     if (config.endpoint.address.empty())
         return s_lastOutputOperation = InvalidConfiguration("设备地址为空");
+    config.maxQueueSize = (std::max)(1, config.maxQueueSize);
+    config.retryCount = std::clamp(config.retryCount, 0, 10);
+    config.retryDelayMs = (std::max)(1, config.retryDelayMs);
 
     std::unique_ptr<IDeviceAdapter> adapter;
     switch (config.adapterType)
@@ -365,6 +596,7 @@ DeviceOperationResult ConnectOutput(const HardwareOutputConnectionConfig& rawCon
         break;
     }
 
+    std::lock_guard<std::mutex> adapterLock(s_outputAdapterMutex);
     DeviceOperationResult result = adapter->Connect(config.endpoint);
     if (!result.success)
         return s_lastOutputOperation = std::move(result);
@@ -383,11 +615,14 @@ DeviceOperationResult ConnectOutput(const HardwareOutputConnectionConfig& rawCon
     s_lastOutputOperation = {true, result.message.empty()
         ? "硬件输出已连接"
         : std::move(result.message)};
+    StartOutputWorker();
     return s_lastOutputOperation;
 }
 
 void DisconnectOutput()
 {
+    StopOutputWorker(true);
+    std::lock_guard<std::mutex> adapterLock(s_outputAdapterMutex);
     if (!s_outputAdapterKey.empty())
         HardwareAdapterService::Remove(s_outputAdapterKey);
     s_outputAdapterKey.clear();
@@ -400,6 +635,7 @@ void ConfigureOutputBinding(const HardwareOutputBinding& binding, bool autoPubli
     s_outputBinding = binding;
     s_outputAdapterKey = binding.adapterKey;
     s_outputAutoPublish = autoPublish;
+    StartOutputWorker();
 }
 
 void SetOutputAutoPublish(bool enabled)
@@ -436,6 +672,7 @@ DeviceOperationResult GrabCameraFrame(int timeoutMs, const std::string& sourceNa
 DeviceOperationResult PublishInspectionStatus(ToolResultStatus status,
     const HardwareOutputBinding& binding)
 {
+    std::lock_guard<std::mutex> adapterLock(s_outputAdapterMutex);
     IDeviceAdapter* adapter = HardwareAdapterService::Find(binding.adapterKey);
     if (!adapter)
         return {false, "未找到设备适配器: " + binding.adapterKey};
@@ -505,15 +742,47 @@ ToolResultStatus AggregateInspectionStatus(const std::vector<ToolResult>& result
     return hasResult ? aggregate : ToolResultStatus::Error;
 }
 
+DeviceOperationResult EnqueueConfiguredStatus(ToolResultStatus status)
+{
+    StartOutputWorker();
+    std::lock_guard<std::mutex> lock(s_outputWorkerMutex);
+    const std::size_t maximumQueue = static_cast<std::size_t>((std::max)(1,
+        s_outputConfig.maxQueueSize));
+    if (s_outputQueue.size() >= maximumQueue)
+    {
+        s_outputQueue.pop_front();
+        ++s_outputDroppedCount;
+    }
+    PendingOutput pending;
+    pending.status = status;
+    pending.binding = s_outputBinding;
+    pending.sequence = ++s_outputSequence;
+    s_outputQueue.push_back(std::move(pending));
+    s_outputWorkerCondition.notify_one();
+    return {true, "硬件输出已加入发送队列"};
+}
+
 DeviceOperationResult PublishConfiguredStatus(ToolResultStatus status)
 {
-    s_lastOutputOperation = PublishInspectionStatus(status, s_outputBinding);
-    return s_lastOutputOperation;
+    DeviceOperationResult result = PublishInspectionStatus(status, s_outputBinding);
+    std::lock_guard<std::mutex> lock(s_outputWorkerMutex);
+    s_lastOutputOperation = result;
+    return result;
 }
 
 DeviceOperationResult PublishInspectionResults(const std::vector<ToolResult>& results)
 {
     return PublishConfiguredStatus(AggregateInspectionStatus(results));
+}
+
+bool WaitForOutputIdle(int timeoutMs)
+{
+    std::unique_lock<std::mutex> lock(s_outputWorkerMutex);
+    return s_outputWorkerCondition.wait_for(lock,
+        std::chrono::milliseconds((std::max)(1, timeoutMs)), []
+        {
+            return s_outputQueue.empty() && !s_outputWorkerBusy;
+        });
 }
 
 void Tick()
@@ -577,7 +846,7 @@ void Tick()
             loop = s_cameraToolRunLoop;
             s_cameraToolRunLoop = false;
         }
-        ToolController::RequestRunAll(loop, false);
+        ToolController::ResumeRunAfterCamera(loop);
         s_lastCameraOperation.message = "工业相机帧已发布，工具链已开始执行";
     }
 }
@@ -606,17 +875,30 @@ HardwareRuntimeSnapshot Snapshot()
         snapshot.cameraCapturePending = s_cameraWorkerBusy || s_hasPendingCameraFrame;
         snapshot.cameraToolRunPending = s_runToolChainAfterFrameIndex >= 0 ||
             s_cameraToolRunPending;
+        snapshot.cameraReconnecting = s_cameraReconnecting;
+        snapshot.cameraConsecutiveFailures = s_cameraConsecutiveFailures;
+        snapshot.cameraReconnectAttempts = s_cameraReconnectAttempts;
+        snapshot.cameraReconnectDelayMs = s_cameraReconnectDelayMs;
+        snapshot.lastCameraOperation = s_lastCameraOperation;
+    }
+    {
+        std::lock_guard<std::mutex> lock(s_outputWorkerMutex);
+        snapshot.outputQueueBusy = s_outputWorkerBusy;
+        snapshot.outputQueueDepth = s_outputQueue.size();
+        snapshot.outputSentCount = s_outputSentCount;
+        snapshot.outputFailedCount = s_outputFailedCount;
+        snapshot.outputDroppedCount = s_outputDroppedCount;
+        snapshot.lastOutputOperation = s_lastOutputOperation;
     }
     snapshot.outputAutoPublish = s_outputAutoPublish;
     snapshot.cameraFrameIndex = s_cameraFrameIndex;
-    snapshot.lastCameraOperation = s_lastCameraOperation;
-    snapshot.lastOutputOperation = s_lastOutputOperation;
     return snapshot;
 }
 
 void Shutdown()
 {
     StopCameraWorker();
+    StopOutputWorker(true);
     FrameArchiveService::Shutdown();
     HardwareAdapterService::Clear();
     s_outputAdapterKey.clear();

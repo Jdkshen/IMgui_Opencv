@@ -1,5 +1,7 @@
 #include "ROIState.h"
 
+#include <algorithm>
+
 // =====================================================
 // 内部状态（模块私有）
 // =====================================================
@@ -13,19 +15,9 @@ namespace
     int s_selectedROI = -1;      // 当前选中 ROI 索引（-1 = 无选中）
 }
 
-std::vector<ROI>& Items()
-{
-    return s_rois;
-}
-
 const std::vector<ROI>& ReadOnlyItems()
 {
     return s_rois;
-}
-
-int& SelectedIndexRef()
-{
-    return s_selectedROI;
 }
 
 int SelectedIndex()
@@ -43,11 +35,6 @@ bool IsValidIndex(int index)
     return index >= 0 && index < static_cast<int>(s_rois.size());
 }
 
-ROI* MutableAt(int index)
-{
-    return IsValidIndex(index) ? &s_rois[index] : nullptr;
-}
-
 const ROI* At(int index)
 {
     return IsValidIndex(index) ? &s_rois[index] : nullptr;
@@ -62,6 +49,25 @@ int Add(ROI roi, bool select)
     return index;
 }
 
+int Insert(int index, ROI roi, bool select)
+{
+    index = std::clamp(index, 0, static_cast<int>(s_rois.size()));
+    s_rois.insert(s_rois.begin() + index, std::move(roi));
+    if (select)
+        s_selectedROI = index;
+    else if (s_selectedROI >= index)
+        ++s_selectedROI;
+    return index;
+}
+
+bool Update(int index, ROI roi)
+{
+    if (!IsValidIndex(index))
+        return false;
+    s_rois[index] = std::move(roi);
+    return true;
+}
+
 bool RemoveAt(int index)
 {
     if (!IsValidIndex(index))
@@ -73,6 +79,28 @@ bool RemoveAt(int index)
     else if (s_selectedROI > index)
         --s_selectedROI;
     return true;
+}
+
+std::size_t RemoveByType(int type)
+{
+    const std::size_t before = s_rois.size();
+    s_rois.erase(std::remove_if(s_rois.begin(), s_rois.end(),
+        [type](const ROI& roi) { return roi.type == type; }), s_rois.end());
+    s_selectedROI = -1;
+    return before - s_rois.size();
+}
+
+void ReplaceAll(std::vector<ROI> rois, int selectedIndex)
+{
+    s_rois = std::move(rois);
+    s_selectedROI = selectedIndex >= 0 && selectedIndex < static_cast<int>(s_rois.size())
+        ? selectedIndex : -1;
+}
+
+void Clear()
+{
+    s_rois.clear();
+    s_selectedROI = -1;
 }
 
 int FindIndexByRuntimeId(std::uint64_t runtimeId)
@@ -127,7 +155,6 @@ bool HasQueuedRestore()
 
 void ClearInteraction()
 {
-    s_rois.clear();
-    s_selectedROI = -1;
+    Clear();
 }
 }

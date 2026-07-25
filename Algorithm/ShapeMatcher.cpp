@@ -81,7 +81,9 @@ namespace ShapeMatcher
             int k = p.blurSize * 2 + 1;
             if (k < 3)
                 k = 3;
-            cv::GaussianBlur(g, g, cv::Size(k, k), 0);
+            cv::Mat blurred;
+            cv::GaussianBlur(g, blurred, cv::Size(k, k), 0);
+            g = std::move(blurred);
         }
         return g;
     }
@@ -230,7 +232,9 @@ namespace ShapeMatcher
             else
                 roiGray = roi;
             cv::Mat roiBin;
-            cv::GaussianBlur(roiGray, roiGray, cv::Size(5, 5), 0);
+            cv::Mat blurredROI;
+            cv::GaussianBlur(roiGray, blurredROI, cv::Size(5, 5), 0);
+            roiGray = std::move(blurredROI);
             cv::threshold(roiGray, roiBin, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
             std::vector<std::vector<cv::Point>> roiContours;
             cv::findContours(roiBin, roiContours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);

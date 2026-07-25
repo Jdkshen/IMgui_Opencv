@@ -64,6 +64,43 @@ namespace
             target.push_back(sample);
         }
     }
+
+    std::unique_ptr<ITool> CloneToolImpl(const ToolInstance& source)
+    {
+        if (!source.toolImpl)
+            return {};
+        std::unique_ptr<ITool> clone = ITool::Create(source.type);
+        if (clone)
+            clone->Load(source.toolImpl->Save());
+        return clone;
+    }
+}
+
+ToolInstance::ToolInstance(const ToolInstance& other)
+{
+    *this = other;
+}
+
+ToolInstance& ToolInstance::operator=(const ToolInstance& other)
+{
+    if (this == &other)
+        return *this;
+
+    LoadRecipeJson(other.ToRecipeJson());
+    templateImg = other.templateImg.clone();
+    shpTplImage = other.shpTplImage.clone();
+    differenceReferenceImage = other.differenceReferenceImage.clone();
+    mcfRefImage = other.mcfRefImage.clone();
+    toolImpl = CloneToolImpl(other);
+    lastResult = other.lastResult;
+    hasLastResult = other.hasLastResult;
+    parametersDirty = other.parametersDirty;
+    parameterRevision = other.parameterRevision;
+    measureRuntimeROIIds = other.measureRuntimeROIIds;
+    measureCalibrationRmsError = other.measureCalibrationRmsError;
+    measureCalibrationMaxError = other.measureCalibrationMaxError;
+    measureCalibrationFitMessage = other.measureCalibrationFitMessage;
+    return *this;
 }
 
 nlohmann::json ToolInstance::ToRecipeJson() const
@@ -114,32 +151,30 @@ nlohmann::json ToolInstance::ToRecipeJson() const
     SAVE_FIELD(cannyLow);
     SAVE_FIELD(cannyHigh);
     SAVE_FIELD(edgeUseGray);
-    SAVE_FIELD(dbgUseGray);
-    SAVE_FIELD(dbgEnableBlur);
-    SAVE_FIELD(dbgBlurSize);
-    SAVE_FIELD(dbgEnableThresh);
-    SAVE_FIELD(dbgThreshold);
-    SAVE_FIELD(dbgEnableCanny);
-    SAVE_FIELD(dbgCannyLow);
-    SAVE_FIELD(dbgCannyHigh);
-    SAVE_FIELD(blobMinArea);
-    SAVE_FIELD(blobMaxArea);
-    SAVE_FIELD(blobThresholdMode);
-    SAVE_FIELD(blobThreshold);
-    SAVE_FIELD(blobInvert);
-    SAVE_FIELD(blobConnectivity);
-    SAVE_FIELD(blobMinCircularity);
-    SAVE_FIELD(blobMaxCircularity);
-    SAVE_FIELD(blobMinAspectRatio);
-    SAVE_FIELD(blobMaxAspectRatio);
-    SAVE_FIELD(blobShowLabels);
+    result["dbgUseGray"] = threshold.useGray;
+    result["dbgEnableBlur"] = threshold.enableBlur;
+    result["dbgBlurSize"] = threshold.blurSize;
+    result["dbgEnableThresh"] = threshold.enableThreshold;
+    result["dbgThreshold"] = threshold.threshold;
+    result["dbgEnableCanny"] = threshold.enableCanny;
+    result["dbgCannyLow"] = threshold.cannyLow;
+    result["dbgCannyHigh"] = threshold.cannyHigh;
+    result["blobMinArea"] = blob.minArea;
+    result["blobMaxArea"] = blob.maxArea;
+    result["blobThresholdMode"] = blob.thresholdMode;
+    result["blobThreshold"] = blob.threshold;
+    result["blobInvert"] = blob.invert;
+    result["blobConnectivity"] = blob.connectivity;
+    result["blobMinCircularity"] = blob.minCircularity;
+    result["blobMaxCircularity"] = blob.maxCircularity;
+    result["blobMinAspectRatio"] = blob.minAspectRatio;
+    result["blobMaxAspectRatio"] = blob.maxAspectRatio;
     SAVE_FIELD(differenceThreshold);
     SAVE_FIELD(differenceMinArea);
     SAVE_FIELD(differenceBlurSize);
     SAVE_FIELD(differenceMorphKernelSize);
     SAVE_FIELD(differenceMorphIterations);
     SAVE_FIELD(differenceInvert);
-    SAVE_FIELD(differenceShowLabels);
     SAVE_FIELD(yoloModelPath);
     SAVE_FIELD(yoloClassesPath);
     SAVE_FIELD(yoloConfThreshold);
@@ -159,7 +194,6 @@ nlohmann::json ToolInstance::ToRecipeJson() const
     SAVE_FIELD(cntFilterConvex);
     SAVE_FIELD(cntApproxEps);
     SAVE_FIELD(cntLineThick);
-    SAVE_FIELD(cntShowLabels);
     SAVE_FIELD(cntFillContours);
     SAVE_FIELD(cntMatchROI);
     SAVE_FIELD(cntMatchThresh);
@@ -170,7 +204,6 @@ nlohmann::json ToolInstance::ToRecipeJson() const
     SAVE_FIELD(shpShapeScore);
     SAVE_FIELD(shpLineThick);
     SAVE_FIELD(shpMethod);
-    SAVE_FIELD(shpShowLabels);
     SAVE_FIELD(shpMaxResults);
     SAVE_FIELD(shpTplGray);
     SAVE_FIELD(shpTplBinary);
@@ -186,18 +219,17 @@ nlohmann::json ToolInstance::ToRecipeJson() const
     SAVE_FIELD(lineMaxAngle);
     SAVE_FIELD(lineThickness);
     SAVE_FIELD(lineMaxLines);
-    SAVE_FIELD(lineShowLabels);
     SAVE_FIELD(lineUseROI);
-    SAVE_FIELD(morphOpType);
-    SAVE_FIELD(morphKernelSize);
-    SAVE_FIELD(morphKernelShape);
-    SAVE_FIELD(morphIterations);
-    SAVE_FIELD(morphUseGray);
-    SAVE_FIELD(colorSpace);
-    SAVE_FIELD(colorHistBins);
-    SAVE_FIELD(colorShowHist);
-    SAVE_FIELD(colorUseROI);
-    SAVE_FIELD(colorHistHeight);
+    result["morphOpType"] = morphology.operation;
+    result["morphKernelSize"] = morphology.kernelSize;
+    result["morphKernelShape"] = morphology.kernelShape;
+    result["morphIterations"] = morphology.iterations;
+    result["morphUseGray"] = morphology.useGray;
+    result["colorSpace"] = colorAnalysis.colorSpace;
+    result["colorHistBins"] = colorAnalysis.histogramBins;
+    result["colorShowHist"] = colorAnalysis.showHistogram;
+    result["colorUseROI"] = colorAnalysis.useROI;
+    result["colorHistHeight"] = colorAnalysis.histogramHeight;
     SAVE_FIELD(mcfShowPreview);
     SAVE_FIELD(mcfAnchorX);
     SAVE_FIELD(mcfAnchorY);
@@ -232,7 +264,6 @@ nlohmann::json ToolInstance::ToRecipeJson() const
     SAVE_FIELD(qrDetectMulti);
     SAVE_FIELD(qrEnhance);
     SAVE_FIELD(qrMinSize);
-    SAVE_FIELD(qrShowText);
     SAVE_FIELD(qrEngine);
     SAVE_FIELD(qrFormatMask);
     SAVE_FIELD(qrFilterDuplicates);
@@ -322,6 +353,38 @@ nlohmann::json ToolInstance::ToRecipeJson() const
         {"toleranceMinus", measureToleranceMinus}, {"tolerancePlus", measureTolerancePlus},
         {"calibrationSamples", samples}
     };
+    result["settings"] = {
+        {"templateMatch", {
+            {"enableRotation", enableRotation}, {"rotationStart", rotationStart},
+            {"rotationEnd", rotationEnd}, {"rotationStep", rotationStep},
+            {"maxResults", maxResults}, {"matchThreshold", matchThreshold},
+            {"maxImageDim", maxImageDim}, {"nmsThreshold", nmsThreshold},
+            {"searchMode", searchMode}, {"templateGray", tplGray},
+            {"templateBinary", tplBinary}, {"templateBinaryThreshold", tplBinThresh},
+            {"templateEdge", tplEdge}, {"templateEdgeLow", tplEdgeLow},
+            {"templateEdgeHigh", tplEdgeHigh}, {"imageGray", imgUseGray},
+            {"imageThresholdEnabled", imgEnableThreshold},
+            {"imageThreshold", imgThreshold}
+        }},
+        {"yolo", {
+            {"modelPath", yoloModelPath}, {"classesPath", yoloClassesPath},
+            {"confidenceThreshold", yoloConfThreshold},
+            {"nmsThreshold", yoloNmsThreshold}, {"useROI", yoloUseROI},
+            {"useGPU", yoloUseGPU}
+        }},
+        {"ocr", {
+            {"detectionModelPath", ocrDetModelPath},
+            {"detectionParamPath", ocrDetParamPath},
+            {"recognitionModelPath", ocrRecModelPath},
+            {"recognitionParamPath", ocrRecParamPath},
+            {"dictionaryPath", ocrDictionaryPath},
+            {"minimumConfidence", ocrMinConfidence}, {"maximumItems", ocrMaxItems},
+            {"inputSize", ocrInputSize}, {"maximumCandidates", ocrMaxCandidates},
+            {"minimumBoxArea", ocrMinBoxArea}, {"minimumBoxHeight", ocrMinBoxHeight},
+            {"roiPadding", ocrRoiPadding}, {"fastMode", ocrFastMode},
+            {"detectOnly", ocrDetectOnly}, {"useROI", ocrUseROI}
+        }}
+    };
     return result;
 }
 
@@ -372,32 +435,30 @@ void ToolInstance::LoadRecipeJson(const nlohmann::json& source)
     LOAD_FIELD(cannyLow);
     LOAD_FIELD(cannyHigh);
     LOAD_FIELD(edgeUseGray);
-    LOAD_FIELD(dbgUseGray);
-    LOAD_FIELD(dbgEnableBlur);
-    LOAD_FIELD(dbgBlurSize);
-    LOAD_FIELD(dbgEnableThresh);
-    LOAD_FIELD(dbgThreshold);
-    LOAD_FIELD(dbgEnableCanny);
-    LOAD_FIELD(dbgCannyLow);
-    LOAD_FIELD(dbgCannyHigh);
-    LOAD_FIELD(blobMinArea);
-    LOAD_FIELD(blobMaxArea);
-    LOAD_FIELD(blobThresholdMode);
-    LOAD_FIELD(blobThreshold);
-    LOAD_FIELD(blobInvert);
-    LOAD_FIELD(blobConnectivity);
-    LOAD_FIELD(blobMinCircularity);
-    LOAD_FIELD(blobMaxCircularity);
-    LOAD_FIELD(blobMinAspectRatio);
-    LOAD_FIELD(blobMaxAspectRatio);
-    LOAD_FIELD(blobShowLabels);
+    threshold.useGray = source.value("dbgUseGray", threshold.useGray);
+    threshold.enableBlur = source.value("dbgEnableBlur", threshold.enableBlur);
+    threshold.blurSize = source.value("dbgBlurSize", threshold.blurSize);
+    threshold.enableThreshold = source.value("dbgEnableThresh", threshold.enableThreshold);
+    threshold.threshold = source.value("dbgThreshold", threshold.threshold);
+    threshold.enableCanny = source.value("dbgEnableCanny", threshold.enableCanny);
+    threshold.cannyLow = source.value("dbgCannyLow", threshold.cannyLow);
+    threshold.cannyHigh = source.value("dbgCannyHigh", threshold.cannyHigh);
+    blob.minArea = source.value("blobMinArea", blob.minArea);
+    blob.maxArea = source.value("blobMaxArea", blob.maxArea);
+    blob.thresholdMode = source.value("blobThresholdMode", blob.thresholdMode);
+    blob.threshold = source.value("blobThreshold", blob.threshold);
+    blob.invert = source.value("blobInvert", blob.invert);
+    blob.connectivity = source.value("blobConnectivity", blob.connectivity);
+    blob.minCircularity = source.value("blobMinCircularity", blob.minCircularity);
+    blob.maxCircularity = source.value("blobMaxCircularity", blob.maxCircularity);
+    blob.minAspectRatio = source.value("blobMinAspectRatio", blob.minAspectRatio);
+    blob.maxAspectRatio = source.value("blobMaxAspectRatio", blob.maxAspectRatio);
     LOAD_FIELD(differenceThreshold);
     LOAD_FIELD(differenceMinArea);
     LOAD_FIELD(differenceBlurSize);
     LOAD_FIELD(differenceMorphKernelSize);
     LOAD_FIELD(differenceMorphIterations);
     LOAD_FIELD(differenceInvert);
-    LOAD_FIELD(differenceShowLabels);
     LOAD_FIELD(yoloModelPath);
     LOAD_FIELD(yoloClassesPath);
     LOAD_FIELD(yoloConfThreshold);
@@ -417,7 +478,6 @@ void ToolInstance::LoadRecipeJson(const nlohmann::json& source)
     LOAD_FIELD(cntFilterConvex);
     LOAD_FIELD(cntApproxEps);
     LOAD_FIELD(cntLineThick);
-    LOAD_FIELD(cntShowLabels);
     LOAD_FIELD(cntFillContours);
     LOAD_FIELD(cntMatchROI);
     LOAD_FIELD(cntMatchThresh);
@@ -428,7 +488,6 @@ void ToolInstance::LoadRecipeJson(const nlohmann::json& source)
     LOAD_FIELD(shpShapeScore);
     LOAD_FIELD(shpLineThick);
     LOAD_FIELD(shpMethod);
-    LOAD_FIELD(shpShowLabels);
     LOAD_FIELD(shpMaxResults);
     LOAD_FIELD(shpTplGray);
     LOAD_FIELD(shpTplBinary);
@@ -444,18 +503,17 @@ void ToolInstance::LoadRecipeJson(const nlohmann::json& source)
     LOAD_FIELD(lineMaxAngle);
     LOAD_FIELD(lineThickness);
     LOAD_FIELD(lineMaxLines);
-    LOAD_FIELD(lineShowLabels);
     LOAD_FIELD(lineUseROI);
-    LOAD_FIELD(morphOpType);
-    LOAD_FIELD(morphKernelSize);
-    LOAD_FIELD(morphKernelShape);
-    LOAD_FIELD(morphIterations);
-    LOAD_FIELD(morphUseGray);
-    LOAD_FIELD(colorSpace);
-    LOAD_FIELD(colorHistBins);
-    LOAD_FIELD(colorShowHist);
-    LOAD_FIELD(colorUseROI);
-    LOAD_FIELD(colorHistHeight);
+    morphology.operation = source.value("morphOpType", morphology.operation);
+    morphology.kernelSize = source.value("morphKernelSize", morphology.kernelSize);
+    morphology.kernelShape = source.value("morphKernelShape", morphology.kernelShape);
+    morphology.iterations = source.value("morphIterations", morphology.iterations);
+    morphology.useGray = source.value("morphUseGray", morphology.useGray);
+    colorAnalysis.colorSpace = source.value("colorSpace", colorAnalysis.colorSpace);
+    colorAnalysis.histogramBins = source.value("colorHistBins", colorAnalysis.histogramBins);
+    colorAnalysis.showHistogram = source.value("colorShowHist", colorAnalysis.showHistogram);
+    colorAnalysis.useROI = source.value("colorUseROI", colorAnalysis.useROI);
+    colorAnalysis.histogramHeight = source.value("colorHistHeight", colorAnalysis.histogramHeight);
     LOAD_FIELD(mcfShowPreview);
     LOAD_FIELD(mcfAnchorX);
     LOAD_FIELD(mcfAnchorY);
@@ -490,7 +548,6 @@ void ToolInstance::LoadRecipeJson(const nlohmann::json& source)
     LOAD_FIELD(qrDetectMulti);
     LOAD_FIELD(qrEnhance);
     LOAD_FIELD(qrMinSize);
-    LOAD_FIELD(qrShowText);
     LOAD_FIELD(qrEngine);
     LOAD_FIELD(qrFormatMask);
     LOAD_FIELD(qrFilterDuplicates);
@@ -523,12 +580,12 @@ void ToolInstance::LoadRecipeJson(const nlohmann::json& source)
     {
         switch (type)
         {
-        case 2: showResultLabels = blobShowLabels; break;
-        case 5: showResultLabels = cntShowLabels; break;
-        case 6: showResultLabels = shpShowLabels; break;
-        case 7: showResultLabels = lineShowLabels; break;
-        case 14: showResultLabels = qrShowText; break;
-        case 16: showResultLabels = differenceShowLabels; break;
+        case 2: showResultLabels = source.value("blobShowLabels", true); break;
+        case 5: showResultLabels = source.value("cntShowLabels", true); break;
+        case 6: showResultLabels = source.value("shpShowLabels", true); break;
+        case 7: showResultLabels = source.value("lineShowLabels", true); break;
+        case 14: showResultLabels = source.value("qrShowText", true); break;
+        case 16: showResultLabels = source.value("differenceShowLabels", true); break;
         default: break;
         }
     }
@@ -639,11 +696,168 @@ void ToolInstance::LoadRecipeJson(const nlohmann::json& source)
         LoadCalibrationSamples((*measurement)["calibrationSamples"], measureCalibrationSamples);
     else if (source.contains("calibrationSamples"))
         LoadCalibrationSamples(source["calibrationSamples"], measureCalibrationSamples);
+
+    SyncSettingsFromLegacy();
+    if (source.contains("settings") && source["settings"].is_object())
+    {
+        const auto& settings = source["settings"];
+        if (settings.contains("templateMatch") && settings["templateMatch"].is_object())
+        {
+            const auto& value = settings["templateMatch"];
+            templateMatch.enableRotation = value.value("enableRotation", templateMatch.enableRotation);
+            templateMatch.rotationStart = value.value("rotationStart", templateMatch.rotationStart);
+            templateMatch.rotationEnd = value.value("rotationEnd", templateMatch.rotationEnd);
+            templateMatch.rotationStep = value.value("rotationStep", templateMatch.rotationStep);
+            templateMatch.maxResults = value.value("maxResults", templateMatch.maxResults);
+            templateMatch.matchThreshold = value.value("matchThreshold", templateMatch.matchThreshold);
+            templateMatch.maxImageDim = value.value("maxImageDim", templateMatch.maxImageDim);
+            templateMatch.nmsThreshold = value.value("nmsThreshold", templateMatch.nmsThreshold);
+            templateMatch.searchMode = value.value("searchMode", templateMatch.searchMode);
+            templateMatch.templateGray = value.value("templateGray", templateMatch.templateGray);
+            templateMatch.templateBinary = value.value("templateBinary", templateMatch.templateBinary);
+            templateMatch.templateBinaryThreshold = value.value("templateBinaryThreshold", templateMatch.templateBinaryThreshold);
+            templateMatch.templateEdge = value.value("templateEdge", templateMatch.templateEdge);
+            templateMatch.templateEdgeLow = value.value("templateEdgeLow", templateMatch.templateEdgeLow);
+            templateMatch.templateEdgeHigh = value.value("templateEdgeHigh", templateMatch.templateEdgeHigh);
+            templateMatch.imageGray = value.value("imageGray", templateMatch.imageGray);
+            templateMatch.imageThresholdEnabled = value.value("imageThresholdEnabled", templateMatch.imageThresholdEnabled);
+            templateMatch.imageThreshold = value.value("imageThreshold", templateMatch.imageThreshold);
+        }
+        if (settings.contains("yolo") && settings["yolo"].is_object())
+        {
+            const auto& value = settings["yolo"];
+            yolo.modelPath = value.value("modelPath", yolo.modelPath);
+            yolo.classesPath = value.value("classesPath", yolo.classesPath);
+            yolo.confidenceThreshold = value.value("confidenceThreshold", yolo.confidenceThreshold);
+            yolo.nmsThreshold = value.value("nmsThreshold", yolo.nmsThreshold);
+            yolo.useROI = value.value("useROI", yolo.useROI);
+            yolo.useGPU = value.value("useGPU", yolo.useGPU);
+        }
+        if (settings.contains("ocr") && settings["ocr"].is_object())
+        {
+            const auto& value = settings["ocr"];
+            ocr.detectionModelPath = value.value("detectionModelPath", ocr.detectionModelPath);
+            ocr.detectionParamPath = value.value("detectionParamPath", ocr.detectionParamPath);
+            ocr.recognitionModelPath = value.value("recognitionModelPath", ocr.recognitionModelPath);
+            ocr.recognitionParamPath = value.value("recognitionParamPath", ocr.recognitionParamPath);
+            ocr.dictionaryPath = value.value("dictionaryPath", ocr.dictionaryPath);
+            ocr.minimumConfidence = value.value("minimumConfidence", ocr.minimumConfidence);
+            ocr.maximumItems = value.value("maximumItems", ocr.maximumItems);
+            ocr.inputSize = value.value("inputSize", ocr.inputSize);
+            ocr.maximumCandidates = value.value("maximumCandidates", ocr.maximumCandidates);
+            ocr.minimumBoxArea = value.value("minimumBoxArea", ocr.minimumBoxArea);
+            ocr.minimumBoxHeight = value.value("minimumBoxHeight", ocr.minimumBoxHeight);
+            ocr.roiPadding = value.value("roiPadding", ocr.roiPadding);
+            ocr.fastMode = value.value("fastMode", ocr.fastMode);
+            ocr.detectOnly = value.value("detectOnly", ocr.detectOnly);
+            ocr.useROI = value.value("useROI", ocr.useROI);
+        }
+        SyncLegacyFromSettings();
+    }
+}
+
+void ToolInstance::SyncSettingsFromLegacy()
+{
+    templateMatch.enableRotation = enableRotation;
+    templateMatch.rotationStart = rotationStart;
+    templateMatch.rotationEnd = rotationEnd;
+    templateMatch.rotationStep = rotationStep;
+    templateMatch.maxResults = maxResults;
+    templateMatch.matchThreshold = matchThreshold;
+    templateMatch.maxImageDim = maxImageDim;
+    templateMatch.nmsThreshold = nmsThreshold;
+    templateMatch.searchMode = searchMode;
+    templateMatch.templateGray = tplGray;
+    templateMatch.templateBinary = tplBinary;
+    templateMatch.templateBinaryThreshold = tplBinThresh;
+    templateMatch.templateEdge = tplEdge;
+    templateMatch.templateEdgeLow = tplEdgeLow;
+    templateMatch.templateEdgeHigh = tplEdgeHigh;
+    templateMatch.imageGray = imgUseGray;
+    templateMatch.imageThresholdEnabled = imgEnableThreshold;
+    templateMatch.imageThreshold = imgThreshold;
+
+    yolo.modelPath = yoloModelPath;
+    yolo.classesPath = yoloClassesPath;
+    yolo.confidenceThreshold = yoloConfThreshold;
+    yolo.nmsThreshold = yoloNmsThreshold;
+    yolo.useROI = yoloUseROI;
+    yolo.useGPU = yoloUseGPU;
+
+    ocr.detectionModelPath = ocrDetModelPath;
+    ocr.detectionParamPath = ocrDetParamPath;
+    ocr.recognitionModelPath = ocrRecModelPath;
+    ocr.recognitionParamPath = ocrRecParamPath;
+    ocr.dictionaryPath = ocrDictionaryPath;
+    ocr.minimumConfidence = ocrMinConfidence;
+    ocr.maximumItems = ocrMaxItems;
+    ocr.inputSize = ocrInputSize;
+    ocr.maximumCandidates = ocrMaxCandidates;
+    ocr.minimumBoxArea = ocrMinBoxArea;
+    ocr.minimumBoxHeight = ocrMinBoxHeight;
+    ocr.roiPadding = ocrRoiPadding;
+    ocr.fastMode = ocrFastMode;
+    ocr.detectOnly = ocrDetectOnly;
+    ocr.useROI = ocrUseROI;
+}
+
+void ToolInstance::SyncLegacyFromSettings()
+{
+    enableRotation = templateMatch.enableRotation;
+    rotationStart = templateMatch.rotationStart;
+    rotationEnd = templateMatch.rotationEnd;
+    rotationStep = templateMatch.rotationStep;
+    maxResults = templateMatch.maxResults;
+    matchThreshold = templateMatch.matchThreshold;
+    maxImageDim = templateMatch.maxImageDim;
+    nmsThreshold = templateMatch.nmsThreshold;
+    searchMode = templateMatch.searchMode;
+    tplGray = templateMatch.templateGray;
+    tplBinary = templateMatch.templateBinary;
+    tplBinThresh = templateMatch.templateBinaryThreshold;
+    tplEdge = templateMatch.templateEdge;
+    tplEdgeLow = templateMatch.templateEdgeLow;
+    tplEdgeHigh = templateMatch.templateEdgeHigh;
+    imgUseGray = templateMatch.imageGray;
+    imgEnableThreshold = templateMatch.imageThresholdEnabled;
+    imgThreshold = templateMatch.imageThreshold;
+
+    yoloModelPath = yolo.modelPath;
+    yoloClassesPath = yolo.classesPath;
+    yoloConfThreshold = yolo.confidenceThreshold;
+    yoloNmsThreshold = yolo.nmsThreshold;
+    yoloUseROI = yolo.useROI;
+    yoloUseGPU = yolo.useGPU;
+
+    ocrDetModelPath = ocr.detectionModelPath;
+    ocrDetParamPath = ocr.detectionParamPath;
+    ocrRecModelPath = ocr.recognitionModelPath;
+    ocrRecParamPath = ocr.recognitionParamPath;
+    ocrDictionaryPath = ocr.dictionaryPath;
+    ocrMinConfidence = ocr.minimumConfidence;
+    ocrMaxItems = ocr.maximumItems;
+    ocrInputSize = ocr.inputSize;
+    ocrMaxCandidates = ocr.maximumCandidates;
+    ocrMinBoxArea = ocr.minimumBoxArea;
+    ocrMinBoxHeight = ocr.minimumBoxHeight;
+    ocrRoiPadding = ocr.roiPadding;
+    ocrFastMode = ocr.fastMode;
+    ocrDetectOnly = ocr.detectOnly;
+    ocrUseROI = ocr.useROI;
+}
+
+void ToolInstance::MarkParametersChanged()
+{
+    SyncSettingsFromLegacy();
+    parametersDirty = true;
+    ++parameterRevision;
+    if (parameterRevision == 0)
+        parameterRevision = 1;
 }
 
 void ToolInstance::ClearRuntimeState()
 {
-    toolImpl = nullptr;
+    toolImpl.reset();
     lastResult = ToolResult{};
     hasLastResult = false;
     parametersDirty = false;

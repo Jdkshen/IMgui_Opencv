@@ -3,6 +3,7 @@
 #include "ToolROIService.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <optional>
 
 // =====================================================
@@ -13,6 +14,7 @@ namespace ToolChainState
 namespace
 {
     std::vector<ToolInstance> s_tools;       // 工具实例列表
+    std::vector<TaskGroupDefinition> s_taskGroups;
     int s_activeToolIndex = -1;              // 当前激活的工具索引（-1 = 无）
     bool s_yoloLiveDetect = false;           // YOLO 实时检测开关
     int s_yoloLiveInstanceIndex = -1;        // 实时检测使用的工具实例索引
@@ -21,7 +23,39 @@ namespace
     float s_mcfLastTimeMs = 0.0f;
     int s_mcfLastCount = 0;
     std::uint64_t s_nextToolId = 1;
+    std::uint64_t s_nextTaskGroupId = 1;
     std::optional<ToolInstance> s_toolClipboard;
+
+    int TaskGroupIndexByNameInternal(const std::string& name)
+    {
+        for (int index = 0; index < static_cast<int>(s_taskGroups.size()); ++index)
+        {
+            if (s_taskGroups[index].name == name)
+                return index;
+        }
+        return -1;
+    }
+
+    void EnsureTaskGroupIdInternal(TaskGroupDefinition& group)
+    {
+        if (group.id == 0)
+            group.id = s_nextTaskGroupId++;
+        else if (group.id >= s_nextTaskGroupId)
+            s_nextTaskGroupId = group.id + 1;
+    }
+
+    void EnsureTaskGroupsFromToolsInternal()
+    {
+        for (const ToolInstance& tool : s_tools)
+        {
+            if (tool.groupName.empty() || TaskGroupIndexByNameInternal(tool.groupName) >= 0)
+                continue;
+            TaskGroupDefinition group;
+            group.name = tool.groupName;
+            EnsureTaskGroupIdInternal(group);
+            s_taskGroups.push_back(std::move(group));
+        }
+    }
 
     std::uint64_t EnsureToolIdInternal(ToolInstance& tool)
     {
@@ -36,9 +70,9 @@ namespace
     {
         ToolInstance copy = source;
         copy.toolId = 0;
-        copy.toolImpl = nullptr;
         copy.lastResult = ToolResult{};
         copy.hasLastResult = false;
+        copy.parametersDirty = true;
         copy.measureRuntimeROIIds.clear();
         copy.templateImg = source.templateImg.empty() ? cv::Mat() : source.templateImg.clone();
         copy.shpTplImage = source.shpTplImage.empty() ? cv::Mat() : source.shpTplImage.clone();
@@ -124,6 +158,7 @@ int AddTool(ToolInstance tool)
 {
     EnsureToolIdInternal(tool);
     s_tools.push_back(std::move(tool));
+    EnsureTaskGroupsFromToolsInternal();
     return static_cast<int>(s_tools.size()) - 1;
 }
 
@@ -194,6 +229,23 @@ bool MoveTool(int from, int to)
     return true;
 }
 
+bool MoveToolWithinTaskGroup(int toolIndex, int direction)
+{
+    if (toolIndex < 0 || toolIndex >= static_cast<int>(s_tools.size()) || direction == 0)
+        return false;
+
+    const std::string groupName = s_tools[toolIndex].groupName;
+    const int step = direction < 0 ? -1 : 1;
+    for (int candidate = toolIndex + step;
+        candidate >= 0 && candidate < static_cast<int>(s_tools.size());
+        candidate += step)
+    {
+        if (s_tools[candidate].groupName == groupName)
+            return MoveTool(toolIndex, candidate);
+    }
+    return false;
+}
+
 bool RemoveTool(int index)
 {
     if (index < 0 || index >= static_cast<int>(s_tools.size()))
@@ -201,8 +253,6 @@ bool RemoveTool(int index)
 
     ToolAssetService::ForgetTool(s_tools[index].toolId);
     ToolROIService::ForgetTool(s_tools[index].toolId);
-    delete s_tools[index].toolImpl;
-    s_tools[index].toolImpl = nullptr;
     s_tools.erase(s_tools.begin() + index);
     for (ToolInstance& tool : s_tools)
     {
@@ -312,12 +362,8 @@ void ClearTools()
 {
     ToolAssetService::ClearSessions();
     ToolROIService::ClearSessions();
-    for (ToolInstance& tool : s_tools)
-    {
-        delete tool.toolImpl;
-        tool.toolImpl = nullptr;
-    }
     s_tools.clear();
+    s_taskGroups.clear();
     s_activeToolIndex = -1;
     s_yoloLiveDetect = false;
     s_yoloLiveInstanceIndex = -1;
@@ -407,14 +453,176 @@ bool PasteToolAfter(int index, int* pastedIndex)
     return InsertToolClone(index + 1, *s_toolClipboard, pastedIndex);
 }
 
+const std::vector<TaskGroupDefinition>& ReadOnlyTaskGroups()
+{
+    EnsureTaskGroupsFromToolsInternal();
+    for (TaskGroupDefinition& group : s_taskGroups)
+        EnsureTaskGroupIdInternal(group);
+    return s_taskGroups;
+}
+
+std::string NextTaskGroupName()
+{
+    for (int number = 1; number <= 999; ++number)
+    {
+        char name[32]{};
+        std::snprintf(name, sizeof(name), "任务%02d", number);
+        if (TaskGroupIndexByNameInternal(name) < 0)
+            return name;
+    }
+    return "新任务";
+}
+
+int CreateTaskGroup(const std::string& preferredName)
+{
+    EnsureTaskGroupsFromToolsInternal();
+    if (s_taskGroups.size() >= MaximumTaskGroups())
+        return -1;
+
+    std::string name = preferredName.empty() ? NextTaskGroupName() : preferredName;
+    if (name.empty() || TaskGroupIndexByNameInternal(name) >= 0)
+        return -1;
+
+    TaskGroupDefinition group;
+    group.name = std::move(name);
+    EnsureTaskGroupIdInternal(group);
+    s_taskGroups.push_back(std::move(group));
+    return static_cast<int>(s_taskGroups.size()) - 1;
+}
+
+void ReplaceTaskGroups(std::vector<TaskGroupDefinition> groups)
+{
+    s_taskGroups.clear();
+    for (TaskGroupDefinition& group : groups)
+    {
+        if (group.name.empty() || TaskGroupIndexByNameInternal(group.name) >= 0)
+            continue;
+        EnsureTaskGroupIdInternal(group);
+        s_taskGroups.push_back(std::move(group));
+    }
+    EnsureTaskGroupsFromToolsInternal();
+    for (const TaskGroupDefinition& group : s_taskGroups)
+    {
+        if (!group.enabled)
+        {
+            for (ToolInstance& tool : s_tools)
+            {
+                if (tool.groupName == group.name)
+                    tool.enabled = false;
+            }
+        }
+    }
+}
+
+int TaskGroupIndexByName(const std::string& name)
+{
+    EnsureTaskGroupsFromToolsInternal();
+    return TaskGroupIndexByNameInternal(name);
+}
+
+bool RenameTaskGroup(int index, const std::string& name)
+{
+    EnsureTaskGroupsFromToolsInternal();
+    if (index < 0 || index >= static_cast<int>(s_taskGroups.size()) || name.empty())
+        return false;
+    const int duplicate = TaskGroupIndexByNameInternal(name);
+    if (duplicate >= 0 && duplicate != index)
+        return false;
+    const std::string oldName = s_taskGroups[index].name;
+    if (oldName == name)
+        return true;
+    s_taskGroups[index].name = name;
+    for (ToolInstance& tool : s_tools)
+    {
+        if (tool.groupName == oldName)
+            tool.groupName = name;
+    }
+    return true;
+}
+
+bool MoveTaskGroup(int from, int to)
+{
+    EnsureTaskGroupsFromToolsInternal();
+    const int count = static_cast<int>(s_taskGroups.size());
+    if (from < 0 || from >= count || to < 0 || to >= count || from == to)
+        return false;
+    TaskGroupDefinition moved = std::move(s_taskGroups[from]);
+    s_taskGroups.erase(s_taskGroups.begin() + from);
+    s_taskGroups.insert(s_taskGroups.begin() + to, std::move(moved));
+    return true;
+}
+
+bool RemoveTaskGroup(int index)
+{
+    EnsureTaskGroupsFromToolsInternal();
+    if (index < 0 || index >= static_cast<int>(s_taskGroups.size()))
+        return false;
+    const std::string removedName = s_taskGroups[index].name;
+    for (int toolIndex = static_cast<int>(s_tools.size()) - 1;
+        toolIndex >= 0; --toolIndex)
+    {
+        if (s_tools[toolIndex].groupName == removedName)
+            RemoveTool(toolIndex);
+    }
+    s_taskGroups.erase(s_taskGroups.begin() + index);
+    return true;
+}
+
+bool SetTaskGroupEnabled(int index, bool enabled)
+{
+    EnsureTaskGroupsFromToolsInternal();
+    if (index < 0 || index >= static_cast<int>(s_taskGroups.size()))
+        return false;
+    s_taskGroups[index].enabled = enabled;
+    for (ToolInstance& tool : s_tools)
+    {
+        if (tool.groupName == s_taskGroups[index].name)
+            tool.enabled = enabled;
+    }
+    return true;
+}
+
+bool SetTaskGroupImagePath(int index, const std::string& imagePath)
+{
+    EnsureTaskGroupsFromToolsInternal();
+    if (index < 0 || index >= static_cast<int>(s_taskGroups.size()))
+        return false;
+    s_taskGroups[index].imagePath = imagePath;
+    return true;
+}
+
+bool AssignToolToTaskGroup(int toolIndex, int groupIndex)
+{
+    EnsureTaskGroupsFromToolsInternal();
+    if (toolIndex < 0 || toolIndex >= static_cast<int>(s_tools.size()) ||
+        groupIndex < -1 || groupIndex >= static_cast<int>(s_taskGroups.size()))
+        return false;
+    s_tools[toolIndex].groupName = groupIndex >= 0 ? s_taskGroups[groupIndex].name : std::string{};
+    return true;
+}
+
+bool AssignToolToTaskGroupByName(int toolIndex, const std::string& groupName)
+{
+    if (groupName.empty())
+        return AssignToolToTaskGroup(toolIndex, -1);
+    const int groupIndex = TaskGroupIndexByName(groupName);
+    return groupIndex >= 0 && AssignToolToTaskGroup(toolIndex, groupIndex);
+}
+
 void SetAllEnabled(bool enabled)
 {
+    EnsureTaskGroupsFromToolsInternal();
+    for (TaskGroupDefinition& group : s_taskGroups)
+        group.enabled = enabled;
     for (ToolInstance& tool : s_tools)
         tool.enabled = enabled;
 }
 
 void SetGroupEnabled(const std::string& groupName, bool enabled)
 {
+    const int groupIndex = TaskGroupIndexByName(groupName);
+    if (groupIndex >= 0)
+        s_taskGroups[groupIndex].enabled = enabled;
     for (ToolInstance& tool : s_tools)
     {
         if (tool.groupName == groupName)

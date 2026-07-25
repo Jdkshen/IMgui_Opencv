@@ -81,6 +81,7 @@
     <ClInclude Include="Core\CalibrationFitter.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\VideoCapture.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\RecipeManager.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\RecipeAutosaveService.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\FrameNavigation.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\FixtureTransform.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\FrameSourceState.h"><Filter>Core</Filter></ClInclude>
@@ -107,6 +108,9 @@
     <ClInclude Include="Core\RotatedROI.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\GeometryPrimitive.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ToolInstance.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\ToolSettings.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\ToolExecutionGraph.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\SpcDatabase.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ToolAssetService.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ToolROIService.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ToolTypes.h"><Filter>Core</Filter></ClInclude>
@@ -129,6 +133,7 @@
     <ClInclude Include="UI\ROIManager.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="UI\Sidebar.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="UI\StatsWindow.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="UI\RunResultWindow.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="UI\ToolsWindow.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="Algorithm\TemplateMatch.h"><Filter>Algorithm</Filter></ClInclude>
     <ClInclude Include="Algorithm\OpenCVYoloDetector.h"><Filter>Algorithm</Filter></ClInclude>
@@ -166,6 +171,8 @@
     <ClInclude Include="Algorithm\LineDetector.h"><Filter>Algorithm</Filter></ClInclude>
     <ClInclude Include="Algorithm\QRCodeTool.h"><Filter>Algorithm</Filter></ClInclude>
     <ClInclude Include="Renderer\FontManager.h"><Filter>Renderer</Filter></ClInclude>
+    <ClInclude Include="Renderer\PreviewTextureCache.h"><Filter>Renderer</Filter></ClInclude>
+    <ClInclude Include="UI\Tools\BasicToolPanels.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="Log\LogSystem.h"><Filter>Log</Filter></ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -188,6 +195,7 @@
     <ClCompile Include="Core\CalibrationFitter.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\VideoCapture.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\RecipeManager.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\RecipeAutosaveService.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\FrameNavigation.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\FixtureTransform.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\FrameSourceState.cpp"><Filter>Core</Filter></ClCompile>
@@ -215,6 +223,7 @@
     <ClCompile Include="Core\ToolAssetService.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ToolROIService.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ToolController.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\ToolExecutionGraph.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ToolJudgement.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ToolChainState.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ToolChainValidator.cpp"><Filter>Core</Filter></ClCompile>
@@ -231,7 +240,9 @@
     <ClCompile Include="UI\ROIManager.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="UI\Sidebar.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="UI\StatsWindow.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="UI\RunResultWindow.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="UI\ToolsWindow.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="UI\Tools\BasicToolPanels.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="Algorithm\TemplateMatch.cpp"><Filter>Algorithm</Filter></ClCompile>
     <ClCompile Include="Algorithm\OpenCVYoloDetector.cpp"><Filter>Algorithm</Filter></ClCompile>
     <ClCompile Include="Algorithm\YOLODetector.cpp"><Filter>Algorithm</Filter></ClCompile>
@@ -260,6 +271,7 @@
       <Filter>Core</Filter>
     </ClCompile>
     <ClCompile Include="Core\InspectionHistory.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\SpcDatabase.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Algorithm\MultiColorFinder.cpp">
       <Filter>Algorithm</Filter>
     </ClCompile>
@@ -272,6 +284,7 @@
     <ClCompile Include="Algorithm\LineDetector.cpp"><Filter>Algorithm</Filter></ClCompile>
     <ClCompile Include="Algorithm\QRCodeTool.cpp"><Filter>Algorithm</Filter></ClCompile>
     <ClCompile Include="Renderer\FontManager.cpp"><Filter>Renderer</Filter></ClCompile>
+    <ClCompile Include="Renderer\PreviewTextureCache.cpp"><Filter>Renderer</Filter></ClCompile>
     <ClCompile Include="Log\LogSystem.cpp"><Filter>Log</Filter></ClCompile>
   </ItemGroup>
   <ItemGroup>

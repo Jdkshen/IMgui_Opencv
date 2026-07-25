@@ -20,8 +20,7 @@ namespace
 float& gZoom = ImageViewState::Zoom();
 ImVec2& gPan = ImageViewState::Pan();
 ImVec2& imageScreenPos = ImageViewState::ImageScreenPos();
-std::vector<ROI>& s_rois = ROIState::Items();
-int& s_selectedROI = ROIState::SelectedIndexRef();
+const std::vector<ROI>& s_rois = ROIState::ReadOnlyItems();
 }
 
     void BeginROIDrawSequence(std::initializer_list<int> roiTypes)
@@ -232,7 +231,7 @@ int& s_selectedROI = ROIState::SelectedIndexRef();
         // 左键释放：停止拖动/缩放
         if (ImGui::IsMouseReleased(ImGuiMouseButton_Left))
         {
-            if (gActiveHandle != HANDLE_NONE && s_selectedROI >= 0)
+            if (gActiveHandle != HANDLE_NONE && ROIState::SelectedIndex() >= 0)
                 MarkCurrentRecipeDirty();
             gDraggingROI = false;
             gActiveHandle = HANDLE_NONE;
@@ -309,7 +308,7 @@ int& s_selectedROI = ROIState::SelectedIndexRef();
             float dy = mouse.y - sp.y;
             if (sqrtf(dx * dx + dy * dy) < HANDLE_SIZE * 2.0f)
             {
-                s_selectedROI = i;
+                ROIState::SetSelectedIndex(i);
                 gActiveHandle = type;
                 return true;
             }
@@ -319,13 +318,13 @@ int& s_selectedROI = ROIState::SelectedIndexRef();
         // 左键点击：检测是否点击到ROI的控制点或内部区域
         if (canvasHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
         {
-            s_selectedROI = -1;
+            ROIState::SetSelectedIndex(-1);
             gActiveHandle = HANDLE_NONE;
 
             // 先检查当前类型ROI的控制点（8方向+中心）
             for (int i = 0; i < (int)s_rois.size(); i++)
             {
-                auto &roi = s_rois[i];
+                const auto &roi = s_rois[i];
                 if (roi.type != gCurrentROIType)
                     continue;
                 Box box = GetBox(roi);
@@ -353,14 +352,14 @@ int& s_selectedROI = ROIState::SelectedIndexRef();
             }
 
             // 控制点未命中：从后往前检查内部区域 → 直接进入移动模式
-            if (s_selectedROI < 0)
+            if (ROIState::SelectedIndex() < 0)
             {
                 for (int i = (int)s_rois.size() - 1; i >= 0; i--)
                 {
-                    auto &roi = s_rois[i];
+                    const auto &roi = s_rois[i];
                     if (roi.Contains(imageMouse))
                     {
-                        s_selectedROI = i;
+                        ROIState::SetSelectedIndex(i);
                         gActiveHandle = HANDLE_CENTER; // 框内点击 = 直接移动
                         break;
                     }
@@ -369,18 +368,19 @@ int& s_selectedROI = ROIState::SelectedIndexRef();
         }
 
         // Delete键：删除选中的ROI
-        if (canvasHovered && s_selectedROI >= 0 && ImGui::IsKeyPressed(ImGuiKey_Delete))
+        if (canvasHovered && ROIState::SelectedIndex() >= 0 && ImGui::IsKeyPressed(ImGuiKey_Delete))
         {
-            if (ROIState::RemoveAt(s_selectedROI))
+            if (ROIState::RemoveAt(ROIState::SelectedIndex()))
                 MarkCurrentRecipeDirty();
             gActiveHandle = HANDLE_NONE;
             gDraggingROI = false;
         }
 
         // 拖动/缩放：根据当前激活的控制点类型调整ROI
-        if (gActiveHandle != HANDLE_NONE && s_selectedROI >= 0)
+        const int selectedROIIndex = ROIState::SelectedIndex();
+        if (gActiveHandle != HANDLE_NONE && selectedROIIndex >= 0)
         {
-            auto &roi = s_rois[s_selectedROI];
+            ROI roi = s_rois[selectedROIIndex];
 
             if (gActiveHandle == HANDLE_CENTER)
             {
@@ -424,13 +424,14 @@ int& s_selectedROI = ROIState::SelectedIndexRef();
                 }
                 NormalizeROI(roi);
             }
+            ROIState::Update(selectedROIIndex, std::move(roi));
         }
 
         // ===== 绘制所有ROI（按类型区分形状） =====
         for (int i = 0; i < (int)s_rois.size(); i++)
         {
-            auto &roi = s_rois[i];
-            bool selected = (i == s_selectedROI);
+            const auto &roi = s_rois[i];
+            bool selected = (i == ROIState::SelectedIndex());
             ImU32 col = GetROIColor(roi.type, selected);
             float thick = selected ? 2.5f : 2.0f;
 

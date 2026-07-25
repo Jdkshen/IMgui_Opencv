@@ -4,6 +4,7 @@
 #include <opencv2/core/types.hpp>
 
 #include <memory>
+#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -60,7 +61,8 @@ public:
     WindowsPPOCREngine& operator=(const WindowsPPOCREngine&) = delete;
 
     bool Load(const WindowsPPOCRConfig& cfg, std::string* error);
-    bool Recognize(const cv::Mat& bgr, std::vector<PPOCRTextResult>& out, std::string* error);
+    bool Recognize(const cv::Mat& bgr, std::vector<PPOCRTextResult>& out, std::string* error,
+        std::stop_token stopToken = {});
     bool IsReady() const;
     WindowsPPOCRStats LastStats() const;
 

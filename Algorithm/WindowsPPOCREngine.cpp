@@ -429,13 +429,22 @@ cv::Size WindowsPPOCREngine::RecognitionCropSizeForTest(float rectWidth, float r
     return RecognitionCropSize(rectWidth, rectHeight, orientation);
 }
 
-bool WindowsPPOCREngine::Recognize(const cv::Mat& bgr, std::vector<PPOCRTextResult>& out, std::string* error)
+bool WindowsPPOCREngine::Recognize(const cv::Mat& bgr, std::vector<PPOCRTextResult>& out,
+    std::string* error, std::stop_token stopToken)
 {
     const auto totalStart = std::chrono::steady_clock::now();
     impl_->lastStats = {};
     out.clear();
     if (error)
         error->clear();
+    const auto cancelled = [&]()
+    {
+        if (error)
+            *error = "OCR execution cancelled";
+        return false;
+    };
+    if (stopToken.stop_requested())
+        return cancelled();
 
     if (bgr.empty())
     {
@@ -494,6 +503,8 @@ bool WindowsPPOCREngine::Recognize(const cv::Mat& bgr, std::vector<PPOCRTextResu
     const float normVals[3] = {1.0f / 0.229f / 255.0f, 1.0f / 0.224f / 255.0f, 1.0f / 0.225f / 255.0f};
     inPad.substract_mean_normalize(meanVals, normVals);
     const auto preprocessEnd = std::chrono::steady_clock::now();
+    if (stopToken.stop_requested())
+        return cancelled();
 
     const auto detectStart = std::chrono::steady_clock::now();
     ncnn::Extractor detEx = impl_->det.create_extractor();
@@ -506,6 +517,8 @@ bool WindowsPPOCREngine::Recognize(const cv::Mat& bgr, std::vector<PPOCRTextResu
         return false;
     }
     const auto detectEnd = std::chrono::steady_clock::now();
+    if (stopToken.stop_requested())
+        return cancelled();
 
     const auto postStart = std::chrono::steady_clock::now();
     const float denormVals[1] = {255.0f};
@@ -532,6 +545,8 @@ bool WindowsPPOCREngine::Recognize(const cv::Mat& bgr, std::vector<PPOCRTextResu
 
     for (const auto& contour : contours)
     {
+        if (stopToken.stop_requested())
+            return cancelled();
         if (contour.size() <= 2)
             continue;
         const double score = ContourScore(pred, contour);
@@ -610,6 +625,8 @@ bool WindowsPPOCREngine::Recognize(const cv::Mat& bgr, std::vector<PPOCRTextResu
         out.reserve(readable.size());
         for (const OCRObject& object : readable)
         {
+            if (stopToken.stop_requested())
+                return cancelled();
             PPOCRTextResult item;
             item.text = "det";
             item.confidence = object.prob;
@@ -627,6 +644,8 @@ bool WindowsPPOCREngine::Recognize(const cv::Mat& bgr, std::vector<PPOCRTextResu
 
     auto recognizeOne = [&](OCRObject& object)
     {
+        if (stopToken.stop_requested())
+            return;
         cv::Mat roi = RotateCropImage(bgr, object);
         if (roi.empty())
             return;
@@ -641,10 +660,14 @@ bool WindowsPPOCREngine::Recognize(const cv::Mat& bgr, std::vector<PPOCRTextResu
         ncnn::Mat recOut;
         if (recEx.extract(impl_->ppocrv6Mode ? "output" : "out0", recOut) != 0)
             return;
+        if (stopToken.stop_requested())
+            return;
 
         int lastToken = 0;
         for (int i = 0; i < recOut.h; ++i)
         {
+            if (stopToken.stop_requested())
+                return;
             const float* p = recOut.row(i);
             int index = 0;
             float maxScore = -9999.0f;
@@ -679,7 +702,11 @@ bool WindowsPPOCREngine::Recognize(const cv::Mat& bgr, std::vector<PPOCRTextResu
     if (workerCount <= 1)
     {
         for (OCRObject& object : objects)
+        {
+            if (stopToken.stop_requested())
+                break;
             recognizeOne(object);
+        }
     }
     else
     {
@@ -689,12 +716,18 @@ bool WindowsPPOCREngine::Recognize(const cv::Mat& bgr, std::vector<PPOCRTextResu
         {
             workers.emplace_back([&, worker]() {
                 for (size_t i = static_cast<size_t>(worker); i < objects.size(); i += static_cast<size_t>(workerCount))
+                {
+                    if (stopToken.stop_requested())
+                        break;
                     recognizeOne(objects[i]);
+                }
             });
         }
         for (std::thread& worker : workers)
             worker.join();
     }
+    if (stopToken.stop_requested())
+        return cancelled();
     const auto recognizeEnd = std::chrono::steady_clock::now();
     impl_->lastStats.recognizedCandidates = static_cast<int>(objects.size());
 
@@ -702,6 +735,8 @@ bool WindowsPPOCREngine::Recognize(const cv::Mat& bgr, std::vector<PPOCRTextResu
     readable.reserve(objects.size());
     for (const OCRObject& object : objects)
     {
+        if (stopToken.stop_requested())
+            return cancelled();
         if (HasVisibleText(object.text) && AverageScore(object) >= impl_->config.minConfidence)
             readable.push_back(object);
     }
@@ -720,6 +755,8 @@ bool WindowsPPOCREngine::Recognize(const cv::Mat& bgr, std::vector<PPOCRTextResu
     out.reserve(readable.size());
     for (const OCRObject& object : readable)
     {
+        if (stopToken.stop_requested())
+            return cancelled();
         PPOCRTextResult item;
         item.text = object.text;
         item.confidence = AverageScore(object);

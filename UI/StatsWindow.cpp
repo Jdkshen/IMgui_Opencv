@@ -2,6 +2,7 @@
 #include "DockSpaceHost.h"
 #include "../include/imgui/imgui.h"
 #include "../Core/InspectionHistory.h"
+#include "../Core/SpcDatabase.h"
 #include "../Core/OpenFileDialog.h"
 #include "../Core/ThemeManager.h"
 #include "../Log/LogSystem.h"
@@ -50,6 +51,13 @@ void ShowStatsWindow()
         static double tolerancePlus = 0.0;
 
         const std::vector<std::string> measurementNames = InspectionHistory::MeasurementNames();
+        const SpcDatabaseSnapshot database = SpcDatabase::Snapshot();
+        ImGui::TextDisabled("SQLite: %s", database.open ? "已连接" : "不可用");
+        if (!database.path.empty())
+            ImGui::TextWrapped("%s", database.path.c_str());
+        if (!database.lastError.empty())
+            ImGui::TextColored(ImVec4(0.95f, 0.38f, 0.32f, 1.0f),
+                "%s", database.lastError.c_str());
 
         if (measurementNames.empty())
         {

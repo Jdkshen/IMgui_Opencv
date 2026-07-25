@@ -2,6 +2,7 @@
 
 #include <string>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include <opencv2/core/mat.hpp>
@@ -14,6 +15,7 @@
 #include "CalibrationModel.h"
 #include "CalibrationFitter.h"
 #include "ToolJudgement.h"
+#include "ToolSettings.h"
 #include "../Algorithm/ITool.h"
 
 // =====================================================
@@ -21,6 +23,13 @@
 // =====================================================
 struct ToolInstance
 {
+    ToolInstance() = default;
+    ToolInstance(const ToolInstance& other);
+    ToolInstance& operator=(const ToolInstance& other);
+    ToolInstance(ToolInstance&& other) noexcept = default;
+    ToolInstance& operator=(ToolInstance&& other) noexcept = default;
+    ~ToolInstance() = default;
+
     int type = 0;                // 0-17 工具类型，12=原图
     std::uint64_t toolId = 0;    // 稳定实例身份，0 表示尚未分配
     bool enabled = true;         // 工具链执行开关，禁用时保留参数和结果位置
@@ -51,6 +60,7 @@ struct ToolInstance
     std::vector<ROI> searchROIs; // 该实例专属搜索区域
 
     // ---- 旋转/角度参数 ----
+    TemplateMatchSettings templateMatch;
     bool enableRotation = false;
     int rotationStart = -45;
     int rotationEnd = 45;
@@ -81,28 +91,9 @@ struct ToolInstance
     int cannyHigh = 150;
     bool edgeUseGray = false;
 
-    // ---- 阈值调试参数（type==3） ----
-    bool dbgUseGray = false;
-    bool dbgEnableBlur = false;
-    int dbgBlurSize = 5;
-    bool dbgEnableThresh = false;
-    int dbgThreshold = 128;
-    bool dbgEnableCanny = false;
-    int dbgCannyLow = 50;
-    int dbgCannyHigh = 150;
-
-    // ---- Blob分析参数（type==2） ----
-    int blobMinArea = 100;
-    int blobMaxArea = 10000;
-    int blobThresholdMode = 0; // 0=Otsu, 1=手动
-    int blobThreshold = 128;
-    bool blobInvert = false;
-    int blobConnectivity = 8;
-    float blobMinCircularity = 0.0f;
-    float blobMaxCircularity = 1.0f;
-    float blobMinAspectRatio = 0.0f;
-    float blobMaxAspectRatio = 100.0f;
-    bool blobShowLabels = true;
+    // ---- 已拆分的工具参数 ----
+    ThresholdSettings threshold;
+    BlobSettings blob;
 
     // ---- 图像差分参数（type==16） ----
     cv::Mat differenceReferenceImage;
@@ -112,9 +103,9 @@ struct ToolInstance
     int differenceMorphKernelSize = 3;
     int differenceMorphIterations = 1;
     bool differenceInvert = false;
-    bool differenceShowLabels = true;
 
     // ---- YOLO检测参数（type==4） ----
+    YoloSettings yolo;
     std::string yoloModelPath;      // ONNX 模型路径
     std::string yoloClassesPath;    // 类别文件路径
     float yoloConfThreshold = 0.5f; // 置信度阈值
@@ -132,7 +123,7 @@ struct ToolInstance
     bool cntFilterConvex = false;
     float cntApproxEps = 0.02f;
     int cntLineThick = 2;
-    bool cntShowLabels = true, cntFillContours = false;
+    bool cntFillContours = false;
     bool cntMatchROI = false;
     float cntMatchThresh = 0.1f;
 
@@ -141,7 +132,6 @@ struct ToolInstance
     int shpBlurSize = 5, shpTplRetr = 0;
     float shpTplMinArea = 30, shpMinScore = 0.5f, shpShapeScore = 0.1f;
     int shpLineThick = 2, shpMethod = 0;
-    bool shpShowLabels = true;
     int shpMaxResults = 1;
     bool shpTplGray = false, shpTplBinary = false;
     int shpTplBinThresh = 128;
@@ -153,17 +143,11 @@ struct ToolInstance
     int lineCannyLow = 50, lineCannyHigh = 150;
     float lineMinLength = 100, lineMaxGap = 20, lineMinAngle = 0, lineMaxAngle = 180;
     int lineThickness = 2, lineMaxLines = 1;
-    bool lineShowLabels = true, lineUseROI = false;
+    bool lineUseROI = false;
     std::vector<ROI> lineSaveROIs;
 
-    // ---- 形态学工具（type==8） ----
-    int morphOpType = 0, morphKernelSize = 3, morphKernelShape = 0, morphIterations = 1;
-    bool morphUseGray = false;
-
-    // ---- 颜色分析（type==9） ----
-    int colorSpace = 0, colorHistBins = 32;
-    bool colorShowHist = true, colorUseROI = false;
-    int colorHistHeight = 100;
+    MorphologySettings morphology;
+    ColorAnalysisSettings colorAnalysis;
 
     // ---- 多点找色（type==10） ----
     cv::Mat mcfRefImage;            // 参考图
@@ -179,6 +163,7 @@ struct ToolInstance
     int mcfRoiX = 0, mcfRoiY = 0, mcfRoiW = 0, mcfRoiH = 0; // 搜索ROI位置（配方保存）
 
     // ---- OCR文字识别（type==13） ----
+    OCRSettings ocr;
     std::string ocrDetModelPath = "models\\ppocrv6\\PP_OCRv6_tiny_det.ncnn.bin";
     std::string ocrDetParamPath = "models\\ppocrv6\\PP_OCRv6_tiny_det.ncnn.param";
     std::string ocrRecModelPath = "models\\ppocrv6\\PP_OCRv6_tiny_rec.ncnn.bin";
@@ -200,7 +185,6 @@ struct ToolInstance
     bool qrDetectMulti = true;
     bool qrEnhance = true;
     int qrMinSize = 24;
-    bool qrShowText = true;
     int qrEngine = 0; // 0=自动, 1=OpenCV, 2=ZXing-cpp
     std::uint32_t qrFormatMask = BarcodeFormatAll;
     bool qrFilterDuplicates = true;
@@ -238,13 +222,17 @@ struct ToolInstance
     std::vector<GeometryPrimitive> geometryItems;
 
     // ---- 新架构：ITool 接口指针（为空时回退旧逻辑） ----
-    ITool* toolImpl = nullptr;
+    std::unique_ptr<ITool> toolImpl;
     ToolResult lastResult;       // 运行时缓存，不保存到配方
     bool hasLastResult = false;
     bool parametersDirty = false; // UI 参数已变更，上次执行结果可能已过期
+    std::uint64_t parameterRevision = 1; // 运行时参数版本，用于拒绝后台旧结果
 
     nlohmann::json ToRecipeJson() const;
     void LoadRecipeJson(const nlohmann::json& json);
+    void SyncSettingsFromLegacy();
+    void SyncLegacyFromSettings();
+    void MarkParametersChanged();
     void ClearRuntimeState();
 };
 

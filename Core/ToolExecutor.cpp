@@ -328,6 +328,11 @@ public:
     {
         ToolResult result;
         result.toolName = GetName();
+        if (ctx.IsCancellationRequested()) {
+            result.success = false;
+            result.message = "执行已取消";
+            return result;
+        }
         if (modelPath.empty()) {
             result.success = false;
             result.message = "请先选择 ONNX 模型";
@@ -344,8 +349,24 @@ public:
             return result;
         }
 
+        if (ctx.IsCancellationRequested()) {
+            result.success = false;
+            result.message = "执行已取消";
+            return result;
+        }
+
         cv::Rect roi = PrimaryContextRect(ctx);
-        auto objs = OpenCVYoloDetector::Detect(ctx.image, confThreshold, nmsThreshold, roi);
+        OpenCVYoloDetector::Timing backendTiming;
+        auto objs = OpenCVYoloDetector::Detect(ctx.image, confThreshold, nmsThreshold,
+            roi, &backendTiming);
+        result.timing.backendPreprocessMs = backendTiming.preprocessMs;
+        result.timing.backendInferenceMs = backendTiming.inferenceMs;
+        result.timing.backendPostprocessMs = backendTiming.postprocessMs;
+        if (ctx.IsCancellationRequested()) {
+            result.success = false;
+            result.message = "执行已取消";
+            return result;
+        }
         result.success = true;
         for (const auto& o : objs) {
             ToolResult::Detection d;
@@ -372,52 +393,53 @@ static LegacyIToolRegister s_LegacyIToolRegister;
 
 void SyncIToolParams(ToolInstance& it, const VisionContext& context)
 {
+    it.SyncSettingsFromLegacy();
     const int t = it.type;
     if (t == 0) {
-        if (auto* et = dynamic_cast<EdgeTool*>(it.toolImpl)) {
+        if (auto* et = dynamic_cast<EdgeTool*>(it.toolImpl.get())) {
             et->cannyLow = it.cannyLow;
             et->cannyHigh = it.cannyHigh;
             et->useGray = it.edgeUseGray;
         }
     } else if (t == 1) {
-        if (auto* tt = dynamic_cast<TemplateMatchingTool*>(it.toolImpl)) {
-            tt->enableRotation = it.enableRotation;
-            tt->rotationStart = it.rotationStart;
-            tt->rotationEnd = it.rotationEnd;
-            tt->rotationStep = it.rotationStep;
-            tt->maxResults = it.maxResults;
-            tt->matchThreshold = it.matchThreshold;
-            tt->maxImageDim = it.maxImageDim;
-            tt->nmsThreshold = it.nmsThreshold;
-            tt->tplGray = it.tplGray;
-            tt->tplBinary = it.tplBinary;
-            tt->tplBinThresh = it.tplBinThresh;
-            tt->tplEdge = it.tplEdge;
-            tt->tplEdgeLow = it.tplEdgeLow;
-            tt->tplEdgeHigh = it.tplEdgeHigh;
-            tt->imgUseGray = it.imgUseGray;
-            tt->imgEnableThreshold = it.imgEnableThreshold;
-            tt->imgThreshold = it.imgThreshold;
+        if (auto* tt = dynamic_cast<TemplateMatchingTool*>(it.toolImpl.get())) {
+            tt->enableRotation = it.templateMatch.enableRotation;
+            tt->rotationStart = it.templateMatch.rotationStart;
+            tt->rotationEnd = it.templateMatch.rotationEnd;
+            tt->rotationStep = it.templateMatch.rotationStep;
+            tt->maxResults = it.templateMatch.maxResults;
+            tt->matchThreshold = it.templateMatch.matchThreshold;
+            tt->maxImageDim = it.templateMatch.maxImageDim;
+            tt->nmsThreshold = it.templateMatch.nmsThreshold;
+            tt->tplGray = it.templateMatch.templateGray;
+            tt->tplBinary = it.templateMatch.templateBinary;
+            tt->tplBinThresh = it.templateMatch.templateBinaryThreshold;
+            tt->tplEdge = it.templateMatch.templateEdge;
+            tt->tplEdgeLow = it.templateMatch.templateEdgeLow;
+            tt->tplEdgeHigh = it.templateMatch.templateEdgeHigh;
+            tt->imgUseGray = it.templateMatch.imageGray;
+            tt->imgEnableThreshold = it.templateMatch.imageThresholdEnabled;
+            tt->imgThreshold = it.templateMatch.imageThreshold;
             tt->templateImg = it.templateImg;
             tt->useSearchROI = !context.rois.empty();
             tt->searchROIs = context.rois;
         }
     } else if (t == 2) {
-        if (auto* bt = dynamic_cast<BlobTool*>(it.toolImpl)) {
-            bt->minArea = it.blobMinArea;
-            bt->maxArea = it.blobMaxArea;
-            bt->thresholdMode = it.blobThresholdMode;
-            bt->threshold = it.blobThreshold;
-            bt->invert = it.blobInvert;
-            bt->connectivity = it.blobConnectivity;
-            bt->minCircularity = it.blobMinCircularity;
-            bt->maxCircularity = it.blobMaxCircularity;
-            bt->minAspectRatio = it.blobMinAspectRatio;
-            bt->maxAspectRatio = it.blobMaxAspectRatio;
+        if (auto* bt = dynamic_cast<BlobTool*>(it.toolImpl.get())) {
+            bt->minArea = it.blob.minArea;
+            bt->maxArea = it.blob.maxArea;
+            bt->thresholdMode = it.blob.thresholdMode;
+            bt->threshold = it.blob.threshold;
+            bt->invert = it.blob.invert;
+            bt->connectivity = it.blob.connectivity;
+            bt->minCircularity = it.blob.minCircularity;
+            bt->maxCircularity = it.blob.maxCircularity;
+            bt->minAspectRatio = it.blob.minAspectRatio;
+            bt->maxAspectRatio = it.blob.maxAspectRatio;
             bt->showLabels = it.showResultLabels;
         }
     } else if (t == 16) {
-        if (auto* dt = dynamic_cast<DifferenceTool*>(it.toolImpl)) {
+        if (auto* dt = dynamic_cast<DifferenceTool*>(it.toolImpl.get())) {
             dt->referenceImage = it.differenceReferenceImage;
             dt->threshold = it.differenceThreshold;
             dt->minArea = it.differenceMinArea;
@@ -428,27 +450,27 @@ void SyncIToolParams(ToolInstance& it, const VisionContext& context)
             dt->showLabels = it.showResultLabels;
         }
     } else if (t == 3) {
-        if (auto* tt = dynamic_cast<ThresholdITool*>(it.toolImpl)) {
-            tt->useGray = it.dbgUseGray;
-            tt->enableBlur = it.dbgEnableBlur;
-            tt->blurSize = it.dbgBlurSize;
-            tt->enableThreshold = it.dbgEnableThresh;
-            tt->threshold = it.dbgThreshold;
-            tt->enableCanny = it.dbgEnableCanny;
-            tt->cannyLow = it.dbgCannyLow;
-            tt->cannyHigh = it.dbgCannyHigh;
+        if (auto* tt = dynamic_cast<ThresholdITool*>(it.toolImpl.get())) {
+            tt->useGray = it.threshold.useGray;
+            tt->enableBlur = it.threshold.enableBlur;
+            tt->blurSize = it.threshold.blurSize;
+            tt->enableThreshold = it.threshold.enableThreshold;
+            tt->threshold = it.threshold.threshold;
+            tt->enableCanny = it.threshold.enableCanny;
+            tt->cannyLow = it.threshold.cannyLow;
+            tt->cannyHigh = it.threshold.cannyHigh;
         }
     } else if (t == 4) {
-        if (auto* yt = dynamic_cast<YOLOTool*>(it.toolImpl)) {
-            yt->modelPath = it.yoloModelPath;
-            yt->classesPath = it.yoloClassesPath;
-            yt->confThreshold = it.yoloConfThreshold;
-            yt->nmsThreshold = it.yoloNmsThreshold;
+        if (auto* yt = dynamic_cast<YOLOTool*>(it.toolImpl.get())) {
+            yt->modelPath = it.yolo.modelPath;
+            yt->classesPath = it.yolo.classesPath;
+            yt->confThreshold = it.yolo.confidenceThreshold;
+            yt->nmsThreshold = it.yolo.nmsThreshold;
             yt->useROI = !context.rois.empty();
-            yt->useGPU = it.yoloUseGPU;
+            yt->useGPU = it.yolo.useGPU;
         }
     } else if (t == 5) {
-        if (auto* ct = dynamic_cast<ContourTool*>(it.toolImpl)) {
+        if (auto* ct = dynamic_cast<ContourTool*>(it.toolImpl.get())) {
             ct->useGray = it.cntUseGray; ct->blurSize = it.cntBlurSize;
             ct->threshMode = it.cntThreshMode; ct->threshValue = it.cntThreshValue;
             ct->adaptBlock = it.cntAdaptBlock; ct->invert = it.cntInvert;
@@ -460,7 +482,7 @@ void SyncIToolParams(ToolInstance& it, const VisionContext& context)
             ct->matchROI = it.cntMatchROI; ct->matchThresh = it.cntMatchThresh;
         }
     } else if (t == 6) {
-        if (auto* st = dynamic_cast<ShapeTool*>(it.toolImpl)) {
+        if (auto* st = dynamic_cast<ShapeTool*>(it.toolImpl.get())) {
             st->tplImage = it.shpTplImage; st->blurSize = it.shpBlurSize;
             st->tplRetr = it.shpTplRetr; st->tplMinArea = it.shpTplMinArea;
             st->minScore = it.shpMinScore; st->shapeScore = it.shpShapeScore;
@@ -472,7 +494,7 @@ void SyncIToolParams(ToolInstance& it, const VisionContext& context)
             st->tplInvert = it.shpTplInvert;
         }
     } else if (t == 7) {
-        if (auto* lt = dynamic_cast<LineTool*>(it.toolImpl)) {
+        if (auto* lt = dynamic_cast<LineTool*>(it.toolImpl.get())) {
             lt->cannyLow = it.lineCannyLow; lt->cannyHigh = it.lineCannyHigh;
             lt->minLength = it.lineMinLength; lt->maxGap = it.lineMaxGap;
             lt->minAngle = it.lineMinAngle; lt->maxAngle = it.lineMaxAngle;
@@ -480,23 +502,23 @@ void SyncIToolParams(ToolInstance& it, const VisionContext& context)
             lt->showLabels = it.showResultLabels; lt->useROI = !context.rois.empty();
         }
     } else if (t == 8) {
-        if (auto* mt = dynamic_cast<MorphologyITool*>(it.toolImpl)) {
-            mt->params.opType = it.morphOpType;
-            mt->params.kernelSize = it.morphKernelSize;
-            mt->params.kernelShape = it.morphKernelShape;
-            mt->params.iterations = it.morphIterations;
-            mt->params.useGray = it.morphUseGray;
+        if (auto* mt = dynamic_cast<MorphologyITool*>(it.toolImpl.get())) {
+            mt->params.opType = it.morphology.operation;
+            mt->params.kernelSize = it.morphology.kernelSize;
+            mt->params.kernelShape = it.morphology.kernelShape;
+            mt->params.iterations = it.morphology.iterations;
+            mt->params.useGray = it.morphology.useGray;
         }
     } else if (t == 9) {
-        if (auto* ct = dynamic_cast<ColorAnalyzerITool*>(it.toolImpl)) {
-            ct->params.colorSpace = it.colorSpace;
-            ct->params.histBins = it.colorHistBins;
-            ct->params.showHist = it.colorShowHist;
-            ct->params.useROI = it.colorUseROI || !context.rois.empty();
-            ct->params.histHeight = it.colorHistHeight;
+        if (auto* ct = dynamic_cast<ColorAnalyzerITool*>(it.toolImpl.get())) {
+            ct->params.colorSpace = it.colorAnalysis.colorSpace;
+            ct->params.histBins = it.colorAnalysis.histogramBins;
+            ct->params.showHist = it.colorAnalysis.showHistogram;
+            ct->params.useROI = it.colorAnalysis.useROI || !context.rois.empty();
+            ct->params.histHeight = it.colorAnalysis.histogramHeight;
         }
     } else if (t == 10) {
-        if (auto* mf = dynamic_cast<MultiColorFinder*>(it.toolImpl)) {
+        if (auto* mf = dynamic_cast<MultiColorFinder*>(it.toolImpl.get())) {
             mf->refImage = it.mcfRefImage;
             mf->refAnchorX = it.mcfAnchorX;
             mf->refAnchorY = it.mcfAnchorY;
@@ -510,32 +532,32 @@ void SyncIToolParams(ToolInstance& it, const VisionContext& context)
             mf->crossThick = it.mcfCrossThick;
         }
     } else if (t == 11) {
-        if (auto* yt = dynamic_cast<OpenCVYoloITool*>(it.toolImpl)) {
-            yt->modelPath = it.yoloModelPath;
-            yt->classesPath = it.yoloClassesPath;
-            yt->confThreshold = it.yoloConfThreshold;
-            yt->nmsThreshold = it.yoloNmsThreshold;
+        if (auto* yt = dynamic_cast<OpenCVYoloITool*>(it.toolImpl.get())) {
+            yt->modelPath = it.yolo.modelPath;
+            yt->classesPath = it.yolo.classesPath;
+            yt->confThreshold = it.yolo.confidenceThreshold;
+            yt->nmsThreshold = it.yolo.nmsThreshold;
         }
     } else if (t == 13) {
-        if (auto* ot = dynamic_cast<OCRTool*>(it.toolImpl)) {
-            ot->detModelPath = it.ocrDetModelPath;
-            ot->detParamPath = it.ocrDetParamPath;
-            ot->recModelPath = it.ocrRecModelPath;
-            ot->recParamPath = it.ocrRecParamPath;
-            ot->dictionaryPath = it.ocrDictionaryPath;
-            ot->minConfidence = it.ocrMinConfidence;
-            ot->maxItems = it.ocrMaxItems;
-            ot->inputSize = it.ocrInputSize;
-            ot->maxCandidates = it.ocrMaxCandidates;
-            ot->minBoxArea = it.ocrMinBoxArea;
-            ot->minBoxHeight = it.ocrMinBoxHeight;
-            ot->roiPadding = it.ocrRoiPadding;
-            ot->fastMode = it.ocrFastMode;
-            ot->detectOnly = it.ocrDetectOnly;
-            ot->useROI = it.ocrUseROI || !context.rois.empty();
+        if (auto* ot = dynamic_cast<OCRTool*>(it.toolImpl.get())) {
+            ot->detModelPath = it.ocr.detectionModelPath;
+            ot->detParamPath = it.ocr.detectionParamPath;
+            ot->recModelPath = it.ocr.recognitionModelPath;
+            ot->recParamPath = it.ocr.recognitionParamPath;
+            ot->dictionaryPath = it.ocr.dictionaryPath;
+            ot->minConfidence = it.ocr.minimumConfidence;
+            ot->maxItems = it.ocr.maximumItems;
+            ot->inputSize = it.ocr.inputSize;
+            ot->maxCandidates = it.ocr.maximumCandidates;
+            ot->minBoxArea = it.ocr.minimumBoxArea;
+            ot->minBoxHeight = it.ocr.minimumBoxHeight;
+            ot->roiPadding = it.ocr.roiPadding;
+            ot->fastMode = it.ocr.fastMode;
+            ot->detectOnly = it.ocr.detectOnly;
+            ot->useROI = it.ocr.useROI || !context.rois.empty();
         }
     } else if (t == 14) {
-        if (auto* qt = dynamic_cast<QRCodeTool*>(it.toolImpl)) {
+        if (auto* qt = dynamic_cast<QRCodeTool*>(it.toolImpl.get())) {
             qt->useROI = it.qrUseROI || !context.rois.empty();
             qt->detectMulti = it.qrDetectMulti;
             qt->enhance = it.qrEnhance;
@@ -546,7 +568,7 @@ void SyncIToolParams(ToolInstance& it, const VisionContext& context)
             qt->filterDuplicates = it.qrFilterDuplicates;
         }
     } else if (t == 15) {
-        if (auto* mt = dynamic_cast<MeasurementTool*>(it.toolImpl)) {
+        if (auto* mt = dynamic_cast<MeasurementTool*>(it.toolImpl.get())) {
             mt->mode = it.measureMode;
             mt->caliperCount = it.measureCaliperCount;
             mt->caliper.searchLength = it.measureSearchLength;
@@ -570,7 +592,7 @@ void SyncIToolParams(ToolInstance& it, const VisionContext& context)
             mt->tolerancePlus = it.measureTolerancePlus;
         }
     } else if (t == 17) {
-        if (auto* geometry = dynamic_cast<GeometryDrawTool*>(it.toolImpl))
+        if (auto* geometry = dynamic_cast<GeometryDrawTool*>(it.toolImpl.get()))
             geometry->primitives = it.geometryItems;
     }
 }
@@ -613,10 +635,10 @@ void PublishResult(int type, ToolResult result, float ms)
             "%s: %zu detections, total %.3f ms | pre %.3f infer %.3f post %.3f",
             result.toolName.c_str(),
             result.detections.size(),
-            OpenCVYoloDetector::g_OpenCVYoloTotalMs,
-            OpenCVYoloDetector::g_OpenCVYoloPreMs,
-            OpenCVYoloDetector::g_OpenCVYoloInfMs,
-            OpenCVYoloDetector::g_OpenCVYoloPostMs);
+            result.timing.executeMs,
+            result.timing.backendPreprocessMs,
+            result.timing.backendInferenceMs,
+            result.timing.backendPostprocessMs);
     } else if (type == 13) {
         LogSystem::Add(result.success ? LOG_INFO : LOG_WARN, ImVec4(0, 1, 0.5f, 1),
             "%s: %zu texts, %.3f ms%s%s",
@@ -685,20 +707,212 @@ void LogToolTimings(const ToolInstance& it, const ToolRunTimings& timings)
 namespace ToolExecutor
 {
 
-bool RunViaIToolInternal(ToolInstance& it, VisionContext& ctx, ToolRunTimings* timings = nullptr)
+bool PrepareDetached(const ToolInstance& source, const cv::Mat& input,
+    int sourceToolIndex, ToolInstance& toolSnapshot, VisionContext& context)
 {
-    if (ctx.image.empty()) {
-        LogSystem::Add(LOG_WARN, "Please load an image first");
+    if (input.empty())
         return false;
+
+    toolSnapshot = source;
+    context = VisionContext{};
+    const ImmutableImageFrame frame = ImageState::AcquireImmutableFrame();
+    if (frame.current && input.data == frame.current->data)
+        context.immutableImageOwner = frame.current;
+    else if (frame.original && input.data == frame.original->data)
+        context.immutableImageOwner = frame.original;
+    else
+        context.immutableImageOwner = std::make_shared<const cv::Mat>(input);
+    context.image = *context.immutableImageOwner;
+
+    context.immutableOriginalOwner = frame.original
+        ? frame.original : context.immutableImageOwner;
+    context.originalImage = *context.immutableOriginalOwner;
+    context.frame.original = context.originalImage;
+    context.width = context.image.cols;
+    context.height = context.image.rows;
+    context.imageVersion = frame.version;
+    context.rois = SelectSearchROIs(source);
+
+    const auto& tools = ToolChainState::ReadOnlyTools();
+    if (source.resultRoiMode != static_cast<int>(ResultROIMode::Disabled))
+    {
+        const int upstreamIndex = ResolveToolSourceIndex(
+            tools, source.resultRoiSourceTool, source.resultRoiSourceToolId);
+        if (upstreamIndex < 0 || upstreamIndex == sourceToolIndex ||
+            !tools[upstreamIndex].hasLastResult)
+        {
+            return false;
+        }
+
+        ResultROIRequest request;
+        request.mode = static_cast<ResultROIMode>(std::clamp(source.resultRoiMode, 0, 2));
+        request.resultIndex = (std::max)(0, source.resultRoiIndex);
+        request.missingPolicy = static_cast<MissingResultPolicy>(
+            std::clamp(source.resultRoiMissingPolicy, 0, 1));
+        request.category = source.resultRoiCategory;
+        request.classId = source.resultRoiClassId;
+        request.minScore = source.resultRoiMinScore;
+        request.minArea = source.resultRoiMinArea;
+        request.sortMode = source.resultRoiSortMode;
+        request.sortDescending = source.resultRoiSortDescending;
+        ResultROIResolution resolution = ResultROIResolver::Resolve(
+            tools[upstreamIndex].lastResult, request, context.image.size());
+        if (!resolution.available)
+            return false;
+        context.rois = std::move(resolution.rois);
     }
 
-    const int t = it.type;
-    if (!it.toolImpl) {
-        it.toolImpl = ITool::Create(t).release();
+    if (source.fixture.enabled)
+    {
+        const int upstreamIndex = ResolveToolSourceIndex(
+            tools, source.fixture.sourceToolIndex, source.fixture.sourceToolId);
+        FixturePose currentPose;
+        if (upstreamIndex < 0 || upstreamIndex == sourceToolIndex ||
+            !tools[upstreamIndex].hasLastResult ||
+            !FixtureTransform::TryExtractPose(tools[upstreamIndex].lastResult,
+                (std::max)(0, source.fixture.resultIndex), currentPose))
+        {
+            return false;
+        }
+
+        FixturePose referencePose;
+        referencePose.valid = true;
+        referencePose.origin = source.fixture.referenceOrigin;
+        referencePose.angleDegrees = source.fixture.referenceAngleDegrees;
+        context.rois = FixtureTransform::TransformROIs(
+            context.rois, referencePose, currentPose);
     }
-    if (!it.toolImpl) {
+
+    context.selectedROI = SelectROIIndex(context.rois);
+    context.frozenTemplate = TemplateState::FrozenTemplate().empty()
+        ? cv::Mat() : TemplateState::FrozenTemplate().clone();
+    return true;
+}
+
+bool PrepareDetachedSnapshot(const ToolInstance& source,
+    const cv::Mat& input, const cv::Mat& original, int sourceToolIndex,
+    const std::vector<ToolInstance>& taskTools,
+    const std::vector<int>& taskToolIndices,
+    const std::vector<ROI>& visibleROIs, int selectedROI,
+    const cv::Mat& frozenTemplate, ToolInstance& toolSnapshot,
+    VisionContext& context)
+{
+    if (input.empty() || taskTools.size() != taskToolIndices.size())
         return false;
+
+    toolSnapshot = source;
+    context = VisionContext{};
+    context.immutableImageOwner = std::make_shared<const cv::Mat>(input);
+    context.image = *context.immutableImageOwner;
+    context.immutableOriginalOwner = std::make_shared<const cv::Mat>(
+        original.empty() ? input : original);
+    context.originalImage = *context.immutableOriginalOwner;
+    context.frame.original = context.originalImage;
+    context.width = context.image.cols;
+    context.height = context.image.rows;
+    context.imageVersion = 0;
+
+    if (source.searchROIs.empty())
+    {
+        context.rois = visibleROIs;
     }
+    else
+    {
+        context.rois = source.searchROIs;
+        for (ROI& configured : context.rois)
+        {
+            if (configured.runtimeId == 0)
+                continue;
+            const auto current = std::find_if(visibleROIs.begin(), visibleROIs.end(),
+                [&configured](const ROI& visible)
+                {
+                    return visible.runtimeId == configured.runtimeId;
+                });
+            if (current != visibleROIs.end())
+                configured = *current;
+        }
+    }
+
+    auto resolveTaskSource = [&](int legacyIndex, std::uint64_t stableId) -> int
+    {
+        for (int index = 0; index < static_cast<int>(taskTools.size()); ++index)
+        {
+            if ((stableId != 0 && taskTools[index].toolId == stableId) ||
+                (stableId == 0 && taskToolIndices[index] == legacyIndex))
+            {
+                return index;
+            }
+        }
+        return -1;
+    };
+
+    if (source.resultRoiMode != static_cast<int>(ResultROIMode::Disabled))
+    {
+        const int upstreamIndex = resolveTaskSource(
+            source.resultRoiSourceTool, source.resultRoiSourceToolId);
+        if (upstreamIndex < 0 || taskToolIndices[upstreamIndex] == sourceToolIndex ||
+            !taskTools[upstreamIndex].hasLastResult)
+        {
+            return false;
+        }
+
+        ResultROIRequest request;
+        request.mode = static_cast<ResultROIMode>(std::clamp(source.resultRoiMode, 0, 2));
+        request.resultIndex = (std::max)(0, source.resultRoiIndex);
+        request.missingPolicy = static_cast<MissingResultPolicy>(
+            std::clamp(source.resultRoiMissingPolicy, 0, 1));
+        request.category = source.resultRoiCategory;
+        request.classId = source.resultRoiClassId;
+        request.minScore = source.resultRoiMinScore;
+        request.minArea = source.resultRoiMinArea;
+        request.sortMode = source.resultRoiSortMode;
+        request.sortDescending = source.resultRoiSortDescending;
+        ResultROIResolution resolution = ResultROIResolver::Resolve(
+            taskTools[upstreamIndex].lastResult, request, context.image.size());
+        if (!resolution.available)
+            return false;
+        context.rois = std::move(resolution.rois);
+    }
+
+    if (source.fixture.enabled)
+    {
+        const int upstreamIndex = resolveTaskSource(
+            source.fixture.sourceToolIndex, source.fixture.sourceToolId);
+        FixturePose currentPose;
+        if (upstreamIndex < 0 || taskToolIndices[upstreamIndex] == sourceToolIndex ||
+            !taskTools[upstreamIndex].hasLastResult ||
+            !FixtureTransform::TryExtractPose(taskTools[upstreamIndex].lastResult,
+                (std::max)(0, source.fixture.resultIndex), currentPose))
+        {
+            return false;
+        }
+        FixturePose referencePose;
+        referencePose.valid = true;
+        referencePose.origin = source.fixture.referenceOrigin;
+        referencePose.angleDegrees = source.fixture.referenceAngleDegrees;
+        context.rois = FixtureTransform::TransformROIs(
+            context.rois, referencePose, currentPose);
+    }
+
+    context.selectedROI = context.rois.empty() ? -1 :
+        (selectedROI >= 0 && selectedROI < static_cast<int>(context.rois.size())
+            ? selectedROI : 0);
+    context.frozenTemplate = frozenTemplate;
+    return true;
+}
+
+bool ExecuteDetached(ToolInstance& it, VisionContext& ctx, int sourceToolIndex,
+    ToolExecutionOutput& output)
+{
+    output = ToolExecutionOutput{};
+    if (ctx.image.empty() || ctx.IsCancellationRequested())
+        return false;
+
+    const int t = it.type;
+    if (!it.toolImpl)
+        it.toolImpl = ITool::Create(t);
+    if (!it.toolImpl)
+        return false;
 
     auto tPrepare0 = std::chrono::steady_clock::now();
     VisionContext rotatedContext;
@@ -741,9 +955,11 @@ bool RunViaIToolInternal(ToolInstance& it, VisionContext& ctx, ToolRunTimings* t
     }
 
     SyncIToolParams(it, *executionContext);
+    if (executionContext->IsCancellationRequested())
+        return false;
     if (executionContext == &rotatedContext && it.type == 16)
     {
-        if (auto* difference = dynamic_cast<DifferenceTool*>(it.toolImpl))
+        if (auto* difference = dynamic_cast<DifferenceTool*>(it.toolImpl.get()))
         {
             RotatedROI::Transform referenceTransform;
             cv::Mat rotatedReference;
@@ -754,15 +970,13 @@ bool RunViaIToolInternal(ToolInstance& it, VisionContext& ctx, ToolRunTimings* t
             }
         }
     }
-    if (t == 6) {
-        executionContext->frozenTemplate = TemplateState::FrozenTemplate();
-    }
     auto tPrepare1 = std::chrono::steady_clock::now();
-    if (timings)
-        timings->prepareMs += std::chrono::duration<float, std::milli>(tPrepare1 - tPrepare0).count();
+    output.prepareMs = std::chrono::duration<float, std::milli>(tPrepare1 - tPrepare0).count();
 
     auto t0 = std::chrono::steady_clock::now();
     auto result = it.toolImpl->Execute(*executionContext);
+    if (executionContext->IsCancellationRequested())
+        return false;
     if (executionContext == &rotatedContext)
     {
         RotatedROI::RestoreResult(result, rotatedTransform);
@@ -779,33 +993,90 @@ bool RunViaIToolInternal(ToolInstance& it, VisionContext& ctx, ToolRunTimings* t
     ApplyMissingModelSkipPolicy(it, result);
     auto t1 = std::chrono::steady_clock::now();
     const float ms = std::chrono::duration<float, std::milli>(t1 - t0).count();
-    if (timings)
-        timings->executeMs += ms;
-
-    auto tPublish0 = std::chrono::steady_clock::now();
+    output.executeMs = ms;
+    result.timing.prepareMs = output.prepareMs;
+    result.timing.executeMs = output.executeMs;
+    result.timing.wallMs = output.prepareMs + output.executeMs;
     const std::string baseName = result.toolName.empty() ? it.toolImpl->GetName() : result.toolName;
     result.toolName = ToolInstanceLogName(baseName.c_str(), it.label);
-    result.sourceToolIndex = FindToolInstanceIndex(it);
+    result.sourceToolIndex = sourceToolIndex;
     result.sourceToolId = it.toolId;
     const std::string overlayLabel = (it.label == baseName) ? std::string() : it.label;
     ApplyToolLabelToOverlayItems(result, overlayLabel);
     ToolJudgement::Evaluate(result, it.judgement);
-    InspectionHistory::AddResult(result.sourceToolId, result.toolName, result);
+    output.result = std::move(result);
+    output.completed = true;
+    return true;
+}
 
-    const bool dirty = !result.debugImage.empty();
-    if (dirty) {
-        ImageState::SetDebugImage(result.debugImage);
-        result.debugImage.release();
+bool PublishDetached(ToolInstance& it, ToolExecutionOutput&& output)
+{
+    if (!output.completed)
+        return false;
+
+    auto tPublish0 = std::chrono::steady_clock::now();
+    const bool dirty = !output.result.debugImage.empty();
+    if (dirty)
+    {
+        ImageState::SetDebugImage(output.result.debugImage);
+        output.result.debugImage.release();
     }
 
-    it.lastResult = result;
+    const auto tPublishReady = std::chrono::steady_clock::now();
+    output.publishMs = std::chrono::duration<float, std::milli>(
+        tPublishReady - tPublish0).count();
+    output.result.timing.publishMs = output.publishMs;
+    output.result.timing.wallMs = output.prepareMs + output.executeMs + output.publishMs;
+
+    if (!output.cacheHit)
+    {
+        InspectionHistory::AddResult(
+            output.result.sourceToolId, output.result.toolName, output.result);
+    }
+
+    it.lastResult = output.result;
     it.hasLastResult = true;
     it.parametersDirty = false;
 
-    PublishResult(t, std::move(result), ms);
-    auto tPublish1 = std::chrono::steady_clock::now();
+    if (output.cacheHit)
+    {
+        LogSystem::Add(LOG_INFO, ImVec4(0.55f, 0.8f, 1.0f, 1.0f),
+            "%s: 缓存命中", output.result.toolName.c_str());
+        PublishUnifiedResult(std::move(output.result));
+    }
+    else
+    {
+        PublishResult(it.type, std::move(output.result), output.executeMs);
+    }
+    ToolRunTimings timings;
+    timings.prepareMs = output.prepareMs;
+    timings.executeMs = output.executeMs;
+    timings.publishMs = output.publishMs;
+    LogToolTimings(it, timings);
+    return dirty;
+}
+
+bool RunViaIToolInternal(ToolInstance& it, VisionContext& ctx, ToolRunTimings* timings = nullptr)
+{
+    if (ctx.image.empty())
+    {
+        LogSystem::Add(LOG_WARN, "Please load an image first");
+        return false;
+    }
+
+    if (it.type == 6 && ctx.frozenTemplate.empty())
+        ctx.frozenTemplate = TemplateState::FrozenTemplate();
+
+    ToolExecutionOutput output;
+    if (!ExecuteDetached(it, ctx, FindToolInstanceIndex(it), output))
+        return false;
+
     if (timings)
-        timings->publishMs += std::chrono::duration<float, std::milli>(tPublish1 - tPublish0).count();
+    {
+        timings->prepareMs += output.prepareMs;
+        timings->executeMs += output.executeMs;
+    }
+    const bool dirty = PublishDetached(it, std::move(output));
     return dirty;
 }
 
@@ -948,7 +1219,6 @@ bool RunViaITool(ToolInstance& it)
     timings.prepareMs += std::chrono::duration<float, std::milli>(tPrepare1 - tPrepare0).count();
 
     const bool dirty = RunViaIToolInternal(it, gContext, &timings);
-    LogToolTimings(it, timings);
     return dirty;
 }
 
@@ -956,7 +1226,6 @@ bool RunViaITool(ToolInstance& it, VisionContext& ctx)
 {
     ToolRunTimings timings;
     const bool dirty = RunViaIToolInternal(it, ctx, &timings);
-    LogToolTimings(it, timings);
     return dirty;
 }
 

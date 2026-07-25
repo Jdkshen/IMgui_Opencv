@@ -150,6 +150,7 @@ void DrawHardwarePanel()
     static char cameraAddress[256] = "0";
     static char cameraSourceName[96] = "industrial-camera";
     static int cameraBackend = 0;
+    static int cameraOrientation = 0;
     static int cameraTimeoutMs = 250;
     static int cameraIntervalMs = 33;
     static bool cameraAutoCapture = true;
@@ -158,6 +159,10 @@ void DrawHardwarePanel()
     static bool cameraAutoExposure = true;
     static float cameraExposure = -6.0f;
     static float cameraGain = 0.0f;
+    static bool cameraAutoReconnect = true;
+    static int cameraReconnectFailureThreshold = 3;
+    static int cameraReconnectInitialDelayMs = 250;
+    static int cameraReconnectMaxDelayMs = 5000;
     static bool hardwareUiInitialized = false;
     static std::string hardwareSettingsError;
     static bool archiveUiInitialized = false;
@@ -178,6 +183,10 @@ void DrawHardwarePanel()
     static bool tcpAppendCrLf = true;
     static bool outputInvert = false;
     static bool outputAutoPublish = false;
+    static int outputQueueSize = 32;
+    static int outputRetryCount = 2;
+    static int outputRetryDelayMs = 150;
+    static bool outputReconnectBeforeRetry = true;
 
     if (!hardwareUiInitialized)
     {
@@ -185,6 +194,7 @@ void DrawHardwarePanel()
         std::snprintf(cameraAddress, sizeof(cameraAddress), "%s", settings.cameraAddress.c_str());
         std::snprintf(cameraSourceName, sizeof(cameraSourceName), "%s", settings.cameraSourceName.c_str());
         cameraBackend = settings.cameraBackend;
+        cameraOrientation = settings.cameraOrientation;
         cameraTimeoutMs = settings.cameraTimeoutMs;
         cameraIntervalMs = settings.cameraIntervalMs;
         cameraAutoCapture = settings.cameraAutoCapture;
@@ -193,6 +203,10 @@ void DrawHardwarePanel()
         cameraAutoExposure = settings.cameraAutoExposure;
         cameraExposure = settings.cameraExposure;
         cameraGain = settings.cameraGain;
+        cameraAutoReconnect = settings.cameraAutoReconnect;
+        cameraReconnectFailureThreshold = settings.cameraReconnectFailureThreshold;
+        cameraReconnectInitialDelayMs = settings.cameraReconnectInitialDelayMs;
+        cameraReconnectMaxDelayMs = settings.cameraReconnectMaxDelayMs;
 
         outputType = settings.outputType;
         std::snprintf(outputKey, sizeof(outputKey), "%s", settings.outputKey.c_str());
@@ -208,6 +222,10 @@ void DrawHardwarePanel()
         tcpAppendCrLf = settings.tcpAppendCrLf;
         outputInvert = settings.outputInvert;
         outputAutoPublish = settings.outputAutoPublish;
+        outputQueueSize = settings.outputQueueSize;
+        outputRetryCount = settings.outputRetryCount;
+        outputRetryDelayMs = settings.outputRetryDelayMs;
+        outputReconnectBeforeRetry = settings.outputReconnectBeforeRetry;
         hardwareUiInitialized = true;
     }
 
@@ -230,6 +248,13 @@ void DrawHardwarePanel()
     ImGui::SameLine();
     ImGui::TextDisabled("帧 %d%s", snapshot.cameraFrameIndex,
         snapshot.cameraCapturePending ? " · 抓取中" : "");
+    if (snapshot.cameraReconnecting || snapshot.cameraConsecutiveFailures > 0)
+    {
+        ImGui::TextDisabled("重连 %d 次 · 连续失败 %d · 退避 %d ms%s",
+            snapshot.cameraReconnectAttempts, snapshot.cameraConsecutiveFailures,
+            snapshot.cameraReconnectDelayMs,
+            snapshot.cameraReconnecting ? " · 重连中" : "");
+    }
 
     const char* cameraBackends[] = {"自动", "DirectShow", "Media Foundation", "FFmpeg", "GStreamer"};
     if (BeginPropertyTable("##camera_properties"))
@@ -241,6 +266,16 @@ void DrawHardwarePanel()
         PropertyRow("采集后端");
         hardwareSettingsChanged |= ImGui::Combo("##camera_backend", &cameraBackend, cameraBackends,
             static_cast<int>(std::size(cameraBackends)));
+
+        PropertyRow("图像方向");
+        const char* cameraOrientations[] = {
+            "原始方向", "顺时针 90°", "旋转 180°", "逆时针 90°", "水平镜像", "垂直镜像"};
+        if (ImGui::Combo("##camera_orientation", &cameraOrientation,
+            cameraOrientations, static_cast<int>(std::size(cameraOrientations))))
+        {
+            hardwareSettingsChanged = true;
+            HardwareRuntimeService::SetCameraOrientation(cameraOrientation);
+        }
 
         PropertyRow("来源名称");
         hardwareSettingsChanged |= ImGui::InputText("##camera_source_name", cameraSourceName, sizeof(cameraSourceName));
@@ -293,6 +328,25 @@ void DrawHardwarePanel()
             hardwareSettingsChanged = true;
             HardwareRuntimeService::SetCameraTriggerOnInspection(cameraTriggerBeforeRun);
         }
+
+        PropertyRow("断线重连");
+        hardwareSettingsChanged |= ImGui::Checkbox(
+            "自动重连##camera_auto_reconnect", &cameraAutoReconnect);
+
+        PropertyRow("失败阈值");
+        hardwareSettingsChanged |= ImGui::DragInt(
+            "##camera_reconnect_threshold", &cameraReconnectFailureThreshold,
+            1.0f, 1, 100, "%d 次");
+
+        PropertyRow("重连退避");
+        hardwareSettingsChanged |= ImGui::DragInt(
+            "##camera_reconnect_initial", &cameraReconnectInitialDelayMs,
+            10.0f, 1, 60000, "%d ms");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-1.0f);
+        hardwareSettingsChanged |= ImGui::DragInt(
+            "##camera_reconnect_max", &cameraReconnectMaxDelayMs,
+            50.0f, cameraReconnectInitialDelayMs, 60000, "最大 %d ms");
         ImGui::EndTable();
     }
 
@@ -311,11 +365,16 @@ void DrawHardwarePanel()
         config.sourceName = cameraSourceName;
         config.grabTimeoutMs = std::max(1, cameraTimeoutMs);
         config.captureIntervalMs = std::max(1, cameraIntervalMs);
+        config.orientation = std::clamp(cameraOrientation, 0, 5);
         config.autoCapture = cameraAutoCapture;
         config.triggerOnInspection = cameraTriggerBeforeRun;
         config.autoExposure = cameraAutoExposure;
         config.exposure = cameraExposure;
         config.gain = cameraGain;
+        config.autoReconnect = cameraAutoReconnect;
+        config.reconnectFailureThreshold = cameraReconnectFailureThreshold;
+        config.reconnectInitialDelayMs = cameraReconnectInitialDelayMs;
+        config.reconnectMaxDelayMs = cameraReconnectMaxDelayMs;
         LogOperation("工业相机连接", HardwareRuntimeService::ConnectCamera(config));
     }
     if (!narrowPanel)
@@ -413,6 +472,11 @@ void DrawHardwarePanel()
         snapshot.outputAdapterName.c_str());
     if (!snapshot.outputAdapterKey.empty())
         ImGui::TextDisabled("适配器: %s", snapshot.outputAdapterKey.c_str());
+    ImGui::TextDisabled("发送队列 %zu%s · 成功 %llu · 失败 %llu · 丢弃 %llu",
+        snapshot.outputQueueDepth, snapshot.outputQueueBusy ? " · 发送中" : "",
+        static_cast<unsigned long long>(snapshot.outputSentCount),
+        static_cast<unsigned long long>(snapshot.outputFailedCount),
+        static_cast<unsigned long long>(snapshot.outputDroppedCount));
 
     const char* outputTypes[] = {
         "Modbus TCP 线圈", "Modbus PLC 标签", "OPC UA NodeId", "TCP 文本"};
@@ -496,6 +560,22 @@ void DrawHardwarePanel()
             if (snapshot.outputState == DeviceConnectionState::Connected)
                 HardwareRuntimeService::SetOutputAutoPublish(outputAutoPublish);
         }
+
+        PropertyRow("发送队列");
+        hardwareSettingsChanged |= ImGui::DragInt(
+            "##output_queue_size", &outputQueueSize, 1.0f, 1, 1024, "%d 条");
+
+        PropertyRow("失败重试");
+        hardwareSettingsChanged |= ImGui::DragInt(
+            "##output_retry_count", &outputRetryCount, 1.0f, 0, 10, "%d 次");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-1.0f);
+        hardwareSettingsChanged |= ImGui::DragInt(
+            "##output_retry_delay", &outputRetryDelayMs, 10.0f, 1, 60000, "%d ms");
+
+        PropertyRow("重试重连");
+        hardwareSettingsChanged |= ImGui::Checkbox(
+            "发送失败时重连##output_reconnect_retry", &outputReconnectBeforeRetry);
         ImGui::EndTable();
     }
 
@@ -518,6 +598,10 @@ void DrawHardwarePanel()
         config.binding.appendCrLf = tcpAppendCrLf;
         config.plcUseHoldingRegister = plcHoldingRegister;
         config.autoPublish = outputAutoPublish;
+        config.maxQueueSize = outputQueueSize;
+        config.retryCount = outputRetryCount;
+        config.retryDelayMs = outputRetryDelayMs;
+        config.reconnectBeforeRetry = outputReconnectBeforeRetry;
         LogOperation("硬件输出连接", HardwareRuntimeService::ConnectOutput(config));
     }
     if (!narrowPanel)
@@ -543,6 +627,7 @@ void DrawHardwarePanel()
         settings.cameraAddress = cameraAddress;
         settings.cameraSourceName = cameraSourceName;
         settings.cameraBackend = cameraBackend;
+        settings.cameraOrientation = cameraOrientation;
         settings.cameraTimeoutMs = cameraTimeoutMs;
         settings.cameraIntervalMs = cameraIntervalMs;
         settings.cameraAutoCapture = cameraAutoCapture;
@@ -551,6 +636,10 @@ void DrawHardwarePanel()
         settings.cameraAutoExposure = cameraAutoExposure;
         settings.cameraExposure = cameraExposure;
         settings.cameraGain = cameraGain;
+        settings.cameraAutoReconnect = cameraAutoReconnect;
+        settings.cameraReconnectFailureThreshold = cameraReconnectFailureThreshold;
+        settings.cameraReconnectInitialDelayMs = cameraReconnectInitialDelayMs;
+        settings.cameraReconnectMaxDelayMs = cameraReconnectMaxDelayMs;
         settings.outputType = outputType;
         settings.outputKey = outputKey;
         settings.outputAddress = outputAddress;
@@ -565,6 +654,10 @@ void DrawHardwarePanel()
         settings.tcpAppendCrLf = tcpAppendCrLf;
         settings.outputInvert = outputInvert;
         settings.outputAutoPublish = outputAutoPublish;
+        settings.outputQueueSize = outputQueueSize;
+        settings.outputRetryCount = outputRetryCount;
+        settings.outputRetryDelayMs = outputRetryDelayMs;
+        settings.outputReconnectBeforeRetry = outputReconnectBeforeRetry;
         HardwareSettingsService::Save(settings, {}, &hardwareSettingsError);
     }
 

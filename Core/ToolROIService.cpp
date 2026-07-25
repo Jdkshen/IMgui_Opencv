@@ -47,7 +47,7 @@ void ApplySearchROI(ToolInstance& tool, const ROI& roi)
     tool.yoloUseROI = true;
     tool.lineUseROI = true;
     tool.mcfUseROI = true;
-    tool.colorUseROI = true;
+    tool.colorAnalysis.useROI = true;
     tool.ocrUseROI = true;
     tool.qrUseROI = true;
     const cv::Rect bounds = roi.ToCvRect();
@@ -149,6 +149,7 @@ ToolROIEditResult ConfirmSearchROIEdit(ToolInstance& tool)
     }
 
     ApplySearchROI(tool, *roi);
+    tool.MarkParametersChanged();
     RemoveEditingROI(tool.toolId);
     result.success = true;
     result.message = "search ROI updated";
@@ -169,13 +170,14 @@ void ClearSearchROIs(ToolInstance& tool)
     tool.yoloUseROI = false;
     tool.lineUseROI = false;
     tool.mcfUseROI = false;
-    tool.colorUseROI = false;
+    tool.colorAnalysis.useROI = false;
     tool.ocrUseROI = false;
     tool.qrUseROI = false;
     tool.mcfRoiX = 0;
     tool.mcfRoiY = 0;
     tool.mcfRoiW = 0;
     tool.mcfRoiH = 0;
+    tool.MarkParametersChanged();
 }
 
 bool SyncMeasurementROIs(ToolInstance& tool)
@@ -187,13 +189,15 @@ bool SyncMeasurementROIs(ToolInstance& tool)
         for (ROI& boundROI : tool.searchROIs)
         {
             const int index = FindMeasurementROIIndex(boundROI);
-            ROI* runtimeROI = ROIState::MutableAt(index);
+            const ROI* runtimeROI = ROIState::At(index);
             if (!runtimeROI)
             {
                 restoredIds.clear();
                 break;
             }
-            const std::uint64_t id = ROIEditorState::EnsureRuntimeId(*runtimeROI);
+            ROI updatedROI = *runtimeROI;
+            const std::uint64_t id = ROIEditorState::EnsureRuntimeId(updatedROI);
+            ROIState::Update(index, updatedROI);
             boundROI.runtimeId = id;
             restoredIds.push_back(id);
         }
@@ -226,7 +230,7 @@ void RestoreMeasurementROIs(ToolInstance& tool)
     for (ROI& boundROI : restored)
     {
         const int index = FindMeasurementROIIndex(boundROI);
-        ROI* runtimeROI = ROIState::MutableAt(index);
+        const ROI* runtimeROI = ROIState::At(index);
         if (!runtimeROI)
         {
             ROIEditorState::EnsureRuntimeId(boundROI);
@@ -234,7 +238,9 @@ void RestoreMeasurementROIs(ToolInstance& tool)
         }
         else
         {
-            boundROI.runtimeId = ROIEditorState::EnsureRuntimeId(*runtimeROI);
+            ROI updatedROI = *runtimeROI;
+            boundROI.runtimeId = ROIEditorState::EnsureRuntimeId(updatedROI);
+            ROIState::Update(index, std::move(updatedROI));
         }
     }
     ApplyMeasurementROIs(tool, std::move(restored));
@@ -267,9 +273,9 @@ void RestoreMeasurementROIBackup(ToolInstance& tool, const std::vector<ROI>& bac
 {
     for (const ROI& original : backup)
     {
-        ROI* runtimeROI = ROIState::MutableAt(ROIState::FindIndexByRuntimeId(original.runtimeId));
-        if (runtimeROI)
-            *runtimeROI = original;
+        const int index = ROIState::FindIndexByRuntimeId(original.runtimeId);
+        if (ROIState::At(index))
+            ROIState::Update(index, original);
         else
             ROIState::Add(original, false);
     }

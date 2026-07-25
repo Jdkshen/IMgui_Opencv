@@ -52,14 +52,25 @@ fs::path ResolveSettingsFile(const std::string& path)
 HardwarePanelSettings Normalize(HardwarePanelSettings settings)
 {
     settings.cameraBackend = std::clamp(settings.cameraBackend, 0, 4);
+    settings.cameraOrientation = std::clamp(settings.cameraOrientation, 0, 5);
     settings.cameraTimeoutMs = std::clamp(settings.cameraTimeoutMs, 1, 10000);
     settings.cameraIntervalMs = std::clamp(settings.cameraIntervalMs, 1, 10000);
     settings.cameraExposure = std::clamp(settings.cameraExposure, -13.0f, 5.0f);
     settings.cameraGain = std::clamp(settings.cameraGain, 0.0f, 100.0f);
+    settings.cameraReconnectFailureThreshold = std::clamp(
+        settings.cameraReconnectFailureThreshold, 1, 100);
+    settings.cameraReconnectInitialDelayMs = std::clamp(
+        settings.cameraReconnectInitialDelayMs, 1, 60000);
+    settings.cameraReconnectMaxDelayMs = std::clamp(
+        settings.cameraReconnectMaxDelayMs,
+        settings.cameraReconnectInitialDelayMs, 60000);
     settings.outputType = std::clamp(settings.outputType, 0, 3);
     settings.outputPort = std::clamp(settings.outputPort, 0, 65535);
     settings.outputAddressValue = std::clamp(settings.outputAddressValue, 0, 65535);
     settings.outputTimeoutMs = std::clamp(settings.outputTimeoutMs, 1, 60000);
+    settings.outputQueueSize = std::clamp(settings.outputQueueSize, 1, 1024);
+    settings.outputRetryCount = std::clamp(settings.outputRetryCount, 0, 10);
+    settings.outputRetryDelayMs = std::clamp(settings.outputRetryDelayMs, 1, 60000);
     return settings;
 }
 }
@@ -81,6 +92,7 @@ HardwarePanelSettings Load(const std::string& path)
         settings.cameraAddress = camera.value("address", settings.cameraAddress);
         settings.cameraSourceName = camera.value("sourceName", settings.cameraSourceName);
         settings.cameraBackend = camera.value("backend", settings.cameraBackend);
+        settings.cameraOrientation = camera.value("orientation", settings.cameraOrientation);
         settings.cameraTimeoutMs = camera.value("timeoutMs", settings.cameraTimeoutMs);
         settings.cameraIntervalMs = camera.value("intervalMs", settings.cameraIntervalMs);
         settings.cameraAutoCapture = camera.value("autoCapture", settings.cameraAutoCapture);
@@ -89,6 +101,13 @@ HardwarePanelSettings Load(const std::string& path)
         settings.cameraAutoExposure = camera.value("autoExposure", settings.cameraAutoExposure);
         settings.cameraExposure = camera.value("exposure", settings.cameraExposure);
         settings.cameraGain = camera.value("gain", settings.cameraGain);
+        settings.cameraAutoReconnect = camera.value("autoReconnect", settings.cameraAutoReconnect);
+        settings.cameraReconnectFailureThreshold = camera.value(
+            "reconnectFailureThreshold", settings.cameraReconnectFailureThreshold);
+        settings.cameraReconnectInitialDelayMs = camera.value(
+            "reconnectInitialDelayMs", settings.cameraReconnectInitialDelayMs);
+        settings.cameraReconnectMaxDelayMs = camera.value(
+            "reconnectMaxDelayMs", settings.cameraReconnectMaxDelayMs);
 
         const nlohmann::json& output = json.value("output", nlohmann::json::object());
         settings.outputType = output.value("type", settings.outputType);
@@ -105,6 +124,11 @@ HardwarePanelSettings Load(const std::string& path)
         settings.tcpAppendCrLf = output.value("appendCrLf", settings.tcpAppendCrLf);
         settings.outputInvert = output.value("invert", settings.outputInvert);
         settings.outputAutoPublish = output.value("autoPublish", settings.outputAutoPublish);
+        settings.outputQueueSize = output.value("queueSize", settings.outputQueueSize);
+        settings.outputRetryCount = output.value("retryCount", settings.outputRetryCount);
+        settings.outputRetryDelayMs = output.value("retryDelayMs", settings.outputRetryDelayMs);
+        settings.outputReconnectBeforeRetry = output.value(
+            "reconnectBeforeRetry", settings.outputReconnectBeforeRetry);
     }
     catch (...)
     {
@@ -128,6 +152,7 @@ bool Save(const HardwarePanelSettings& source, const std::string& path, std::str
                 {"address", settings.cameraAddress},
                 {"sourceName", settings.cameraSourceName},
                 {"backend", settings.cameraBackend},
+                {"orientation", settings.cameraOrientation},
                 {"timeoutMs", settings.cameraTimeoutMs},
                 {"intervalMs", settings.cameraIntervalMs},
                 {"autoCapture", settings.cameraAutoCapture},
@@ -135,7 +160,11 @@ bool Save(const HardwarePanelSettings& source, const std::string& path, std::str
                 {"triggerBeforeRun", settings.cameraTriggerBeforeRun},
                 {"autoExposure", settings.cameraAutoExposure},
                 {"exposure", settings.cameraExposure},
-                {"gain", settings.cameraGain}
+                {"gain", settings.cameraGain},
+                {"autoReconnect", settings.cameraAutoReconnect},
+                {"reconnectFailureThreshold", settings.cameraReconnectFailureThreshold},
+                {"reconnectInitialDelayMs", settings.cameraReconnectInitialDelayMs},
+                {"reconnectMaxDelayMs", settings.cameraReconnectMaxDelayMs}
             }},
             {"output", {
                 {"type", settings.outputType},
@@ -151,7 +180,11 @@ bool Save(const HardwarePanelSettings& source, const std::string& path, std::str
                 {"failText", settings.tcpFailText},
                 {"appendCrLf", settings.tcpAppendCrLf},
                 {"invert", settings.outputInvert},
-                {"autoPublish", settings.outputAutoPublish}
+                {"autoPublish", settings.outputAutoPublish},
+                {"queueSize", settings.outputQueueSize},
+                {"retryCount", settings.outputRetryCount},
+                {"retryDelayMs", settings.outputRetryDelayMs},
+                {"reconnectBeforeRetry", settings.outputReconnectBeforeRetry}
             }}
         };
 
