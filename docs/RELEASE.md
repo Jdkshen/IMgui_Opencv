@@ -1,5 +1,16 @@
 # Release and CI
 
+## 2026-07-25 master update
+
+`codex/p0-p4-release` has been merged into the GitHub default branch `master`
+and pushed to `origin/master` at merge commit `64ddcba`.
+
+This update brings in the P0-P4 application work: component refactoring, restored
+rotated ROI and geometry drawing workflows, run-result review UI, preview texture
+caching, frame archiving, recipe autosave, persisted hardware settings, camera
+trigger/exposure flow updates, SPC storage, expanded inspection history/statistics,
+and tool execution/dependency UI refinements.
+
 ## Local runtime package
 
 Build the Release x64 application first, then run:
