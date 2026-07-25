@@ -2,6 +2,7 @@
 #include "../Algorithm/ColorAnalyzer.h"
 #include "../Algorithm/DifferenceTool.h"
 #include "../Algorithm/EdgeTool.h"
+#include "../Algorithm/GeometryDrawTool.h"
 #include "../Algorithm/MorphologyTool.h"
 #include "../Algorithm/CaliperOperators.h"
 #include "../Algorithm/MeasurementTool.h"
@@ -15,9 +16,11 @@
 #include "../Algorithm/QRCodeTool.h"
 #include "../Algorithm/WindowsPPOCREngine.h"
 #include "../Core/RecipeManager.h"
+#include "../Core/RecipeAutosaveService.h"
 #include "../Core/CalibrationModel.h"
 #include "../Core/CalibrationFitter.h"
 #include "../Core/FrameSourceState.h"
+#include "../Core/FrameArchiveService.h"
 #include "../Core/FrameNavigation.h"
 #include "../Core/FixtureTransform.h"
 #include "../Core/ImageState.h"
@@ -26,6 +29,7 @@
 #include "../Core/ImageViewState.h"
 #include "../Core/HardwareAdapters.h"
 #include "../Core/HardwareRuntimeService.h"
+#include "../Core/HardwareSettingsService.h"
 #include "../Core/ModbusTcpAdapter.h"
 #include "../Core/TcpTextAdapter.h"
 #include "../Core/ModbusPlcAdapter.h"
@@ -37,8 +41,11 @@
 #include "../Core/ResultROIResolver.h"
 #include "../Core/ResultExporter.h"
 #include "../Core/InspectionHistory.h"
+#include "../Core/SpcDatabase.h"
+#include "../Core/ToolExecutionGraph.h"
 #include "../Core/ROIState.h"
 #include "../Core/ROIEditorState.h"
+#include "../Core/RotatedROI.h"
 #include "../Core/ToolChainState.h"
 #include "../Core/ToolChainValidator.h"
 #include "../Core/ToolChainPreflight.h"
@@ -68,6 +75,8 @@
 
 namespace
 {
+namespace fs = std::filesystem;
+
 class LocalOpcUaTestServer
 {
 public:
@@ -198,8 +207,8 @@ struct TestDisposableTool final : ITool
 
 struct TestInputCaptureTool final : ITool
 {
-    TestInputCaptureTool(int* capturedValue, int outputValue = -1)
-        : captured(capturedValue), output(outputValue)
+    TestInputCaptureTool(int* capturedValue, int outputValue = -1, int delayMs = 0)
+        : captured(capturedValue), output(outputValue), delay(delayMs)
     {
     }
 
@@ -207,6 +216,8 @@ struct TestInputCaptureTool final : ITool
     int GetType() const override { return 2; }
     ToolResult Execute(VisionContext& context) override
     {
+        if (delay > 0)
+            std::this_thread::sleep_for(std::chrono::milliseconds(delay));
         ToolResult result;
         result.toolName = GetName();
         if (captured)
@@ -221,6 +232,54 @@ struct TestInputCaptureTool final : ITool
 
     int* captured = nullptr;
     int output = -1;
+    int delay = 0;
+};
+
+struct TestCountingTool final : ITool
+{
+    explicit TestCountingTool(int* executions) : executions(executions) {}
+
+    const char* GetName() const override { return "counting"; }
+    int GetType() const override { return 2; }
+    ToolResult Execute(VisionContext&) override
+    {
+        if (executions)
+            ++*executions;
+        ToolResult result;
+        result.toolName = GetName();
+        result.success = true;
+        result.status = ToolResultStatus::Pass;
+        return result;
+    }
+    void DrawUI() override {}
+    nlohmann::json Save() const override { return {}; }
+    void Load(const nlohmann::json&) override {}
+
+    int* executions = nullptr;
+};
+
+struct TestOrderedTool final : ITool
+{
+    TestOrderedTool(std::vector<int>* order, int marker)
+        : order(order), marker(marker) {}
+
+    const char* GetName() const override { return "ordered"; }
+    int GetType() const override { return 2; }
+    ToolResult Execute(VisionContext&) override
+    {
+        if (order)
+            order->push_back(marker);
+        ToolResult result;
+        result.toolName = GetName();
+        result.status = ToolResultStatus::Pass;
+        return result;
+    }
+    void DrawUI() override {}
+    nlohmann::json Save() const override { return {}; }
+    void Load(const nlohmann::json&) override {}
+
+    std::vector<int>* order = nullptr;
+    int marker = 0;
 };
 
 struct TestCameraAdapter final : ICameraAdapter
@@ -229,6 +288,7 @@ struct TestCameraAdapter final : ICameraAdapter
     const char* AdapterName() const override { return "test-camera"; }
     DeviceOperationResult Connect(const DeviceEndpoint&) override
     {
+        ++connectCount;
         state = DeviceConnectionState::Connected;
         return {true, {}};
     }
@@ -241,15 +301,29 @@ struct TestCameraAdapter final : ICameraAdapter
     std::string LastError() const override { return {}; }
     DeviceOperationResult GrabFrame(cv::Mat& frame, int) override
     {
+        if (failGrabsRemaining > 0)
+        {
+            --failGrabsRemaining;
+            state = DeviceConnectionState::Fault;
+            return {false, "scripted grab failure"};
+        }
         frame = cv::Mat(4, 6, CV_8UC1, cv::Scalar(17)).clone();
         return {true, {}};
     }
-    DeviceOperationResult StartStream() override { return {true, {}}; }
+    DeviceOperationResult StartStream() override
+    {
+        ++startCount;
+        state = DeviceConnectionState::Connected;
+        return {true, {}};
+    }
     void StopStream() override { stopped = true; }
 
     DeviceConnectionState state = DeviceConnectionState::Disconnected;
     bool stopped = false;
     bool* disconnected = nullptr;
+    int failGrabsRemaining = 0;
+    int connectCount = 0;
+    int startCount = 0;
 };
 
 struct ScriptedCameraBackend final : ICameraCaptureBackend
@@ -331,6 +405,7 @@ struct TestModbusAdapter final : IModbusTcpAdapter
     const char* AdapterName() const override { return "test-modbus"; }
     DeviceOperationResult Connect(const DeviceEndpoint&) override
     {
+        ++connectCount;
         state = DeviceConnectionState::Connected;
         return {true, {}};
     }
@@ -345,6 +420,12 @@ struct TestModbusAdapter final : IModbusTcpAdapter
     }
     DeviceOperationResult WriteCoil(std::uint16_t address, bool value) override
     {
+        if (failWritesRemaining > 0)
+        {
+            --failWritesRemaining;
+            state = DeviceConnectionState::Fault;
+            return {false, "scripted write failure"};
+        }
         lastAddress = address;
         lastValue = value;
         return {true, {}};
@@ -369,6 +450,8 @@ struct TestModbusAdapter final : IModbusTcpAdapter
     std::uint16_t nextRegisterValue = 0;
     std::uint16_t lastRegisterAddress = 0;
     std::uint16_t lastRegisterValue = 0;
+    int failWritesRemaining = 0;
+    int connectCount = 0;
 };
 
 struct ScriptedModbusTransport final : IModbusTcpTransport
@@ -602,6 +685,146 @@ void TestYoloToolNoModelPath()
 
     Require(!result.success, "YOLO should fail when no model is loaded");
     Require(result.message == "model is not loaded", "YOLO failure message regressed");
+}
+
+void TestRotatedROIExtractionAndResultRestore()
+{
+    cv::Mat source = cv::Mat::zeros(160, 180, CV_8UC3);
+    ROI roi;
+    roi.type = ROI_TYPE_RECT;
+    roi.start = ImVec2(55.0f, 60.0f);
+    roi.end = ImVec2(125.0f, 100.0f);
+    roi.angle = 30.0f;
+
+    const auto corners = roi.Corners();
+    std::vector<cv::Point> polygon;
+    for (const ImVec2& point : corners)
+        polygon.emplace_back(cvRound(point.x), cvRound(point.y));
+    cv::fillConvexPoly(source, polygon, cv::Scalar(40, 120, 220));
+
+    cv::Mat crop;
+    RotatedROI::Transform transform;
+    Require(RotatedROI::Extract(source, roi, crop, transform),
+        "rotated ROI extraction failed");
+    Require(crop.size() == cv::Size(70, 40), "rotated ROI crop size regressed");
+    Require(cv::mean(crop)[2] > 180.0, "rotated ROI crop sampled the wrong image area");
+
+    ToolResult result;
+    ToolResult::Region region;
+    region.bbox = cv::Rect(10, 8, 20, 12);
+    region.contour = {{10, 8}, {30, 8}, {30, 20}, {10, 20}};
+    region.center = cv::Point2f(20.0f, 14.0f);
+    region.area = 240.0f;
+    region.angle = 5.0f;
+    result.regions.push_back(region);
+    result.detections.push_back({cv::Rect(12, 10, 9, 7), 2, 0.8f, "part"});
+    result.lines.push_back({cv::Point(0, 20), cv::Point(70, 20), 70.0f, 0.0f});
+    result.texts.push_back({"code", cv::Rect(15, 6, 18, 8), 0.9f});
+    result.debugImage = crop.clone();
+
+    const cv::Point2f expectedCenter = RotatedROI::MapPoint(
+        cv::Point2f(20.0f, 14.0f), transform.cropToSource);
+    RotatedROI::RestoreResult(result, transform);
+    Require(cv::norm(result.regions[0].center - expectedCenter) < 0.01,
+        "rotated ROI region center restore regressed");
+    Require(std::abs(result.regions[0].angle - 35.0f) < 0.01f,
+        "rotated ROI region angle restore regressed");
+    Require(result.regions[0].bbox.contains(result.regions[0].contour.front()),
+        "rotated ROI region bounds restore regressed");
+    Require(result.detections[0].box.area() > 0 && result.texts[0].box.area() > 0,
+        "rotated ROI box restore regressed");
+    Require(std::abs(result.lines[0].angle - 30.0f) < 1.0f,
+        "rotated ROI line angle restore regressed");
+
+    cv::Mat restoredDebug;
+    Require(RotatedROI::RestoreDebugImage(result.debugImage, source, transform, restoredDebug),
+        "rotated ROI debug image restore failed");
+    Require(restoredDebug.size() == source.size() && restoredDebug.type() == source.type(),
+        "rotated ROI debug image shape regressed");
+    const cv::Rect bounds = roi.ToCvRect();
+    for (const ImVec2& point : corners)
+        Require(bounds.contains(cv::Point(static_cast<int>(std::floor(point.x)),
+                                          static_cast<int>(std::floor(point.y)))),
+            "rotated ROI covering rectangle regressed");
+}
+
+void TestToolExecutorUsesRotatedROI()
+{
+    VisionContext context;
+    context.image = cv::Mat::zeros(180, 200, CV_8UC3);
+    cv::circle(context.image, cv::Point(100, 90), 9, cv::Scalar(255, 255, 255), cv::FILLED);
+    context.originalImage = context.image;
+    context.width = context.image.cols;
+    context.height = context.image.rows;
+    ROI roi;
+    roi.type = ROI_TYPE_RECT;
+    roi.start = ImVec2(60.0f, 65.0f);
+    roi.end = ImVec2(140.0f, 115.0f);
+    roi.angle = 32.0f;
+    context.rois.push_back(roi);
+    context.selectedROI = 0;
+
+    ToolInstance tool;
+    tool.type = 2;
+    tool.toolId = 7001;
+    tool.blob.thresholdMode = 1;
+    tool.blob.threshold = 127;
+    tool.blob.minArea = 50;
+    tool.blob.maxArea = 1000;
+    ToolExecutor::RunViaITool(tool, context);
+    Require(tool.hasLastResult && tool.lastResult.success &&
+        tool.lastResult.regions.size() == 1,
+        "ToolExecutor rotated ROI Blob execution failed");
+    Require(cv::norm(tool.lastResult.regions[0].center - cv::Point2f(100.0f, 90.0f)) < 2.0,
+        "ToolExecutor rotated ROI result coordinates regressed");
+}
+
+void TestGeometryDrawToolAndRecipe()
+{
+    GeometryPrimitive line;
+    line.type = GeometryPrimitiveType::Line;
+    line.name = "axis";
+    line.points = {{10.0f, 12.0f}, {90.0f, 40.0f}};
+
+    GeometryPrimitive rotated;
+    rotated.type = GeometryPrimitiveType::RotatedRectangle;
+    rotated.name = "rotated";
+    rotated.points = {{35.0f, 30.0f}, {95.0f, 70.0f}};
+    rotated.angle = 27.5f;
+    rotated.filled = true;
+    rotated.color = {255, 80, 20, 128};
+
+    GeometryPrimitive text;
+    text.type = GeometryPrimitiveType::Text;
+    text.name = "caption";
+    text.text = "测试 A";
+    text.points = {{8.0f, 80.0f}};
+    text.fontSize = 18;
+
+    VisionContext context;
+    context.image = cv::Mat::zeros(110, 130, CV_8UC3);
+    GeometryDrawTool tool;
+    tool.primitives = {line, rotated, text};
+    ToolResult result = tool.Execute(context);
+    Require(result.success && result.debugImage.size() == context.image.size(),
+        "geometry draw output image regressed");
+    Require(result.lines.size() == 1 && result.regions.size() == 1 && result.texts.size() == 1,
+        "geometry draw result contract regressed");
+    Require(cv::countNonZero(result.debugImage.reshape(1)) > 0,
+        "geometry draw produced a blank image");
+
+    ToolInstance instance;
+    instance.type = 17;
+    instance.geometryDrawType = static_cast<int>(GeometryPrimitiveType::RotatedRectangle);
+    instance.geometryItems = {line, rotated, text};
+    ToolInstance loaded;
+    loaded.LoadRecipeJson(instance.ToRecipeJson());
+    Require(loaded.type == 17 && loaded.geometryItems.size() == 3 &&
+        loaded.geometryDrawType == static_cast<int>(GeometryPrimitiveType::RotatedRectangle) &&
+        std::abs(loaded.geometryItems[1].angle - 27.5f) < 0.001f &&
+        loaded.geometryItems[2].text == "测试 A",
+        "geometry draw recipe serialization regressed");
+    Require(ITool::Create(17) != nullptr, "geometry draw tool registration regressed");
 }
 
 void TestQRCodeToolRecognizesBundledSample()
@@ -1140,11 +1363,14 @@ void TestRecipeRoundTrip()
     RecipeData data;
     data.name = "regression";
     data.imagePath = "assets/images/test.jpg";
+    data.loopIntervalMs = 375;
     data.threshold.useGray = true;
     data.threshold.thresholdValue = 123;
     data.tmMatch.maxResults = 3;
     data.tmMatch.matchThreshold = 0.91f;
-    data.rois.push_back({1.0f, 2.0f, 30.0f, 40.0f, 0});
+    data.rois.push_back({1.0f, 2.0f, 30.0f, 40.0f, 27.5f, 0});
+    data.taskGroups.push_back({"检测组", true, "assets/images/task-a.jpg"});
+    data.taskGroups.push_back({"空任务", false});
 
     ToolInstance tool;
     tool.type = 4;
@@ -1162,7 +1388,7 @@ void TestRecipeRoundTrip()
     tool.differenceThreshold = 41;
     tool.differenceMinArea = 33;
     tool.differenceMorphKernelSize = 5;
-    tool.differenceShowLabels = false;
+    tool.showResultLabels = false;
     tool.judgement.enabled = true;
     tool.judgement.stopOnFailure = true;
     tool.judgement.minResultCount = 2;
@@ -1188,6 +1414,7 @@ void TestRecipeRoundTrip()
     toolROI.type = ROI_TYPE_RECT;
     toolROI.start = ImVec2(5.0f, 6.0f);
     toolROI.end = ImVec2(20.0f, 21.0f);
+    toolROI.angle = -12.25f;
     tool.searchROIs.push_back(toolROI);
     RecipeToolInstance toolSnapshot;
     toolSnapshot.CaptureFrom(tool);
@@ -1227,7 +1454,7 @@ void TestRecipeRoundTrip()
     qr.qrDetectMulti = false;
     qr.qrEnhance = false;
     qr.qrMinSize = 37;
-    qr.qrShowText = false;
+    qr.showResultLabels = false;
     qr.qrEngine = 2;
     qr.qrFormatMask = BarcodeFormatCode128 | BarcodeFormatDataMatrix;
     qr.qrFilterDuplicates = false;
@@ -1273,14 +1500,37 @@ void TestRecipeRoundTrip()
     std::filesystem::remove(path);
 
     Require(RecipeManager::Save(path.string().c_str(), data), "recipe save failed");
+    std::ifstream savedRecipeStream(path);
+    nlohmann::json savedRecipe;
+    savedRecipeStream >> savedRecipe;
+    savedRecipeStream.close();
+    Require(savedRecipe.value("version", 0) == 4,
+        "new recipes were not saved with schema version 4");
+    for (const auto& savedTool : savedRecipe["tools"])
+    {
+        Require(!savedTool.contains("blobShowLabels") &&
+            !savedTool.contains("cntShowLabels") &&
+            !savedTool.contains("shpShowLabels") &&
+            !savedTool.contains("lineShowLabels") &&
+            !savedTool.contains("qrShowText") &&
+            !savedTool.contains("differenceShowLabels"),
+            "recipe v3 still serialized a legacy result-label field");
+    }
 
     RecipeData loaded;
     Require(RecipeManager::Load(path.string().c_str(), loaded), "recipe load failed");
 
     Require(loaded.name == data.name, "recipe name round-trip regressed");
+    Require(loaded.loopIntervalMs == 375, "loop interval recipe round-trip regressed");
     Require(loaded.threshold.useGray == data.threshold.useGray, "threshold round-trip regressed");
     Require(loaded.threshold.thresholdValue == data.threshold.thresholdValue, "threshold value round-trip regressed");
-    Require(loaded.rois.size() == 1 && loaded.rois[0].endX == 30.0f, "ROI round-trip regressed");
+    Require(loaded.rois.size() == 1 && loaded.rois[0].endX == 30.0f &&
+        std::abs(loaded.rois[0].angle - 27.5f) < 0.001f, "ROI round-trip regressed");
+    Require(loaded.taskGroups.size() == 2 && loaded.taskGroups[0].name == "检测组" &&
+        loaded.taskGroups[0].enabled &&
+        loaded.taskGroups[0].imagePath == "assets/images/task-a.jpg" &&
+        loaded.taskGroups[1].name == "空任务" &&
+        !loaded.taskGroups[1].enabled, "task-group order/state round-trip regressed");
     Require(loaded.tools.size() == 4, "tool count round-trip regressed");
     const ToolInstance loadedTool = loaded.tools[0].CreateToolInstance();
     const ToolInstance loadedMcf = loaded.tools[1].CreateToolInstance();
@@ -1291,7 +1541,7 @@ void TestRecipeRoundTrip()
         "stable tool identity recipe round-trip regressed");
     Require(!loadedTool.enabled, "tool enabled flag recipe round-trip regressed");
     Require(loadedTool.differenceThreshold == 41 && loadedTool.differenceMinArea == 33 &&
-        loadedTool.differenceMorphKernelSize == 5 && !loadedTool.differenceShowLabels,
+        loadedTool.differenceMorphKernelSize == 5 && !loadedTool.showResultLabels,
         "difference recipe fields round-trip regressed");
     Require(loadedTool.templateImg.size() == cv::Size(3, 2) &&
         loadedTool.templateImg.at<cv::Vec3b>(0, 0) == cv::Vec3b(31, 37, 41),
@@ -1304,6 +1554,9 @@ void TestRecipeRoundTrip()
     Require(loadedTool.groupName == "检测组" && loadedTool.collapsed,
         "tool group/collapse recipe round-trip regressed");
     Require(loadedTool.yoloUseROI, "YOLO ROI flag round-trip regressed");
+    Require(loadedTool.searchROIs.size() == 1 &&
+        std::abs(loadedTool.searchROIs[0].angle + 12.25f) < 0.001f,
+        "tool ROI angle round-trip regressed");
     Require(loadedTool.judgement.enabled && loadedTool.judgement.stopOnFailure,
         "judgement flags round-trip regressed");
     Require(loadedTool.judgement.minResultCount == 2 && loadedTool.judgement.maxResultCount == 5,
@@ -1345,7 +1598,7 @@ void TestRecipeRoundTrip()
         "QR boolean parameters round-trip regressed");
     Require(loadedQr.qrMinSize == 37 && loadedQr.qrEngine == 2,
         "QR numeric parameters round-trip regressed");
-    Require(!loadedQr.qrShowText, "QR label flag round-trip regressed");
+    Require(!loadedQr.showResultLabels, "QR label flag round-trip regressed");
     Require(loadedQr.qrFormatMask == (BarcodeFormatCode128 | BarcodeFormatDataMatrix),
         "barcode format filter round-trip regressed");
     Require(!loadedQr.qrFilterDuplicates, "barcode duplicate filter round-trip regressed");
@@ -1372,9 +1625,120 @@ void TestRecipeRoundTrip()
         cv::norm(loadedMeasurement.fixture.referenceOrigin - cv::Point2f(12.0f, 34.0f)) < 0.001f,
         "fixture settings round-trip regressed");
 
+    const std::filesystem::path legacyPath =
+        std::filesystem::temp_directory_path() / "imgui_opencv_legacy_roi.recipe";
+    {
+        std::ifstream input(path);
+        nlohmann::json legacy = nlohmann::json::parse(input);
+        legacy["rois"][0].erase("angle");
+        legacy["tools"][0]["searchROIs"][0].erase("angle");
+        std::ofstream output(legacyPath);
+        output << legacy.dump(2);
+    }
+    RecipeData legacyLoaded;
+    Require(RecipeManager::Load(legacyPath.string().c_str(), legacyLoaded),
+        "legacy ROI recipe load failed");
+    const ToolInstance legacyTool = legacyLoaded.tools[0].CreateToolInstance();
+    Require(legacyLoaded.rois.size() == 1 && legacyLoaded.rois[0].angle == 0.0f &&
+        legacyTool.searchROIs.size() == 1 && legacyTool.searchROIs[0].angle == 0.0f,
+        "legacy recipe ROI angle did not default to zero");
+
     std::filesystem::remove(path);
+    std::filesystem::remove(legacyPath);
     std::filesystem::remove(path.parent_path() / "imgui_opencv_regression_tool.png");
     std::filesystem::remove(path.parent_path() / "imgui_opencv_regression_difference.png");
+}
+
+void TestTaskGroupManagement()
+{
+    ToolChainState::ClearTools();
+    ToolInstance first;
+    first.type = 0;
+    first.groupName = "旧任务A";
+    ToolChainState::AddTool(std::move(first));
+    ToolInstance second;
+    second.type = 2;
+    ToolChainState::AddTool(std::move(second));
+    ToolInstance third;
+    third.type = 7;
+    third.groupName = "旧任务B";
+    ToolChainState::AddTool(std::move(third));
+
+    Require(ToolChainState::ReadOnlyTaskGroups().size() == 2 &&
+        ToolChainState::ReadOnlyTaskGroups()[0].name == "旧任务A" &&
+        ToolChainState::ReadOnlyTaskGroups()[1].name == "旧任务B",
+        "legacy tool groups were not imported in tool order");
+
+    std::vector<TaskGroupDefinition> restoredGroups;
+    restoredGroups.push_back({0, "旧任务B", false});
+    restoredGroups.push_back({0, "旧任务A", true});
+    restoredGroups.push_back({0, "空任务", true});
+    ToolChainState::ReplaceTaskGroups(std::move(restoredGroups));
+    Require(ToolChainState::ReadOnlyTaskGroups().size() == 3 &&
+        ToolChainState::ReadOnlyTaskGroups()[0].name == "旧任务B" &&
+        !ToolChainState::AtReadOnly(2)->enabled,
+        "task-group order or disabled state was not restored");
+
+    const int created = ToolChainState::CreateTaskGroup();
+    Require(created == 3 && ToolChainState::ReadOnlyTaskGroups()[created].name == "任务01",
+        "automatic task-group naming regressed");
+    Require(ToolChainState::AssignToolToTaskGroup(1, created) &&
+        ToolChainState::AtReadOnly(1)->groupName == "任务01",
+        "tool assignment to task group regressed");
+    Require(ToolChainState::RenameTaskGroup(created, "新任务") &&
+        ToolChainState::AtReadOnly(1)->groupName == "新任务",
+        "task-group rename did not update assigned tools");
+
+    ToolInstance sameTaskTool;
+    sameTaskTool.type = 9;
+    sameTaskTool.groupName = "新任务";
+    const int sameTaskIndex = ToolChainState::AddTool(std::move(sameTaskTool));
+    const std::uint64_t firstTaskToolId = ToolChainState::AtReadOnly(1)->toolId;
+    const std::uint64_t secondTaskToolId =
+        ToolChainState::AtReadOnly(sameTaskIndex)->toolId;
+    const std::uint64_t otherTaskToolId = ToolChainState::AtReadOnly(2)->toolId;
+    Require(ToolChainState::MoveToolWithinTaskGroup(sameTaskIndex, -1) &&
+        ToolChainState::AtReadOnly(1)->toolId == secondTaskToolId &&
+        ToolChainState::AtReadOnly(2)->toolId == otherTaskToolId &&
+        ToolChainState::AtReadOnly(sameTaskIndex)->toolId == firstTaskToolId,
+        "task-local tool move changed another task or used global adjacency");
+    Require(ToolChainState::MoveTaskGroup(created, 0) &&
+        ToolChainState::ReadOnlyTaskGroups()[0].name == "新任务",
+        "task-group ordering regressed");
+    ToolChainState::SetAllEnabled(false);
+    Require(std::all_of(ToolChainState::ReadOnlyTaskGroups().begin(),
+            ToolChainState::ReadOnlyTaskGroups().end(),
+            [](const TaskGroupDefinition& group) { return !group.enabled; }) &&
+        std::all_of(ToolChainState::ReadOnlyTools().begin(),
+            ToolChainState::ReadOnlyTools().end(),
+            [](const ToolInstance& tool) { return !tool.enabled; }),
+        "bulk disable did not synchronize task groups and tools");
+    ToolChainState::SetAllEnabled(true);
+    Require(std::all_of(ToolChainState::ReadOnlyTaskGroups().begin(),
+            ToolChainState::ReadOnlyTaskGroups().end(),
+            [](const TaskGroupDefinition& group) { return group.enabled; }) &&
+        std::all_of(ToolChainState::ReadOnlyTools().begin(),
+            ToolChainState::ReadOnlyTools().end(),
+            [](const ToolInstance& tool) { return tool.enabled; }),
+        "bulk enable did not synchronize task groups and tools");
+    Require(ToolChainState::RemoveTaskGroup(0) &&
+        ToolChainState::Count() == 2 &&
+        ToolChainState::FindToolByIdReadOnly(firstTaskToolId) == nullptr &&
+        ToolChainState::FindToolByIdReadOnly(secondTaskToolId) == nullptr &&
+        ToolChainState::FindToolByIdReadOnly(otherTaskToolId) != nullptr,
+        "removing a task group did not delete only its assigned tools");
+    Require(ToolChainState::MaximumTaskGroups() == 16,
+        "task-group capacity is not 16");
+    while (ToolChainState::ReadOnlyTaskGroups().size() <
+        ToolChainState::MaximumTaskGroups())
+    {
+        Require(ToolChainState::CreateTaskGroup() >= 0,
+            "creating one of 16 task groups was rejected");
+    }
+    Require(ToolChainState::ReadOnlyTaskGroups().size() == 16 &&
+        ToolChainState::CreateTaskGroup() == -1,
+        "task-group capacity did not stop exactly at 16");
+    ToolChainState::ClearTools();
 }
 
 void TestSampleImageCorePipeline()
@@ -1732,6 +2096,7 @@ void TestToolInstanceOwnsRecipeSerialization()
     source.label = "尺寸A";
     source.showResultLabels = false;
     source.showTemplatePreview = false;
+    source.mcfShowPreview = false;
     source.resultRoiMode = 2;
     source.resultRoiSourceToolId = 1234;
     source.fixture.enabled = true;
@@ -1747,6 +2112,8 @@ void TestToolInstanceOwnsRecipeSerialization()
     source.measureCalibration.scaleX = 0.02;
     source.measureCalibration.scaleY = 0.03;
     source.measureCalibrationSamples.push_back({{1.0, 2.0}, {3.0, 4.0}});
+    source.MarkParametersChanged();
+    const std::uint64_t sourceRevision = source.parameterRevision;
 
     ROI polygon;
     polygon.type = ROI_TYPE_POLYGON;
@@ -1756,12 +2123,17 @@ void TestToolInstanceOwnsRecipeSerialization()
     source.searchROIs.push_back(polygon);
 
     const nlohmann::json serialized = source.ToRecipeJson();
+    Require(!serialized.contains("parametersDirty"),
+        "runtime parameter dirty state leaked into recipe JSON");
+    Require(!serialized.contains("parameterRevision"),
+        "runtime parameter revision leaked into recipe JSON");
     ToolInstance loaded;
     loaded.LoadRecipeJson(serialized);
 
     Require(loaded.type == source.type && loaded.toolId == source.toolId && !loaded.enabled,
         "ToolInstance identity recipe serialization regressed");
-    Require(loaded.label == source.label && !loaded.showResultLabels && !loaded.showTemplatePreview,
+    Require(loaded.label == source.label && !loaded.showResultLabels &&
+        !loaded.showTemplatePreview && !loaded.mcfShowPreview,
         "ToolInstance display recipe serialization regressed");
     Require(loaded.fixture.sourceToolId == 5678 && loaded.judgement.stopOnFailure,
         "ToolInstance dependency/judgement serialization regressed");
@@ -1771,11 +2143,57 @@ void TestToolInstanceOwnsRecipeSerialization()
         std::abs(loaded.measureMinimumConfidence - 0.82f) < 0.0001f &&
         loaded.measureCalibrationSamples.size() == 1,
         "ToolInstance measurement serialization regressed");
+    Require(serialized.contains("settings") &&
+        serialized["settings"].contains("templateMatch") &&
+        serialized["settings"].contains("yolo") &&
+        serialized["settings"].contains("ocr"),
+        "ToolInstance settings groups were not serialized");
+    Require(std::abs(loaded.yolo.confidenceThreshold - loaded.yoloConfThreshold) < 0.0001f &&
+        loaded.ocr.detectionModelPath == loaded.ocrDetModelPath &&
+        loaded.templateMatch.maxResults == loaded.maxResults,
+        "ToolInstance settings groups were not synchronized with v3 fields");
+
+    ToolInstance legacyBlob;
+    legacyBlob.LoadRecipeJson({{"type", 2}, {"blobShowLabels", false}});
+    Require(!legacyBlob.showResultLabels,
+        "legacy per-tool label setting did not migrate to the common switch");
+
+    RecipeToolInstance legacyRecipeTool;
+    legacyRecipeTool.LoadToolJson({{"type", 14}, {"qrShowText", false}});
+    const nlohmann::json migratedRecipeTool = legacyRecipeTool.ToJson();
+    Require(!migratedRecipeTool.value("showResultLabels", true) &&
+        !migratedRecipeTool.contains("qrShowText"),
+        "recipe v3 migration kept the legacy per-tool label field");
+
+    ToolInstance finderSource;
+    finderSource.type = 10;
+    finderSource.toolImpl = ITool::Create(10);
+    auto* sourceFinder = dynamic_cast<MultiColorFinder*>(finderSource.toolImpl.get());
+    Require(sourceFinder != nullptr, "multi-color finder factory setup failed");
+    ColorPoint point;
+    point.r = 10;
+    point.g = 20;
+    point.b = 30;
+    point.tolerance = 14;
+    sourceFinder->points.push_back(point);
+    ToolInstance finderCopy = finderSource;
+    auto* copiedFinder = dynamic_cast<MultiColorFinder*>(finderCopy.toolImpl.get());
+    Require(copiedFinder && copiedFinder != sourceFinder &&
+        copiedFinder->points.size() == 1 && copiedFinder->points[0].tolerance == 14,
+        "ToolInstance did not deep-copy owned algorithm parameters");
+    ToolInstance runtimeCopy = source;
+    Require(runtimeCopy.parameterRevision == sourceRevision,
+        "ToolInstance copy lost the runtime parameter revision");
+    sourceFinder->points[0].tolerance = 2;
+    Require(copiedFinder->points[0].tolerance == 14,
+        "copied ToolInstance shared mutable algorithm state");
 
     loaded.hasLastResult = true;
     loaded.measureRuntimeROIIds.push_back(42);
+    const std::uint64_t loadedRevision = loaded.parameterRevision;
     loaded.ClearRuntimeState();
-    Require(!loaded.hasLastResult && loaded.measureRuntimeROIIds.empty(),
+    Require(!loaded.hasLastResult && !loaded.parametersDirty &&
+        loaded.measureRuntimeROIIds.empty() && loaded.parameterRevision == loadedRevision,
         "ToolInstance runtime state cleanup regressed");
 }
 
@@ -1843,31 +2261,34 @@ void TestToolAssetServiceOwnsCaptureWorkflow()
 
     ToolInstance tool;
     tool.toolId = 9001;
+    const std::uint64_t initialRevision = tool.parameterRevision;
     int roiIndex = ToolAssetService::BeginROICapture(tool, ToolAssetKind::TemplateMatch);
     Require(ROIState::IsValidIndex(roiIndex), "asset capture did not create an editable ROI");
-    ROI* roi = ROIState::MutableAt(roiIndex);
-    Require(roi != nullptr, "asset capture ROI lookup failed");
-    roi->start = ImVec2(10.0f, 12.0f);
-    roi->end = ImVec2(30.0f, 32.0f);
+    ROI roi = *ROIState::At(roiIndex);
+    roi.start = ImVec2(10.0f, 12.0f);
+    roi.end = ImVec2(30.0f, 32.0f);
+    ROIState::Update(roiIndex, roi);
 
     ToolAssetCaptureResult capture =
         ToolAssetService::ConfirmROICapture(tool, ToolAssetKind::TemplateMatch);
     Require(capture.success && tool.templateImg.size() == cv::Size(20, 20) &&
-        tool.hasTemplateROI && ROIState::Items().empty(),
+        tool.hasTemplateROI && ROIState::ReadOnlyItems().empty(),
         "template asset capture workflow regressed");
+    Require(tool.parameterRevision > initialRevision,
+        "asset capture did not advance the tool parameter revision");
     Require(tool.templateImg.at<cv::Vec3b>(0, 0) == image.at<cv::Vec3b>(12, 10),
         "template asset pixels were captured from the wrong coordinates");
 
     roiIndex = ToolAssetService::BeginROICapture(tool, ToolAssetKind::ShapeTemplate);
-    roi = ROIState::MutableAt(roiIndex);
-    Require(roi != nullptr, "shape capture ROI was not created");
-    roi->start = ImVec2(20.0f, 15.0f);
-    roi->end = ImVec2(45.0f, 40.0f);
+    roi = *ROIState::At(roiIndex);
+    roi.start = ImVec2(20.0f, 15.0f);
+    roi.end = ImVec2(45.0f, 40.0f);
+    ROIState::Update(roiIndex, roi);
     ROI unrelated;
     unrelated.type = ROI_TYPE_RECT;
     unrelated.start = ImVec2(1.0f, 1.0f);
     unrelated.end = ImVec2(3.0f, 3.0f);
-    ROIState::Items().insert(ROIState::Items().begin(), unrelated);
+    ROIState::Insert(0, unrelated);
     capture = ToolAssetService::ConfirmROICapture(tool, ToolAssetKind::ShapeTemplate);
     Require(capture.success && tool.shpTplImage.size() == cv::Size(25, 25),
         "stable runtime ROI capture failed after ROI index changed");
@@ -1895,31 +2316,34 @@ void TestToolROIServiceOwnsBoundROIEditing()
 
     ToolInstance tool;
     tool.toolId = 9101;
+    const std::uint64_t initialRevision = tool.parameterRevision;
     int roiIndex = ToolROIService::BeginSearchROIEdit(tool);
-    ROI* roi = ROIState::MutableAt(roiIndex);
-    Require(roi != nullptr, "bound ROI edit did not create an editable ROI");
-    roi->start = ImVec2(11.0f, 13.0f);
-    roi->end = ImVec2(51.0f, 43.0f);
+    ROI roi = *ROIState::At(roiIndex);
+    roi.start = ImVec2(11.0f, 13.0f);
+    roi.end = ImVec2(51.0f, 43.0f);
+    ROIState::Update(roiIndex, roi);
 
     ROI unrelated;
     unrelated.type = ROI_TYPE_RECT;
     unrelated.start = ImVec2(1.0f, 1.0f);
     unrelated.end = ImVec2(2.0f, 2.0f);
-    ROIState::Items().insert(ROIState::Items().begin(), unrelated);
+    ROIState::Insert(0, unrelated);
 
     const ToolROIEditResult result = ToolROIService::ConfirmSearchROIEdit(tool);
     Require(result.success && tool.searchROIs.size() == 1 &&
         tool.searchROIs[0].ToCvRect() == cv::Rect(11, 13, 40, 30),
         "bound ROI confirmation followed a stale vector index");
+    Require(tool.parameterRevision > initialRevision,
+        "bound ROI confirmation did not advance the tool parameter revision");
     Require(tool.useSearchROI && tool.yoloUseROI && tool.mcfUseROI &&
         tool.ocrUseROI && tool.qrUseROI && tool.mcfRoiW == 40,
         "bound ROI flags were not updated consistently");
 
     const ROI saved = tool.searchROIs[0];
     roiIndex = ToolROIService::BeginSearchROIEdit(tool);
-    roi = ROIState::MutableAt(roiIndex);
-    Require(roi != nullptr, "bound ROI modification did not reopen the saved ROI");
-    roi->start = ImVec2(20.0f, 20.0f);
+    roi = *ROIState::At(roiIndex);
+    roi.start = ImVec2(20.0f, 20.0f);
+    ROIState::Update(roiIndex, roi);
     ToolROIService::CancelSearchROIEdit(tool.toolId);
     Require(tool.searchROIs[0].ToCvRect() == saved.ToCvRect(),
         "cancelled bound ROI edit changed the saved tool ROI");
@@ -1944,10 +2368,12 @@ void TestToolROIServiceOwnsBoundROIEditing()
 
     const int measurementIndex = ROIState::FindIndexByRuntimeId(
         measurement.measureRuntimeROIIds.front());
-    ROI* runtimeMeasurementROI = ROIState::MutableAt(measurementIndex);
+    const ROI* runtimeMeasurementROI = ROIState::At(measurementIndex);
     Require(runtimeMeasurementROI != nullptr, "measurement runtime ROI was not recoverable by id");
     const std::vector<ROI> measurementBackup = measurement.searchROIs;
-    runtimeMeasurementROI->end.x = 95.0f;
+    ROI editedMeasurementROI = *runtimeMeasurementROI;
+    editedMeasurementROI.end.x = 95.0f;
+    ROIState::Update(measurementIndex, editedMeasurementROI);
     Require(ToolROIService::SyncMeasurementROIs(measurement) &&
         std::abs(measurement.searchROIs.front().end.x - 95.0f) < 0.001f,
         "measurement ROI sync did not publish edited geometry");
@@ -2071,6 +2497,10 @@ void TestHardwareRuntimeAutomation()
     captureConfig.autoCapture = false;
     captureConfig.grabTimeoutMs = 100;
     captureConfig.captureIntervalMs = 10;
+    captureConfig.autoReconnect = true;
+    captureConfig.reconnectFailureThreshold = 1;
+    captureConfig.reconnectInitialDelayMs = 1;
+    captureConfig.reconnectMaxDelayMs = 4;
     Require(HardwareRuntimeService::StartCameraCapture(captureConfig).success,
         "registered camera capture worker failed to start");
     HardwareRuntimeService::RequestCameraFrame();
@@ -2088,6 +2518,76 @@ void TestHardwareRuntimeAutomation()
         ImageState::Current().size() == cv::Size(6, 4) &&
         ImageState::NeedUploadRef() && !ImageState::PendingUploadRef().empty(),
         "asynchronous industrial-camera frame was not published on Tick");
+
+    const int reconnectStartFrame = cameraSnapshot.cameraFrameIndex;
+    cameraView->failGrabsRemaining = 1;
+    HardwareRuntimeService::RequestCameraFrame();
+    bool cameraRecovered = false;
+    for (int attempt = 0; attempt < 400; ++attempt)
+    {
+        HardwareRuntimeService::Tick();
+        const HardwareRuntimeSnapshot reconnectSnapshot = HardwareRuntimeService::Snapshot();
+        if (reconnectSnapshot.cameraReconnectAttempts > 0 &&
+            reconnectSnapshot.cameraFrameIndex > reconnectStartFrame)
+        {
+            cameraRecovered = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    Require(cameraRecovered && cameraView->connectCount >= 2 && cameraView->startCount >= 2,
+        "industrial camera did not recover after a scripted frame failure");
+
+    ToolController::Reset();
+    ToolChainState::ClearTools();
+    ToolInstance cameraInputTool;
+    cameraInputTool.type = 12;
+    ToolChainState::AddTool(std::move(cameraInputTool));
+    const int firstFrameIndex = cameraSnapshot.cameraFrameIndex;
+    ToolController::RequestRunAll(true);
+    bool linkedRunStarted = false;
+    for (int attempt = 0; attempt < 200; ++attempt)
+    {
+        HardwareRuntimeService::Tick();
+        if (HardwareRuntimeService::Snapshot().cameraFrameIndex > firstFrameIndex &&
+            ToolController::GetMode() == ToolController::Mode::Running)
+        {
+            linkedRunStarted = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    Require(linkedRunStarted,
+        "camera capture did not trigger the tool chain after publishing a new frame");
+
+    const int linkedFrameIndex = HardwareRuntimeService::Snapshot().cameraFrameIndex;
+    ToolController::Tick();
+    bool linkedLoopContinued = false;
+    for (int attempt = 0; attempt < 200; ++attempt)
+    {
+        HardwareRuntimeService::Tick();
+        if (HardwareRuntimeService::Snapshot().cameraFrameIndex > linkedFrameIndex &&
+            ToolController::GetMode() == ToolController::Mode::Running)
+        {
+            linkedLoopContinued = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    Require(linkedLoopContinued,
+        "camera-triggered inspection loop did not request the next frame");
+
+    ToolController::Tick();
+    ToolController::Reset();
+    for (int attempt = 0; attempt < 20; ++attempt)
+    {
+        HardwareRuntimeService::Tick();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    Require(ToolController::GetMode() == ToolController::Mode::Idle &&
+        !HardwareRuntimeService::Snapshot().cameraToolRunPending,
+        "stopping the camera inspection loop left a pending tool run");
+    ToolChainState::ClearTools();
 
     auto modbus = std::make_unique<TestModbusAdapter>();
     TestModbusAdapter* modbusView = modbus.get();
@@ -2116,6 +2616,13 @@ void TestHardwareRuntimeAutomation()
     Require(HardwareRuntimeService::PublishInspectionResults({pass, fail}).success &&
         !modbusView->lastValue,
         "failed tool result was not published as NG");
+
+    const int connectsBeforeRetry = modbusView->connectCount;
+    modbusView->failWritesRemaining = 1;
+    Require(HardwareRuntimeService::EnqueueConfiguredStatus(ToolResultStatus::Pass).success &&
+        HardwareRuntimeService::WaitForOutputIdle(3000) && modbusView->lastValue &&
+        modbusView->connectCount > connectsBeforeRetry,
+        "queued Modbus output did not reconnect and retry after a write failure");
 
     ToolResult error;
     error.status = ToolResultStatus::Error;
@@ -2151,6 +2658,190 @@ void TestHardwareRuntimeAutomation()
         "hardware runtime shutdown left registered devices behind");
     FrameSourceState::Clear();
     ImageState::Clear();
+}
+
+void TestFrameArchiveService()
+{
+    FrameArchiveService::Shutdown();
+    const fs::path outputDirectory = fs::temp_directory_path() /
+        ("imgui_opencv_frame_archive_" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()));
+
+    FrameArchiveConfig config;
+    config.enabled = true;
+    config.directory = outputDirectory.string();
+    config.format = FrameArchiveFormat::Png;
+    config.saveEveryN = 2;
+    config.maxQueue = 8;
+    FrameArchiveService::Configure(config, false);
+
+    const cv::Mat frame(12, 16, CV_8UC3, cv::Scalar(20, 80, 160));
+    for (int index = 1; index <= 5; ++index)
+        FrameArchiveService::Enqueue(frame, "test-camera", index, 1000.0 + index);
+
+    Require(FrameArchiveService::WaitUntilIdle(3000),
+        "frame archive worker did not become idle");
+    const FrameArchiveSnapshot snapshot = FrameArchiveService::Snapshot();
+    Require(snapshot.savedFrames == 3 && snapshot.failedFrames == 0 &&
+        snapshot.droppedFrames == 0 && fs::exists(outputDirectory),
+        "frame archive sampling or asynchronous save failed");
+
+    std::size_t pngCount = 0;
+    for (const fs::directory_entry& entry : fs::directory_iterator(outputDirectory))
+    {
+        if (entry.is_regular_file() && entry.path().extension() == ".png")
+            ++pngCount;
+    }
+    Require(pngCount == 3 && !snapshot.lastSavedPath.empty() &&
+        !FrameArchiveService::SettingsPath().empty(),
+        "frame archive output paths regressed");
+
+    config.enabled = false;
+    FrameArchiveService::Configure(config, false);
+    FrameArchiveService::Enqueue(frame, "test-camera", 6, 1006.0);
+    Require(FrameArchiveService::WaitUntilIdle(1000) &&
+        FrameArchiveService::Snapshot().savedFrames == 3,
+        "disabled frame archive still saved images");
+
+    FrameArchiveService::Shutdown();
+    fs::remove_all(outputDirectory);
+}
+
+void TestRecipeAutosaveService()
+{
+    RecipeAutosaveService::Shutdown();
+    const fs::path directory = fs::temp_directory_path() /
+        ("imgui_opencv_recipe_autosave_" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()));
+    const fs::path recipePath = directory / "autosave.recipe";
+    const fs::path assetPath = directory / "mcf_reference.png";
+
+    RecipeData first;
+    first.name = "autosave-first";
+    RecipeToolInstance firstTool;
+    ToolInstance source;
+    source.type = 10;
+    source.label = "finder-a";
+    source.mcfRefImage = cv::Mat(10, 12, CV_8UC3, cv::Scalar(10, 20, 30));
+    firstTool.CaptureFrom(source, true);
+    firstTool.multiColorReferenceFile = "mcf_reference.png";
+    first.tools.push_back(std::move(firstTool));
+
+    RecipeAutosaveService::ConfigureTarget(recipePath.string());
+    RecipeAutosaveService::MarkDirty(RecipeDirtyKind::All);
+    Require(RecipeAutosaveService::ShouldCapture(false),
+        "recipe autosave did not become capture-ready");
+    RecipeAutosaveService::Submit(std::move(first));
+    Require(RecipeAutosaveService::WaitUntilIdle(5000) &&
+        fs::exists(recipePath) && fs::exists(assetPath),
+        "recipe autosave did not atomically write recipe assets");
+    const fs::file_time_type assetWriteTime = fs::last_write_time(assetPath);
+
+    RecipeData second;
+    second.name = "autosave-second";
+    RecipeToolInstance secondTool;
+    source.label = "finder-b";
+    secondTool.CaptureFrom(source, false);
+    secondTool.multiColorReferenceFile = "mcf_reference.png";
+    second.tools.push_back(std::move(secondTool));
+    RecipeAutosaveService::MarkDirty(RecipeDirtyKind::Parameters);
+    RecipeAutosaveService::Submit(std::move(second));
+    Require(RecipeAutosaveService::WaitUntilIdle(5000),
+        "parameter-only recipe autosave did not finish");
+    Require(fs::last_write_time(assetPath) == assetWriteTime,
+        "parameter-only autosave rewrote an unchanged reference asset");
+
+    const RecipeAutosaveSnapshot snapshot = RecipeAutosaveService::Snapshot();
+    Require(snapshot.completedSaveCount == 2 && snapshot.failedSaveCount == 0 &&
+        !snapshot.lastSavedAt.empty() && fs::exists(snapshot.backupPath),
+        "recipe autosave status or backup rotation regressed");
+
+    RecipeData loaded;
+    Require(RecipeManager::Load(recipePath.string().c_str(), loaded) &&
+        loaded.name == "autosave-second" && loaded.tools.size() == 1 &&
+        !loaded.tools[0].multiColorReferenceImage.empty(),
+        "autosaved recipe or external multi-color asset did not load");
+
+    std::string restoreError;
+    Require(RecipeAutosaveService::RestoreBackup(&restoreError) && restoreError.empty() &&
+        RecipeManager::Load(recipePath.string().c_str(), loaded) &&
+        loaded.name == "autosave-first",
+        "recipe backup restore failed");
+
+    RecipeAutosaveService::Shutdown();
+    fs::remove_all(directory);
+}
+
+void TestHardwareSettingsPersistence()
+{
+    const fs::path settingsPath = fs::temp_directory_path() /
+        ("imgui_opencv_hardware_settings_" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()) + ".json");
+
+    HardwarePanelSettings source;
+    source.cameraAddress = "rtsp://192.168.10.20/live";
+    source.cameraSourceName = "line-a-camera";
+    source.cameraBackend = 3;
+    source.cameraOrientation = 3;
+    source.cameraTimeoutMs = 880;
+    source.cameraIntervalMs = 75;
+    source.cameraAutoCapture = false;
+    source.cameraRunAfterCapture = false;
+    source.cameraTriggerBeforeRun = false;
+    source.cameraAutoExposure = false;
+    source.cameraExposure = -4.25f;
+    source.cameraGain = 12.5f;
+    source.outputType = 3;
+    source.outputKey = "quality-gate";
+    source.outputAddress = "192.168.10.30";
+    source.outputPort = 5000;
+    source.outputResource = "cell-1";
+    source.outputTarget = "ns=3;s=Result.OK";
+    source.outputAddressValue = 125;
+    source.outputTimeoutMs = 2300;
+    source.plcHoldingRegister = true;
+    source.tcpPassText = "OK-A";
+    source.tcpFailText = "NG-A";
+    source.tcpAppendCrLf = false;
+    source.outputInvert = true;
+    source.outputAutoPublish = true;
+
+    std::string error;
+    Require(HardwareSettingsService::Save(source, settingsPath.string(), &error) &&
+        error.empty() && fs::exists(settingsPath),
+        "hardware settings were not saved");
+
+    const HardwarePanelSettings loaded = HardwareSettingsService::Load(settingsPath.string());
+    Require(loaded.cameraAddress == source.cameraAddress &&
+        loaded.cameraSourceName == source.cameraSourceName &&
+        loaded.cameraBackend == source.cameraBackend &&
+        loaded.cameraOrientation == source.cameraOrientation &&
+        loaded.cameraTimeoutMs == source.cameraTimeoutMs &&
+        loaded.cameraIntervalMs == source.cameraIntervalMs &&
+        loaded.cameraAutoCapture == source.cameraAutoCapture &&
+        loaded.cameraRunAfterCapture == source.cameraRunAfterCapture &&
+        loaded.cameraTriggerBeforeRun == source.cameraTriggerBeforeRun &&
+        loaded.cameraAutoExposure == source.cameraAutoExposure &&
+        std::abs(loaded.cameraExposure - source.cameraExposure) < 0.001f &&
+        std::abs(loaded.cameraGain - source.cameraGain) < 0.001f &&
+        loaded.outputType == source.outputType &&
+        loaded.outputKey == source.outputKey &&
+        loaded.outputAddress == source.outputAddress &&
+        loaded.outputPort == source.outputPort &&
+        loaded.outputResource == source.outputResource &&
+        loaded.outputTarget == source.outputTarget &&
+        loaded.outputAddressValue == source.outputAddressValue &&
+        loaded.outputTimeoutMs == source.outputTimeoutMs &&
+        loaded.plcHoldingRegister == source.plcHoldingRegister &&
+        loaded.tcpPassText == source.tcpPassText &&
+        loaded.tcpFailText == source.tcpFailText &&
+        loaded.tcpAppendCrLf == source.tcpAppendCrLf &&
+        loaded.outputInvert == source.outputInvert &&
+        loaded.outputAutoPublish == source.outputAutoPublish &&
+        !HardwareSettingsService::SettingsPath().empty(),
+        "hardware settings round trip lost camera or output fields");
+
+    fs::remove(settingsPath);
 }
 
 void TestConcreteTcpTextAdapter()
@@ -2299,12 +2990,19 @@ void TestConcreteOpenCvCameraAdapter()
         ImageState::Current().size() == cv::Size(7, 5),
         "OpenCV camera frame did not enter the normal FrameSource pipeline");
 
+    HardwareRuntimeService::SetCameraOrientation(1);
+    Require(HardwareRuntimeService::GrabCameraFrame(250, "opencv-camera-rotated", 10, 89.0).success &&
+        FrameSourceState::Current().sourcePath == "opencv-camera-rotated" &&
+        ImageState::Current().size() == cv::Size(5, 7),
+        "camera orientation did not apply to the next frame without reconnecting");
+
     backendView->nextFrame.release();
     Require(!HardwareRuntimeService::GrabCameraFrame(100).success &&
         cameraView->ConnectionState() == DeviceConnectionState::Connected,
         "empty camera frame should fail without dropping the connection");
     cameraView->StopStream();
     Require(!cameraView->IsStreaming(), "OpenCV camera adapter stream state did not stop");
+    HardwareRuntimeService::SetCameraOrientation(0);
     HardwareAdapterService::Clear();
     Require(backendCloseCount >= 1,
         "OpenCV camera backend was not closed during adapter cleanup");
@@ -2615,11 +3313,18 @@ void TestImageStateOwnsCurrentImageSnapshot()
     Require(!ImageState::Current().empty(), "image state current image empty");
     Require(!ImageState::Original().empty(), "image state original image empty");
     Require(gContext.imageVersion == 1, "image state did not sync context version");
-    Require(gContext.image.data != ImageState::Current().data, "image state shared VisionContext current image buffer");
+    Require(gContext.image.data == ImageState::Current().data,
+        "image state duplicated the compatibility context image");
+
+    const ImmutableImageFrame immutableFrame = ImageState::AcquireImmutableFrame();
+    Require(immutableFrame.valid() && immutableFrame.version == ImageState::Version(),
+        "image state did not provide an immutable shared frame");
 
     ImageState::CurrentRef().setTo(cv::Scalar(11, 12, 13));
     Require(ImageState::Current().at<cv::Vec3b>(0, 0)[0] == 11,
         "image state mutable API did not update current image");
+    Require(immutableFrame.current->at<cv::Vec3b>(0, 0)[0] == 7,
+        "mutable image access changed an already acquired immutable frame");
 
     image.setTo(cv::Scalar(200, 200, 200));
     Require(ImageState::Current().at<cv::Vec3b>(0, 0)[0] == 11, "image state current buffer was unexpectedly replaced");
@@ -2658,23 +3363,68 @@ void TestToolExecutorInjectsImageSnapshot()
 
     ToolInstance it;
     it.type = 2;
-    it.blobMinArea = 20;
-    it.blobMaxArea = 200;
+    it.blob.minArea = 20;
+    it.blob.maxArea = 200;
+    it.showResultLabels = true;
+    it.parametersDirty = true;
 
     ToolExecutor::Execute(it.type, it);
     Require(gContext.image.data == ImageState::Current().data,
         "tool executor did not share read-only blob input");
     Require(!gContext.unifiedResults.empty(), "tool executor did not publish result");
     Require(gContext.unifiedResults[0].regions.size() == 1, "tool executor blob result regressed");
+    Require(!gContext.unifiedResults[0].regions[0].label.empty(),
+        "common result label switch did not override legacy Blob label state");
+    Require(!it.parametersDirty,
+        "tool execution did not clear the pending parameter state");
 
     ToolInstance threshold;
     threshold.type = 3;
-    threshold.dbgUseGray = false;
-    threshold.dbgEnableThresh = true;
-    threshold.dbgThreshold = 100;
+    threshold.threshold.useGray = false;
+    threshold.threshold.enableThreshold = true;
+    threshold.threshold.threshold = 100;
     ToolExecutor::Execute(threshold.type, threshold);
-    Require(gContext.image.data != ImageState::Current().data,
-        "tool executor shared mutable threshold input");
+    Require(gContext.image.data == ImageState::Current().data,
+        "published threshold result was duplicated between context and image state");
+}
+
+void TestToolExecutorDetachedExecutionPublishesOnCallerThread()
+{
+    cv::Mat input = cv::Mat::zeros(24, 24, CV_8UC1);
+    cv::rectangle(input, cv::Rect(6, 6, 10, 10), cv::Scalar(220), cv::FILLED);
+    ImageState::SetImage(input);
+    ROIState::Clear();
+    gContext.ClearUnifiedResults();
+
+    ToolInstance target;
+    target.type = 3;
+    target.toolId = 91001;
+    target.threshold.enableThreshold = true;
+    target.threshold.threshold = 100;
+
+    ToolInstance snapshot;
+    VisionContext context;
+    Require(ToolExecutor::PrepareDetached(target, ImageState::Current(), 2, snapshot, context),
+        "detached tool preparation failed");
+    Require(context.immutableImageOwner &&
+        context.image.data == ImageState::Current().data,
+        "detached preparation copied pixels instead of sharing an immutable frame");
+
+    const cv::Mat currentBefore = ImageState::Current().clone();
+    ToolExecutor::ToolExecutionOutput output;
+    Require(ToolExecutor::ExecuteDetached(snapshot, context, 2, output) && output.completed,
+        "detached threshold execution failed");
+    Require(cv::norm(ImageState::Current(), currentBefore, cv::NORM_INF) == 0.0,
+        "detached algorithm phase modified ImageState before publication");
+    Require(gContext.unifiedResults.empty(),
+        "detached algorithm phase published overlays from the worker phase");
+
+    Require(ToolExecutor::PublishDetached(target, std::move(output)),
+        "detached threshold publication did not report a debug image");
+    Require(target.hasLastResult && target.lastResult.sourceToolId == target.toolId,
+        "detached publication did not update the target tool result");
+    Require(!gContext.unifiedResults.empty(),
+        "detached publication did not publish the unified result");
 }
 
 void TestToolChainEditActions()
@@ -2717,7 +3467,7 @@ void TestToolChainEditActions()
         "tool chain original deletion did not remap selected/live index");
 
     bool destroyed = false;
-    tools[0].toolImpl = new TestDisposableTool(&destroyed);
+    tools[0].toolImpl = std::make_unique<TestDisposableTool>(&destroyed);
     Require(ToolChainState::RemoveTool(0),
         "tool chain remove was rejected");
     Require(destroyed, "tool chain remove did not release tool implementation");
@@ -2991,6 +3741,32 @@ void TestExampleRecipesLoadAndExecute()
     ToolChainState::ClearTools();
 }
 
+void TestOriginalImageToolPublishesResult()
+{
+    ToolController::Reset();
+    ToolChainState::ClearTools();
+    ImageState::SetImage(cv::Mat(8, 8, CV_8UC1, cv::Scalar(10)));
+
+    ToolInstance originalTool;
+    originalTool.type = 12;
+    ToolChainState::Tools().push_back(std::move(originalTool));
+    ToolController::RequestRunAll(false);
+    for (int tick = 0;
+        tick < 4 && ToolController::GetMode() != ToolController::Mode::Idle; ++tick)
+    {
+        ToolController::Tick();
+    }
+
+    Require(ToolController::GetMode() == ToolController::Mode::Idle &&
+        ToolChainState::ReadOnlyTools()[0].hasLastResult &&
+        ToolChainState::ReadOnlyTools()[0].lastResult.success &&
+        ToolChainState::ReadOnlyTools()[0].lastResult.status == ToolResultStatus::Pass,
+        "original-image tool completed without publishing a Pass result");
+
+    ToolChainState::ClearTools();
+    ToolController::OnToolChainChanged();
+}
+
 void TestToolControllerInputSourcesAndChainReset()
 {
     ToolController::OnToolChainChanged();
@@ -3005,13 +3781,13 @@ void TestToolControllerInputSourcesAndChainReset()
     ToolInstance first;
     first.type = 2;
     first.inputSourceMode = 2;
-    first.toolImpl = new TestInputCaptureTool(&firstSeen, 40);
+    first.toolImpl = std::make_unique<TestInputCaptureTool>(&firstSeen, 40);
     ToolChainState::Tools().push_back(std::move(first));
 
     ToolInstance second;
     second.type = 2;
     second.inputSourceMode = 1;
-    second.toolImpl = new TestInputCaptureTool(&previousOutputSeen);
+    second.toolImpl = std::make_unique<TestInputCaptureTool>(&previousOutputSeen);
     ToolChainState::Tools().push_back(std::move(second));
 
     auto batchOutput = std::make_unique<TestModbusAdapter>();
@@ -3032,13 +3808,14 @@ void TestToolControllerInputSourcesAndChainReset()
         "batch execution did not finish");
     Require(firstSeen == 10, ("batch original-tool input fallback regressed: " + std::to_string(firstSeen)).c_str());
     Require(previousOutputSeen == 40, ("batch previous processed-image input regressed: " + std::to_string(previousOutputSeen)).c_str());
-    Require(batchOutputView->lastAddress == 31 && batchOutputView->lastValue,
+    Require(HardwareRuntimeService::WaitForOutputIdle(3000) &&
+        batchOutputView->lastAddress == 31 && batchOutputView->lastValue,
         "completed tool batch did not publish the aggregate Pass status");
 
     ImageState::Clear();
     batchOutputView->lastValue = true;
     ToolController::RequestRunAll(false);
-    Require(!batchOutputView->lastValue,
+    Require(HardwareRuntimeService::WaitForOutputIdle(3000) && !batchOutputView->lastValue,
         "tool-chain preflight failure did not publish Error/NG to hardware");
 
     HardwareRuntimeService::Shutdown();
@@ -3052,7 +3829,7 @@ void TestToolControllerInputSourcesAndChainReset()
     ToolInstance standaloneOriginal;
     standaloneOriginal.type = 2;
     standaloneOriginal.inputSourceMode = 2;
-    standaloneOriginal.toolImpl = new TestInputCaptureTool(&standaloneOriginalSeen);
+    standaloneOriginal.toolImpl = std::make_unique<TestInputCaptureTool>(&standaloneOriginalSeen);
     ToolChainState::Tools().push_back(std::move(standaloneOriginal));
     ToolController::RequestRun(0);
     ToolController::Tick();
@@ -3062,12 +3839,23 @@ void TestToolControllerInputSourcesAndChainReset()
     ImageState::SetDebugImage(cv::Mat(8, 8, CV_8UC1, cv::Scalar(70)));
     int standaloneProcessedSeen = -1;
     ToolChainState::Tools()[0].inputSourceMode = 1;
-    delete ToolChainState::Tools()[0].toolImpl;
-    ToolChainState::Tools()[0].toolImpl = new TestInputCaptureTool(&standaloneProcessedSeen);
+    ToolChainState::Tools()[0].toolImpl =
+        std::make_unique<TestInputCaptureTool>(&standaloneProcessedSeen);
     ToolController::RequestRun(0);
     ToolController::Tick();
     Require(standaloneProcessedSeen == 70,
         "standalone processed-image input regressed");
+
+    int deduplicatedExecutions = 0;
+    ToolChainState::Tools()[0].toolImpl =
+        std::make_unique<TestCountingTool>(&deduplicatedExecutions);
+    ToolController::RequestRun(0);
+    ToolController::RequestRun(0);
+    ToolController::RequestRun(0);
+    ToolController::Tick();
+    ToolController::Tick();
+    Require(deduplicatedExecutions == 1,
+        "duplicate standalone requests for the same tool were not coalesced");
 
     ToolChainState::Tools()[0].hasLastResult = true;
     ToolChainState::Tools()[0].lastResult.toolName = "stale";
@@ -3091,8 +3879,8 @@ void TestToolControllerInputSourcesAndChainReset()
 
     int disabledSeen = -1;
     ToolChainState::Tools()[0].enabled = false;
-    delete ToolChainState::Tools()[0].toolImpl;
-    ToolChainState::Tools()[0].toolImpl = new TestInputCaptureTool(&disabledSeen);
+    ToolChainState::Tools()[0].toolImpl =
+        std::make_unique<TestInputCaptureTool>(&disabledSeen);
     ToolController::RequestRun(0);
     ToolController::Tick();
     Require(disabledSeen == -1 && ToolChainState::Tools()[0].hasLastResult &&
@@ -3101,6 +3889,536 @@ void TestToolControllerInputSourcesAndChainReset()
 
     ToolChainState::ClearTools();
     ToolController::OnToolChainChanged();
+}
+
+void TestToolControllerRunsOnlySelectedTaskGroupInOrder()
+{
+    ToolController::Reset();
+    ToolChainState::ClearTools();
+    ToolChainState::ReplaceTaskGroups({});
+    ImageState::SetImage(cv::Mat(8, 8, CV_8UC1, cv::Scalar(20)));
+
+    Require(ToolChainState::CreateTaskGroup("任务A") >= 0 &&
+        ToolChainState::CreateTaskGroup("任务B") >= 0,
+        "task-group execution test setup failed");
+
+    int taskBExecutions = 0;
+    std::vector<int> executionOrder;
+    auto addTool = [&executionOrder](const char* groupName, int* executions, int marker)
+    {
+        ToolInstance tool;
+        tool.type = 2;
+        tool.groupName = groupName;
+        if (marker > 0)
+            tool.toolImpl = std::make_unique<TestOrderedTool>(&executionOrder, marker);
+        else
+            tool.toolImpl = std::make_unique<TestCountingTool>(executions);
+        ToolChainState::Tools().push_back(std::move(tool));
+    };
+    addTool("任务A", nullptr, 1);
+    addTool("任务B", &taskBExecutions, 0);
+    addTool("任务A", nullptr, 2);
+
+    ToolController::RequestRunTaskGroup("任务A", false, false);
+    Require(ToolController::GetRunProgressTotal() == 2 &&
+        ToolController::GetRunProgressCurrent() == 1,
+        "task-group execution progress did not use the filtered tool count");
+    for (int tick = 0;
+        tick < 8 && ToolController::GetMode() != ToolController::Mode::Idle; ++tick)
+    {
+        ToolController::Tick();
+    }
+
+    Require(ToolController::GetMode() == ToolController::Mode::Idle &&
+        executionOrder == std::vector<int>({1, 2}) && taskBExecutions == 0,
+        "task-group execution did not skip tools from other tasks");
+    Require(ToolChainState::ReadOnlyTools()[0].hasLastResult &&
+        !ToolChainState::ReadOnlyTools()[1].hasLastResult &&
+        ToolChainState::ReadOnlyTools()[2].hasLastResult,
+        "task-group execution published results outside the selected task");
+    Require(ToolController::WasLastRunTaskGroup() &&
+        ToolController::GetLastRunTaskGroupName() == "任务A",
+        "task-group execution scope was not retained for rerun");
+
+    ToolController::RequestRepeatLastRun(false, false);
+    for (int tick = 0;
+        tick < 8 && ToolController::GetMode() != ToolController::Mode::Idle; ++tick)
+    {
+        ToolController::Tick();
+    }
+    Require(executionOrder == std::vector<int>({1, 2, 1, 2}) && taskBExecutions == 0,
+        "rerun did not preserve the selected task scope");
+
+    ToolController::Reset();
+    ToolChainState::ClearTools();
+    ToolChainState::ReplaceTaskGroups({});
+}
+
+void TestToolControllerStepsOnlySelectedTaskGroupInOrder()
+{
+    ToolController::Reset();
+    ToolChainState::ClearTools();
+    ToolChainState::ReplaceTaskGroups({});
+    ImageState::SetImage(cv::Mat(8, 8, CV_8UC1, cv::Scalar(20)));
+
+    Require(ToolChainState::CreateTaskGroup("任务A") >= 0 &&
+        ToolChainState::CreateTaskGroup("任务B") >= 0,
+        "task-group step test setup failed");
+
+    int taskBExecutions = 0;
+    std::vector<int> executionOrder;
+    auto addTool = [&executionOrder](const char* groupName, int* executions, int marker)
+    {
+        ToolInstance tool;
+        tool.type = 2;
+        tool.groupName = groupName;
+        if (marker > 0)
+            tool.toolImpl = std::make_unique<TestOrderedTool>(&executionOrder, marker);
+        else
+            tool.toolImpl = std::make_unique<TestCountingTool>(executions);
+        ToolChainState::Tools().push_back(std::move(tool));
+    };
+    addTool("任务A", nullptr, 1);
+    addTool("任务B", &taskBExecutions, 0);
+    addTool("任务A", nullptr, 2);
+
+    ToolController::RequestStepNextTaskGroup("任务A");
+    Require(ToolController::GetStepTotal() == 2 &&
+        ToolController::GetCurrentIndex() == 0,
+        "task-group step did not start at the first matching tool");
+    ToolController::Tick();
+    Require(ToolController::GetStepCursor() == 1 &&
+        executionOrder == std::vector<int>({1}) && taskBExecutions == 0,
+        "first task-group step executed the wrong tool");
+
+    ToolController::RequestStepNextTaskGroup("任务A");
+    Require(ToolController::GetCurrentIndex() == 2,
+        "task-group step used the global tool index as its cursor");
+    ToolController::Tick();
+    Require(ToolController::GetStepCursor() == 2 &&
+        executionOrder == std::vector<int>({1, 2}) && taskBExecutions == 0,
+        "task-group step did not preserve filtered tool order");
+
+    ToolController::Reset();
+    ToolChainState::ClearTools();
+    ToolChainState::ReplaceTaskGroups({});
+}
+
+void TestToolControllerUsesIndependentTaskImages()
+{
+    ToolController::Reset();
+    ToolChainState::ClearTools();
+    ToolChainState::ReplaceTaskGroups({});
+    ImageState::SetImage(cv::Mat(8, 8, CV_8UC1, cv::Scalar(9)));
+
+    const fs::path suffix = std::to_string(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    const fs::path taskAPath = fs::temp_directory_path() /
+        ("imgui_opencv_task_a_" + suffix.string() + ".png");
+    const fs::path taskBPath = fs::temp_directory_path() /
+        ("imgui_opencv_task_b_" + suffix.string() + ".png");
+    Require(cv::imwrite(taskAPath.string(), cv::Mat(8, 8, CV_8UC1, cv::Scalar(23))) &&
+        cv::imwrite(taskBPath.string(), cv::Mat(8, 8, CV_8UC1, cv::Scalar(187))),
+        "independent task image test could not create input images");
+
+    Require(ToolChainState::CreateTaskGroup("任务A") >= 0 &&
+        ToolChainState::CreateTaskGroup("任务B") >= 0 &&
+        ToolChainState::SetTaskGroupImagePath(0, taskAPath.string()) &&
+        ToolChainState::SetTaskGroupImagePath(1, taskBPath.string()),
+        "independent task image test setup failed");
+
+    int taskACaptured = -1;
+    int taskBCaptured = -1;
+    std::vector<int> executionOrder;
+    auto addTool = [&executionOrder](const char* groupName, int marker, int* captured)
+    {
+        ToolInstance orderTool;
+        orderTool.type = 2;
+        orderTool.groupName = groupName;
+        orderTool.toolImpl = std::make_unique<TestOrderedTool>(&executionOrder, marker);
+        ToolChainState::Tools().push_back(std::move(orderTool));
+
+        ToolInstance captureTool;
+        captureTool.type = 2;
+        captureTool.groupName = groupName;
+        captureTool.toolImpl = std::make_unique<TestInputCaptureTool>(captured);
+        ToolChainState::Tools().push_back(std::move(captureTool));
+    };
+    addTool("任务B", 2, &taskBCaptured);
+    addTool("任务A", 1, &taskACaptured);
+
+    ToolController::RequestRunAll(false, false);
+    for (int tick = 0;
+        tick < 16 && ToolController::GetMode() != ToolController::Mode::Idle; ++tick)
+    {
+        ToolController::Tick();
+    }
+
+    Require(ToolController::GetMode() == ToolController::Mode::Idle &&
+        executionOrder == std::vector<int>({1, 2}),
+        "run-all did not follow task-group order for independent images");
+    Require(taskACaptured == 23 && taskBCaptured == 187,
+        "task tools did not receive their independently assigned images");
+    Require(!ToolController::GetTaskResultImage("任务A").empty() &&
+        !ToolController::GetTaskResultImage("任务B").empty() &&
+        ToolController::GetTaskResultImage("任务A").ptr<uchar>(0)[0] == 23 &&
+        ToolController::GetTaskResultImage("任务B").ptr<uchar>(0)[0] == 187,
+        "task result images were not retained independently");
+
+    ToolController::RequestRunTaskGroup("任务A", false, false);
+    for (int tick = 0;
+        tick < 12 && ToolController::GetMode() != ToolController::Mode::Idle; ++tick)
+    {
+        ToolController::Tick();
+    }
+    Require(ToolChainState::ReadOnlyTools()[0].hasLastResult &&
+        ToolChainState::ReadOnlyTools()[1].hasLastResult &&
+        !ToolController::GetTaskResultImage("任务B").empty(),
+        "rerunning one task cleared another task's results or image");
+
+    std::error_code removeError;
+    fs::remove(taskAPath, removeError);
+    removeError.clear();
+    fs::remove(taskBPath, removeError);
+    ToolController::Reset();
+    ToolChainState::ClearTools();
+    ToolChainState::ReplaceTaskGroups({});
+}
+
+void TestToolControllerRunsTaskGroupsInParallel()
+{
+    ToolController::Reset();
+    ToolController::SetTaskParallelEnabled(true);
+    ToolChainState::ClearTools();
+    ToolChainState::ReplaceTaskGroups({});
+    ImageState::SetImage(cv::Mat(32, 32, CV_8UC1, cv::Scalar(9)));
+
+    const fs::path suffix = std::to_string(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    const fs::path taskAPath = fs::temp_directory_path() /
+        ("imgui_opencv_parallel_a_" + suffix.string() + ".png");
+    const fs::path taskBPath = fs::temp_directory_path() /
+        ("imgui_opencv_parallel_b_" + suffix.string() + ".png");
+    Require(cv::imwrite(taskAPath.string(),
+            cv::Mat(32, 32, CV_8UC1, cv::Scalar(23))) &&
+        cv::imwrite(taskBPath.string(),
+            cv::Mat(32, 32, CV_8UC1, cv::Scalar(187))),
+        "task-parallel test could not create input images");
+    Require(ToolChainState::CreateTaskGroup("任务A") >= 0 &&
+        ToolChainState::CreateTaskGroup("任务B") >= 0 &&
+        ToolChainState::SetTaskGroupImagePath(0, taskAPath.string()) &&
+        ToolChainState::SetTaskGroupImagePath(1, taskBPath.string()),
+        "task-parallel group setup failed");
+
+    auto addThreshold = [](const char* groupName)
+    {
+        ToolInstance tool;
+        tool.type = 3;
+        tool.groupName = groupName;
+        tool.inputSourceMode = 0;
+        tool.threshold.useGray = true;
+        tool.threshold.enableThreshold = true;
+        tool.threshold.threshold = 100;
+        ToolChainState::AddTool(std::move(tool));
+    };
+    addThreshold("任务A");
+    addThreshold("任务B");
+    addThreshold("任务A");
+    addThreshold("任务B");
+
+    ToolController::RequestRunAll(false, false);
+    Require(ToolController::IsParallelExecutionActive(),
+        "run-all did not launch independent task groups in parallel");
+    for (int attempt = 0; attempt < 500 &&
+        ToolController::GetMode() != ToolController::Mode::Idle; ++attempt)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        ToolController::Tick();
+    }
+
+    const cv::Mat taskAResult = ToolController::GetTaskResultImage("任务A");
+    const cv::Mat taskBResult = ToolController::GetTaskResultImage("任务B");
+    Require(ToolController::GetMode() == ToolController::Mode::Idle &&
+        ToolChainState::AtReadOnly(0)->hasLastResult &&
+        ToolChainState::AtReadOnly(1)->hasLastResult &&
+        ToolChainState::AtReadOnly(2)->hasLastResult &&
+        ToolChainState::AtReadOnly(3)->hasLastResult,
+        "task-parallel run did not publish every task result");
+    Require(!taskAResult.empty() && !taskBResult.empty() &&
+        cv::countNonZero(taskAResult.reshape(1)) == 0 &&
+        cv::countNonZero(taskBResult.reshape(1)) ==
+            static_cast<int>(taskBResult.total() * taskBResult.channels()),
+        "task-parallel result images were mixed between tasks");
+
+    std::error_code removeError;
+    fs::remove(taskAPath, removeError);
+    removeError.clear();
+    fs::remove(taskBPath, removeError);
+    ToolController::SetTaskParallelEnabled(false);
+    ToolController::Reset();
+    ToolChainState::ClearTools();
+    ToolChainState::ReplaceTaskGroups({});
+}
+
+void TestToolControllerPublishesHeavyToolAsync()
+{
+    const std::vector<ROI> previousROIs = ROIState::ReadOnlyItems();
+    const int previousSelectedROI = ROIState::SelectedIndex();
+    ToolController::Reset();
+    ToolChainState::ClearTools();
+    ROIState::Clear();
+
+    cv::Mat input(80, 100, CV_8UC1, cv::Scalar(0));
+    ImageState::SetImage(input);
+
+    ROI line;
+    line.type = ROI_TYPE_LINE;
+    line.start = ImVec2(10.0f, 10.0f);
+    line.end = ImVec2(40.0f, 50.0f);
+    ROIState::Add(line, true);
+
+    ToolInstance measurement;
+    measurement.type = 15;
+    measurement.measureMode = 0;
+    measurement.measureMmPerPixel = 0.1f;
+    const int index = ToolChainState::AddTool(std::move(measurement));
+
+    ToolController::RequestRun(index);
+    ToolController::Tick();
+    Require(!ToolChainState::AtReadOnly(index)->hasLastResult,
+        "heavy tool result was published in the worker launch frame");
+
+    for (int attempt = 0; attempt < 200 && !ToolChainState::AtReadOnly(index)->hasLastResult; ++attempt)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        ToolController::Tick();
+    }
+    const ToolInstance* completed = ToolChainState::AtReadOnly(index);
+    Require(completed && completed->hasLastResult && completed->lastResult.success,
+        "heavy tool background result was not published by ToolController");
+    Require(!completed->lastResult.measurements.empty(),
+        "heavy tool background result lost measurement values");
+
+    ToolInstance* mutableMeasurement = ToolChainState::At(index);
+    Require(mutableMeasurement != nullptr, "heavy tool disappeared before revision test");
+    mutableMeasurement->hasLastResult = false;
+    ToolController::RequestRun(index);
+    ToolController::Tick();
+    mutableMeasurement->MarkParametersChanged();
+    for (int attempt = 0; attempt < 200; ++attempt)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        ToolController::Tick();
+    }
+    Require(!mutableMeasurement->hasLastResult,
+        "background result from an older parameter revision was published");
+
+    ToolController::RequestRun(index);
+    ToolController::Tick();
+    for (int attempt = 0; attempt < 200 && !mutableMeasurement->hasLastResult; ++attempt)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        ToolController::Tick();
+    }
+    Require(mutableMeasurement->hasLastResult,
+        "latest parameter revision did not publish after a stale result was discarded");
+
+    ToolController::Reset();
+    ToolChainState::ClearTools();
+    ROIState::ReplaceAll(previousROIs);
+    ROIState::SetSelectedIndex(previousSelectedROI);
+}
+
+void TestToolControllerExecutesDagLevelInParallel()
+{
+    const std::vector<ROI> previousROIs = ROIState::ReadOnlyItems();
+    const int previousSelectedROI = ROIState::SelectedIndex();
+    ToolController::OnToolChainChanged();
+    ToolChainState::ClearTools();
+    ROIState::Clear();
+    ImageState::SetImage(cv::Mat(80, 100, CV_8UC1, cv::Scalar(0)));
+
+    ROI line;
+    line.type = ROI_TYPE_LINE;
+    line.start = ImVec2(10.0f, 10.0f);
+    line.end = ImVec2(50.0f, 40.0f);
+    ROIState::Add(line, true);
+
+    ToolInstance first;
+    first.type = 15;
+    first.inputSourceMode = 2;
+    first.measureMode = 0;
+    first.measureMmPerPixel = 0.1f;
+    const int firstIndex = ToolChainState::AddTool(std::move(first));
+
+    ToolInstance second;
+    second.type = 15;
+    second.inputSourceMode = 2;
+    second.measureMode = 0;
+    second.measureMmPerPixel = 0.2f;
+    const int secondIndex = ToolChainState::AddTool(std::move(second));
+
+    ToolController::RequestRunAll(false, false);
+    ToolController::Tick();
+    Require(ToolController::IsParallelExecutionActive() &&
+        !ToolChainState::AtReadOnly(firstIndex)->hasLastResult &&
+        !ToolChainState::AtReadOnly(secondIndex)->hasLastResult,
+        "ToolController did not launch an independent DAG level in parallel");
+
+    for (int attempt = 0; attempt < 500 &&
+        ToolController::GetMode() != ToolController::Mode::Idle; ++attempt)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        ToolController::Tick();
+    }
+    Require(ToolController::GetMode() == ToolController::Mode::Idle &&
+        ToolChainState::AtReadOnly(firstIndex)->hasLastResult &&
+        ToolChainState::AtReadOnly(secondIndex)->hasLastResult,
+        "parallel DAG level did not publish every tool result");
+
+    ToolController::RequestRunAll(false, false);
+    ToolController::Tick();
+    Require(ToolController::IsParallelExecutionActive(),
+        "repeated DAG batch did not start a new execution round");
+    for (int attempt = 0; attempt < 500 &&
+        ToolController::GetMode() != ToolController::Mode::Idle; ++attempt)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        ToolController::Tick();
+    }
+    Require(ToolController::GetMode() == ToolController::Mode::Idle &&
+        ToolController::GetToolTimeMs(firstIndex) > 0.0f &&
+        ToolController::GetToolTimeMs(secondIndex) > 0.0f &&
+        ToolController::GetTotalTimeMs() > 0.0f,
+        "repeated DAG batch incorrectly reused results from the previous run");
+
+    ToolController::OnToolChainChanged();
+    ToolChainState::ClearTools();
+    ROIState::ReplaceAll(previousROIs);
+    ROIState::SetSelectedIndex(previousSelectedROI);
+}
+
+void TestCancellationTokensStopHeavyTools()
+{
+    VisionContext context;
+    context.image = cv::Mat::zeros(48, 48, CV_8UC1);
+    std::stop_source cancellation;
+    context.stopToken = cancellation.get_token();
+    cancellation.request_stop();
+
+    TemplateMatchingTool templateTool;
+    templateTool.templateImg = cv::Mat::zeros(8, 8, CV_8UC1);
+    const ToolResult templateResult = templateTool.Execute(context);
+    Require(!templateResult.success && templateResult.message == "执行已取消",
+        "template matching ignored a requested cancellation");
+
+    WindowsPPOCREngine engine;
+    std::vector<PPOCRTextResult> texts;
+    std::string error;
+    Require(!engine.Recognize(cv::Mat::zeros(16, 16, CV_8UC3), texts, &error,
+            cancellation.get_token()) && error == "OCR execution cancelled",
+        "OCR engine ignored a requested cancellation");
+}
+
+void TestAsyncHeavyToolUsesDependencySnapshots()
+{
+    const std::vector<ROI> previousROIs = ROIState::ReadOnlyItems();
+    const int previousSelectedROI = ROIState::SelectedIndex();
+    ToolController::Reset();
+    ToolChainState::ClearTools();
+    ROIState::Clear();
+
+    cv::Mat input = cv::Mat::zeros(80, 100, CV_8UC1);
+    cv::rectangle(input, cv::Rect(20, 20, 24, 18), cv::Scalar(220), cv::FILLED);
+    ImageState::SetImage(input);
+
+    ToolInstance upstream;
+    upstream.type = 2;
+    upstream.hasLastResult = true;
+    ToolResult::Region located;
+    located.bbox = cv::Rect(16, 16, 36, 30);
+    located.angle = 0.0f;
+    upstream.lastResult.regions.push_back(located);
+    const int upstreamIndex = ToolChainState::AddTool(std::move(upstream));
+    const ToolInstance* upstreamTool = ToolChainState::AtReadOnly(upstreamIndex);
+    Require(upstreamTool != nullptr, "dependency snapshot upstream setup failed");
+
+    ToolInstance consumer;
+    consumer.type = 1;
+    consumer.templateImg = input(cv::Rect(20, 20, 24, 18)).clone();
+    consumer.matchThreshold = 0.5f;
+    consumer.resultRoiMode = static_cast<int>(ResultROIMode::NthResult);
+    consumer.resultRoiSourceToolId = upstreamTool->toolId;
+    consumer.fixture.enabled = true;
+    consumer.fixture.sourceToolId = upstreamTool->toolId;
+    consumer.fixture.referenceOrigin = cv::Point2f(34.0f, 31.0f);
+    const int consumerIndex = ToolChainState::AddTool(std::move(consumer));
+
+    ToolController::RequestRun(consumerIndex);
+    ToolController::Tick();
+    Require(!ToolChainState::AtReadOnly(consumerIndex)->hasLastResult,
+        "Fixture/result-ROI heavy tool fell back to synchronous execution");
+
+    for (int attempt = 0;
+         attempt < 200 && !ToolChainState::AtReadOnly(consumerIndex)->hasLastResult;
+         ++attempt)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        ToolController::Tick();
+    }
+    Require(ToolChainState::AtReadOnly(consumerIndex)->hasLastResult,
+        "dependency snapshot heavy tool did not publish asynchronously");
+
+    ToolController::Reset();
+    ToolChainState::ClearTools();
+    ROIState::ReplaceAll(previousROIs);
+    ROIState::SetSelectedIndex(previousSelectedROI);
+}
+
+void TestToolControllerLoopTimingResetsEachRound()
+{
+    const int previousLoopIntervalMs = ToolController::GetLoopIntervalMs();
+    const std::uint64_t initialCompletedSerial = ToolController::GetCompletedBatchSerial();
+    ToolController::Reset();
+    ToolChainState::ClearTools();
+    ImageState::SetImage(cv::Mat(16, 16, CV_8UC1, cv::Scalar(25)));
+
+    int captured = -1;
+    ToolInstance tool;
+    tool.type = 2;
+    tool.toolImpl = std::make_unique<TestInputCaptureTool>(&captured, -1, 12);
+    ToolChainState::AddTool(std::move(tool));
+    ToolController::SetLoopIntervalMs(40);
+
+    ToolController::RequestRunAll(true, false);
+    ToolController::Tick();
+    const float firstRoundMs = ToolController::GetTotalTimeMs();
+    Require(firstRoundMs >= 8.0f,
+        "loop timing test did not execute the first delayed round");
+    Require(ToolController::GetLoopIteration() == 1 &&
+        ToolController::IsWaitingForNextLoop() &&
+        ToolController::GetLoopWaitRemainingMs() > 0,
+        "loop round or wait countdown state was not published after the first round");
+    Require(ToolController::GetCompletedBatchSerial() == initialCompletedSerial + 1 &&
+        ToolController::GetLastCompletedLoopRound() == 1,
+        "first loop round did not publish a completed batch event");
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(60));
+    ToolController::Tick();
+    const float secondRoundMs = ToolController::GetTotalTimeMs();
+    Require(secondRoundMs < firstRoundMs * 1.75f,
+        "loop total time accumulated previous rounds");
+    Require(ToolController::GetLoopIteration() == 2,
+        "loop iteration did not advance after the second round");
+    Require(ToolController::GetCompletedBatchSerial() == initialCompletedSerial + 2 &&
+        ToolController::GetLastCompletedLoopRound() == 2,
+        "second loop round did not refresh the completed batch event");
+
+    ToolController::SetLoopEnabled(false);
+    Require(ToolController::GetLastCompletedLoopRound() == 2,
+        "stopping the loop discarded the latest completed round metadata");
+    ToolController::SetLoopIntervalMs(previousLoopIntervalMs);
+    ToolChainState::ClearTools();
 }
 
 void TestShapeMaxResultsDefaultIsOne()
@@ -3125,7 +4443,21 @@ void TestToolInstanceLabelDefaultIsEmpty()
 void TestCoreStateOwnsRoiAndToolChain()
 {
     ROIState::ClearInteraction();
+    ROIState::CancelQueuedRestore();
     ToolChainState::ClearTools();
+
+    ROI queued;
+    queued.start = ImVec2(10.0f, 20.0f);
+    queued.end = ImVec2(50.0f, 60.0f);
+    queued.angle = 22.5f;
+    ROIState::QueueRestoreAfterImageLoad({queued});
+    Require(ROIState::HasQueuedRestore(), "recipe ROI restore was not queued");
+    ROIState::ClearInteraction();
+    Require(ROIState::ApplyQueuedRestore() && ROIState::ReadOnlyItems().size() == 1 &&
+        std::abs(ROIState::ReadOnlyItems()[0].angle - 22.5f) < 0.001f,
+        "recipe ROI restore after image load regressed");
+    ROIState::CancelQueuedRestore();
+    ROIState::ClearInteraction();
 
     ROI roi;
     roi.start = ImVec2(1.0f, 2.0f);
@@ -3209,6 +4541,10 @@ void TestInspectionHistoryStatisticsAndCsv()
     const std::vector<double> trend = InspectionHistory::Trend("width", 2);
     Require(trend.size() == 2 && trend[0] == 10.0 && trend[1] == 11.0,
         "SPC trend query regressed");
+    const SpcDatabaseSnapshot databaseSnapshot = SpcDatabase::Snapshot();
+    Require(databaseSnapshot.open && databaseSnapshot.available &&
+        SpcDatabase::LoadRecent(10).size() == 4,
+        "SPC SQLite persistence did not store measurement samples");
 
     const std::filesystem::path path =
         std::filesystem::temp_directory_path() / "imgui_opencv_spc.csv";
@@ -3225,6 +4561,69 @@ void TestInspectionHistoryStatisticsAndCsv()
     input.close();
     std::filesystem::remove(path);
     InspectionHistory::Clear();
+}
+
+void TestToolExecutionGraphTopologyAndCache()
+{
+    std::vector<ToolInstance> tools;
+    ToolInstance original;
+    original.type = 12;
+    original.toolId = 10;
+    tools.push_back(std::move(original));
+
+    ToolInstance yolo;
+    yolo.type = 4;
+    yolo.toolId = 20;
+    yolo.inputSourceMode = 2;
+    tools.push_back(std::move(yolo));
+
+    ToolInstance ocr;
+    ocr.type = 13;
+    ocr.toolId = 30;
+    ocr.inputSourceMode = 2;
+    tools.push_back(std::move(ocr));
+
+    ToolInstance measurement;
+    measurement.type = 15;
+    measurement.toolId = 40;
+    measurement.inputSourceMode = 2;
+    measurement.resultRoiMode = static_cast<int>(ResultROIMode::AllResults);
+    measurement.resultRoiSourceToolId = 20;
+    tools.push_back(std::move(measurement));
+
+    const ToolExecutionGraphPlan plan = ToolExecutionGraph::Build(tools);
+    Require(plan.valid && plan.levels.size() == 3 &&
+        plan.levels[0] == std::vector<int>{0} &&
+        plan.levels[1] == std::vector<int>({1, 2}) &&
+        plan.levels[2] == std::vector<int>{3} &&
+        plan.nodes[1].parallelizable && plan.nodes[2].parallelizable,
+        "tool execution DAG did not create the expected parallel branches");
+
+    ToolExecutionCacheKey key;
+    key.toolId = 20;
+    key.parameterRevision = 3;
+    key.runRevision = 11;
+    key.imageVersion = 7;
+    key.upstreamRevision = ToolExecutionGraph::ComputeUpstreamRevision(plan, tools, 1);
+    ToolResult expected;
+    expected.toolName = "cached-yolo";
+    expected.status = ToolResultStatus::Pass;
+    ToolExecutionGraph::StoreCachedResult(key, expected);
+    ToolResult actual;
+    Require(ToolExecutionGraph::TryGetCachedResult(key, actual) &&
+        actual.toolName == expected.toolName,
+        "tool execution cache lookup regressed");
+    ToolExecutionCacheKey nextRunKey = key;
+    ++nextRunKey.runRevision;
+    Require(!ToolExecutionGraph::TryGetCachedResult(nextRunKey, actual),
+        "tool execution cache leaked across execution rounds");
+    ToolExecutionGraph::ClearCache();
+
+    tools[1].fixture.enabled = true;
+    tools[1].fixture.sourceToolId = 40;
+    const ToolExecutionGraphPlan cycle = ToolExecutionGraph::Build(tools);
+    Require(!cycle.valid && !cycle.error.empty(),
+        "tool execution DAG failed to reject a dependency cycle");
 }
 
 void TestResultExporterWritesResultsAndReport()
@@ -3274,7 +4673,7 @@ void TestToolExecutorResolvesMovedRuntimeRoi()
 {
     ImageState::SetImage(cv::Mat::zeros(80, 120, CV_8UC1));
     gContext.Clear();
-    ROIState::Items().clear();
+    ROIState::Clear();
 
     ROI configured;
     configured.runtimeId = 42;
@@ -3285,7 +4684,7 @@ void TestToolExecutorResolvesMovedRuntimeRoi()
     ROI moved = configured;
     moved.start = {60.0f, 50.0f};
     moved.end = {90.0f, 50.0f};
-    ROIState::Items().push_back(moved);
+    ROIState::Add(moved, false);
 
     ToolInstance measurement;
     measurement.type = 15;
@@ -3394,6 +4793,10 @@ void TestResultOverlayStatePolicy()
 int main(int argc, char** argv)
 {
     try {
+        const fs::path testSpcDatabase = fs::temp_directory_path() /
+            ("imgui_opencv_spc_test_" + std::to_string(
+                std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
+        InspectionHistory::ConfigureDatabase(testSpcDatabase.string());
         if (argc > 1 && std::string(argv[1]) == "--qr-only") {
             TestQRCodeToolRecognizesBundledSample();
             std::cout << "regression_tests: QR checks passed\n";
@@ -3407,6 +4810,7 @@ int main(int argc, char** argv)
             TestTemplateMatchingToolUsesInstanceParameters();
             TestToolChainReorderRemapsResultROISource();
             TestRecipeRoundTrip();
+            TestTaskGroupManagement();
             TestToolInstanceOwnsRecipeSerialization();
             TestToolExecutorResolvesMovedRuntimeRoi();
             std::cout << "regression_tests: import and judgement checks passed\n";
@@ -3419,8 +4823,23 @@ int main(int argc, char** argv)
             std::cout << "regression_tests: caliper checks passed\n";
             return 0;
         }
+        if (argc > 1 && std::string(argv[1]) == "--original-result-only") {
+            TestOriginalImageToolPublishesResult();
+            std::cout << "regression_tests: original image result checks passed\n";
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--task-images-only") {
+            TestRecipeRoundTrip();
+            TestToolControllerUsesIndependentTaskImages();
+            TestToolControllerRunsTaskGroupsInParallel();
+            std::cout << "regression_tests: independent task image checks passed\n";
+            return 0;
+        }
         TestTemplateMatch();
         TestRoiConversion();
+        TestRotatedROIExtractionAndResultRestore();
+        TestToolExecutorUsesRotatedROI();
+        TestGeometryDrawToolAndRecipe();
         TestYoloToolNoModelPath();
         TestQRCodeToolRecognizesBundledSample();
         TestRecursiveImageFolderScanSupportsCommonFormats();
@@ -3434,6 +4853,7 @@ int main(int argc, char** argv)
         TestTemplateMatchingToolUsesInstanceParameters();
         TestToolChainReorderRemapsResultROISource();
         TestRecipeRoundTrip();
+        TestTaskGroupManagement();
         TestToolInstanceOwnsRecipeSerialization();
         TestSampleImageCorePipeline();
         TestLineToolSampleImage();
@@ -3460,6 +4880,9 @@ int main(int argc, char** argv)
         TestToolROIServiceOwnsBoundROIEditing();
         TestHardwareAdapterServiceLifecycle();
         TestHardwareRuntimeAutomation();
+        TestFrameArchiveService();
+        TestRecipeAutosaveService();
+        TestHardwareSettingsPersistence();
         TestConcreteTcpTextAdapter();
         TestConcreteModbusTcpAdapterProtocol();
         TestConcreteOpenCvCameraAdapter();
@@ -3473,12 +4896,24 @@ int main(int argc, char** argv)
         TestImageViewStateOwnsTransform();
         TestRecipeCaptureUsesCurrentFramePath();
         TestToolExecutorInjectsImageSnapshot();
+        TestToolExecutorDetachedExecutionPublishesOnCallerThread();
         TestToolExecutorResolvesMovedRuntimeRoi();
         TestToolChainEditActions();
         TestToolChainValidatorAndRunGuard();
         TestToolChainPreflight();
+        TestToolExecutionGraphTopologyAndCache();
         TestToolChainDuplicate();
+        TestOriginalImageToolPublishesResult();
         TestToolControllerInputSourcesAndChainReset();
+        TestToolControllerRunsOnlySelectedTaskGroupInOrder();
+        TestToolControllerStepsOnlySelectedTaskGroupInOrder();
+        TestToolControllerUsesIndependentTaskImages();
+        TestToolControllerRunsTaskGroupsInParallel();
+        TestToolControllerPublishesHeavyToolAsync();
+        TestToolControllerExecutesDagLevelInParallel();
+        TestCancellationTokensStopHeavyTools();
+        TestAsyncHeavyToolUsesDependencySnapshots();
+        TestToolControllerLoopTimingResetsEachRound();
         TestExampleRecipesLoadAndExecute();
         TestShapeMaxResultsDefaultIsOne();
         TestToolInstanceLabelDefaultIsEmpty();

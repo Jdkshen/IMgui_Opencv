@@ -11,8 +11,20 @@ ToolResult YOLOTool::Execute(VisionContext& ctx)
     ToolResult result;
     result.toolName = "YOLO";
 
+    if (ctx.IsCancellationRequested()) {
+        result.success = false;
+        result.message = "执行已取消";
+        return result;
+    }
+
     if (!modelPath.empty())
         YOLODetector::LoadModel(modelPath, classesPath, useGPU);
+
+    if (ctx.IsCancellationRequested()) {
+        result.success = false;
+        result.message = "执行已取消";
+        return result;
+    }
 
     if (!YOLODetector::IsLoaded()) {
         result.success = false;
@@ -25,6 +37,11 @@ ToolResult YOLOTool::Execute(VisionContext& ctx)
         roi = ctx.GetActiveROIRect();
 
     auto objs = YOLODetector::Detect(ctx.image, confThreshold, nmsThreshold, roi);
+    if (ctx.IsCancellationRequested()) {
+        result.success = false;
+        result.message = "执行已取消";
+        return result;
+    }
     result.success = true;
 
     for (const auto& o : objs) {

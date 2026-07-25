@@ -116,6 +116,13 @@ ToolResult OCRTool::Execute(VisionContext& ctx)
     ToolResult result;
     result.toolName = GetName();
 
+    if (ctx.IsCancellationRequested())
+    {
+        result.success = false;
+        result.message = "执行已取消";
+        return result;
+    }
+
     if (ctx.image.empty())
     {
         result.success = false;
@@ -163,6 +170,12 @@ ToolResult OCRTool::Execute(VisionContext& ctx)
     static bool hasLoadedConfig = false;
 
     std::lock_guard<std::mutex> lock(engineMutex);
+    if (ctx.IsCancellationRequested())
+    {
+        result.success = false;
+        result.message = "执行已取消";
+        return result;
+    }
     std::string error;
     if (!engine.IsReady() || !hasLoadedConfig || !SameConfig(loadedConfig, cfg))
     {
@@ -178,7 +191,7 @@ ToolResult OCRTool::Execute(VisionContext& ctx)
     }
 
     std::vector<PPOCRTextResult> texts;
-    if (!engine.Recognize(input, texts, &error))
+    if (!engine.Recognize(input, texts, &error, ctx.stopToken))
     {
         result.success = false;
         result.message = error.empty() ? "NCNN OCR recognize failed" : error;
@@ -186,10 +199,22 @@ ToolResult OCRTool::Execute(VisionContext& ctx)
         return result;
     }
     const WindowsPPOCRStats stats = engine.LastStats();
+    if (ctx.IsCancellationRequested())
+    {
+        result.success = false;
+        result.message = "执行已取消";
+        return result;
+    }
 
     const cv::Point offset = inputRect.empty() ? cv::Point(0, 0) : inputRect.tl();
     for (const PPOCRTextResult& text : texts)
     {
+        if (ctx.IsCancellationRequested())
+        {
+            result.success = false;
+            result.message = "执行已取消";
+            return result;
+        }
         ToolResult::TextItem item;
         item.text = text.text;
         item.box = text.box + offset;

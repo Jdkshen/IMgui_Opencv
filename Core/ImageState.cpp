@@ -19,8 +19,8 @@ int s_version = 0;         // 图像版本号（每次 SetImage 递增，用于�
 // 同步内部状态到全局 VisionContext（兼容旧代码的全局变量访问）
 void SyncLegacyAndContext()
 {
-    gContext.image = s_current.clone();
-    gContext.originalImage = s_original.clone();
+    gContext.image = s_current;
+    gContext.originalImage = s_original;
     gContext.width = s_width;
     gContext.height = s_height;
     gContext.imageVersion = s_version;
@@ -36,11 +36,21 @@ namespace ImageState
 
     cv::Mat& CurrentRef()
     {
+        if (!s_current.empty())
+        {
+            s_current = s_current.clone();
+            gContext.image = s_current;
+        }
         return s_current;
     }
 
     cv::Mat& OriginalRef()
     {
+        if (!s_original.empty())
+        {
+            s_original = s_original.clone();
+            gContext.originalImage = s_original;
+        }
         return s_original;
     }
 
@@ -94,6 +104,17 @@ namespace ImageState
         return s_version;
     }
 
+    ImmutableImageFrame AcquireImmutableFrame()
+    {
+        ImmutableImageFrame frame;
+        if (!s_current.empty())
+            frame.current = std::make_shared<const cv::Mat>(s_current);
+        if (!s_original.empty())
+            frame.original = std::make_shared<const cv::Mat>(s_original);
+        frame.version = s_version;
+        return frame;
+    }
+
     void SetImage(const cv::Mat& image)
     {
         if (image.empty())
@@ -116,7 +137,7 @@ namespace ImageState
         s_width = image.cols;
         s_height = image.rows;
         ++s_version;
-        gContext.image = s_current.clone();
+        gContext.image = s_current;
         gContext.width = s_width;
         gContext.height = s_height;
         gContext.imageVersion = s_version;

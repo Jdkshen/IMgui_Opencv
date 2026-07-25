@@ -151,6 +151,7 @@ ToolAssetCaptureResult ConfirmROICapture(ToolInstance& tool, ToolAssetKind kind)
     session.lastROI = *roi;
     session.hasLastROI = true;
     RemoveSessionROI(session);
+    tool.MarkParametersChanged();
     result.success = true;
     result.message = "asset captured";
     return result;
@@ -180,6 +181,7 @@ ToolAssetCaptureResult CaptureCurrentImage(ToolInstance& tool, ToolAssetKind kin
     }
 
     tool.differenceReferenceImage = image.clone();
+    tool.MarkParametersChanged();
     result.bounds = cv::Rect(0, 0, image.cols, image.rows);
     result.success = true;
     result.message = "asset captured";
@@ -211,6 +213,7 @@ void ClearAsset(ToolInstance& tool, ToolAssetKind kind)
         tool.differenceReferenceImage.release();
         break;
     }
+    tool.MarkParametersChanged();
 }
 
 void ForgetTool(std::uint64_t toolId)

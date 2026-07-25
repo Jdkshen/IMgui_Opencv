@@ -30,6 +30,13 @@ struct DeviceOperationResult
     std::string message;
 };
 
+enum class CameraControl
+{
+    AutoExposure,
+    Exposure,
+    Gain
+};
+
 using DeviceValue = std::variant<bool, std::int64_t, double, std::string>;
 
 class IDeviceAdapter
@@ -49,6 +56,10 @@ public:
     virtual DeviceOperationResult GrabFrame(cv::Mat& frame, int timeoutMs) = 0;
     virtual DeviceOperationResult StartStream() = 0;
     virtual void StopStream() = 0;
+    virtual DeviceOperationResult SetControl(CameraControl, double)
+    {
+        return {false, "camera controls are not supported by this adapter"};
+    }
 };
 
 class IPlcAdapter : public IDeviceAdapter

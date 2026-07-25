@@ -23,6 +23,36 @@
 
 using json = nlohmann::json;
 
+namespace
+{
+constexpr int kRecipeVersion = 4;
+
+void MigrateLegacyResultLabelSetting(nlohmann::json& tool)
+{
+    if (!tool.is_object())
+        return;
+    if (!tool.contains("showResultLabels"))
+    {
+        switch (tool.value("type", -1))
+        {
+        case 2: tool["showResultLabels"] = tool.value("blobShowLabels", true); break;
+        case 5: tool["showResultLabels"] = tool.value("cntShowLabels", true); break;
+        case 6: tool["showResultLabels"] = tool.value("shpShowLabels", true); break;
+        case 7: tool["showResultLabels"] = tool.value("lineShowLabels", true); break;
+        case 14: tool["showResultLabels"] = tool.value("qrShowText", true); break;
+        case 16: tool["showResultLabels"] = tool.value("differenceShowLabels", true); break;
+        default: break;
+        }
+    }
+
+    for (const char* key : {"blobShowLabels", "cntShowLabels", "shpShowLabels",
+         "lineShowLabels", "qrShowText", "differenceShowLabels"})
+    {
+        tool.erase(key);
+    }
+}
+}
+
 nlohmann::json RecipeToolInstance::ToJson() const
 {
     return toolJson_.is_object() ? toolJson_ : nlohmann::json::object();
@@ -31,20 +61,23 @@ nlohmann::json RecipeToolInstance::ToJson() const
 void RecipeToolInstance::LoadToolJson(const nlohmann::json& json)
 {
     toolJson_ = json.is_object() ? json : nlohmann::json::object();
+    MigrateLegacyResultLabelSetting(toolJson_);
     ToolInstance compatibility;
     compatibility.LoadRecipeJson(toolJson_);
     if (!compatibility.useSearchROI && !compatibility.searchROIs.empty())
     {
         compatibility.useSearchROI = compatibility.yoloUseROI ||
             compatibility.lineUseROI || compatibility.mcfUseROI ||
-            compatibility.colorUseROI || !compatibility.lineSaveROIs.empty();
+            compatibility.colorAnalysis.useROI || !compatibility.lineSaveROIs.empty();
         toolJson_["useSearchROI"] = compatibility.useSearchROI;
     }
 }
 
-void RecipeToolInstance::CaptureFrom(const ToolInstance& source)
+void RecipeToolInstance::CaptureFrom(const ToolInstance& source, bool includeAssets)
 {
     toolJson_ = source.ToRecipeJson();
+    if (!includeAssets)
+        return;
     templateImage = source.type == 6 ? source.shpTplImage.clone() : source.templateImg.clone();
     if (templateImage.empty())
         templateImage = source.type == 6 ? source.templateImg.clone() : source.shpTplImage.clone();
@@ -257,14 +290,15 @@ namespace RecipeManager
     }
 
     // ===================== 保存 =====================
-    bool Save(const char *filepath, const RecipeData &data)
+    bool Save(const char *filepath, const RecipeData &data, const SaveOptions& options)
     {
         json j;
 
-        j["version"] = 2;
+        j["version"] = kRecipeVersion;
         j["name"] = data.name;
         j["imagePath"] = data.imagePath;
         j["templateImage"] = data.templateImage;
+        j["runtime"]["loopIntervalMs"] = std::clamp(data.loopIntervalMs, 0, 60000);
 
         // 阈值参数
         json &th = j["threshold"];
@@ -301,8 +335,14 @@ namespace RecipeManager
         json &rois = j["rois"] = json::array();
         for (const auto &r : data.rois)
         {
-            rois.push_back({{"startX", r.startX}, {"startY", r.startY}, {"endX", r.endX}, {"endY", r.endY}, {"type", r.type}});
+            rois.push_back({{"startX", r.startX}, {"startY", r.startY},
+                {"endX", r.endX}, {"endY", r.endY}, {"angle", r.angle}, {"type", r.type}});
         }
+
+        json &taskGroups = j["taskGroups"] = json::array();
+        for (const RecipeTaskGroup& group : data.taskGroups)
+            taskGroups.push_back({{"name", group.name}, {"enabled", group.enabled},
+                {"imagePath", group.imagePath}});
 
         // Tool instances
         json &tools = j["tools"] = json::array();
@@ -311,9 +351,10 @@ namespace RecipeManager
             json tj = t.ToJson();
             tj["templateFile"] = t.templateFile;
             tj["differenceReferenceFile"] = t.differenceReferenceFile;
+            tj["mcfReferenceFile"] = t.multiColorReferenceFile;
             tj["mcfPointsJson"] = t.mcfPointsJson;
             tj["mcfRefImageBase64"] = "";
-            if (!t.multiColorReferenceImage.empty())
+            if (t.multiColorReferenceFile.empty() && !t.multiColorReferenceImage.empty())
             {
                 std::vector<uchar> encoded;
                 if (cv::imencode(".png", t.multiColorReferenceImage, encoded))
@@ -332,7 +373,7 @@ namespace RecipeManager
         LogSystem::Add(LOG_INFO, "[Save] tools: %zu", data.tools.size());
 
         // Save the legacy template image next to the recipe.
-        if (!data.templateImage.empty())
+        if (options.writeAssets && !data.templateImage.empty())
         {
             std::string tplPath(filepath);
             size_t slash = tplPath.find_last_of("\\/");
@@ -340,11 +381,12 @@ namespace RecipeManager
                           ? tplPath.substr(0, slash + 1) + data.templateImage
                           : data.templateImage;
 
-            if (WriteImageFile(tplPath, TemplateState::FrozenTemplate()))
+            if (WriteImageFile(tplPath, data.legacyTemplateImage))
                 LogSystem::Add(LOG_INFO, "Template image saved: %s", tplPath.c_str());
         }
 
         // Save asset payloads captured in RecipeData. Save no longer reads live tool state.
+        if (options.writeAssets)
         for (size_t ti = 0; ti < data.tools.size(); ti++)
         {
             const auto &t = data.tools[ti];
@@ -368,6 +410,15 @@ namespace RecipeManager
                 WriteImageFile(differencePath, t.differenceReferenceImage))
             {
                 LogSystem::Add(LOG_INFO, "Difference reference saved: %s", t.differenceReferenceFile.c_str());
+            }
+
+            const std::string mcfPath = RecipeAssetOutputPath(
+                filepath, t.multiColorReferenceFile);
+            if (!mcfPath.empty() && !t.multiColorReferenceImage.empty() &&
+                WriteImageFile(mcfPath, t.multiColorReferenceImage))
+            {
+                LogSystem::Add(LOG_INFO, "Multi-color reference saved: %s",
+                    t.multiColorReferenceFile.c_str());
             }
         }
 
@@ -439,12 +490,16 @@ namespace RecipeManager
         }
 
         int version = j.value("version", 0);
-        if (version > 2)
-            LogSystem::Add(LOG_WARN, "RecipeManager: recipe version %d > supported version 2", version);
+        if (version > kRecipeVersion)
+            LogSystem::Add(LOG_WARN, "RecipeManager: recipe version %d > supported version %d",
+                version, kRecipeVersion);
 
         data.name = j.value("name", "");
         data.imagePath = j.value("imagePath", "");
         data.templateImage = j.value("templateImage", "");
+        data.loopIntervalMs = j.contains("runtime")
+            ? std::clamp(j["runtime"].value("loopIntervalMs", 150), 0, 60000)
+            : 150;
 
         // 阈值参数
         if (j.contains("threshold"))
@@ -494,8 +549,23 @@ namespace RecipeManager
                 roi.startY = r.value("startY", 0.0f);
                 roi.endX = r.value("endX", 0.0f);
                 roi.endY = r.value("endY", 0.0f);
+                roi.angle = r.value("angle", 0.0f);
                 roi.type = r.value("type", 0);
                 data.rois.push_back(roi);
+            }
+        }
+
+        data.taskGroups.clear();
+        if (j.contains("taskGroups") && j["taskGroups"].is_array())
+        {
+            for (const auto& groupJson : j["taskGroups"])
+            {
+                RecipeTaskGroup group;
+                group.name = groupJson.value("name", "");
+                group.enabled = groupJson.value("enabled", true);
+                group.imagePath = groupJson.value("imagePath", "");
+                if (!group.name.empty())
+                    data.taskGroups.push_back(std::move(group));
             }
         }
 
@@ -509,6 +579,7 @@ namespace RecipeManager
                 t.LoadToolJson(tj);
                 t.templateFile = tj.value("templateFile", "");
                 t.differenceReferenceFile = tj.value("differenceReferenceFile", "");
+                t.multiColorReferenceFile = tj.value("mcfReferenceFile", "");
                 t.mcfPointsJson = tj.value("mcfPointsJson", "");
 
                 const std::string mcfImageValue = tj.value("mcfRefImageBase64", "");
@@ -535,8 +606,19 @@ namespace RecipeManager
                     t.differenceReferenceImage = ReadImageFile(differencePath, cv::IMREAD_COLOR);
                     if (!t.differenceReferenceImage.empty())
                         LogSystem::Add(LOG_INFO, "Difference reference loaded: %s (%dx%d)",
-                            differencePath.c_str(), t.differenceReferenceImage.cols,
+                        differencePath.c_str(), t.differenceReferenceImage.cols,
                             t.differenceReferenceImage.rows);
+                }
+                if (!t.multiColorReferenceFile.empty())
+                {
+                    const std::string mcfPath = ResolveRecipeAssetPath(
+                        t.multiColorReferenceFile);
+                    t.multiColorReferenceImage = ReadImageFile(mcfPath, cv::IMREAD_COLOR);
+                    if (!t.multiColorReferenceImage.empty())
+                        LogSystem::Add(LOG_INFO,
+                            "Multi-color reference loaded: %s (%dx%d)",
+                            mcfPath.c_str(), t.multiColorReferenceImage.cols,
+                            t.multiColorReferenceImage.rows);
                 }
 
                 data.tools.push_back(std::move(t));
@@ -592,10 +674,11 @@ namespace RecipeManager
     }
 
     // ===================== 从当前环境捕获参数 =====================
-    RecipeData Capture(const char *name)
+    RecipeData Capture(const char *name, bool includeAssets)
     {
         RecipeData d;
         d.name = name;
+        d.loopIntervalMs = ToolController::GetLoopIntervalMs();
         const std::string& currentSourcePath = FrameSourceState::Current().sourcePath;
         if (!currentSourcePath.empty())
             d.imagePath = currentSourcePath;
@@ -609,11 +692,24 @@ namespace RecipeManager
             r.startY = roi.start.y;
             r.endX = roi.end.x;
             r.endY = roi.end.y;
+            r.angle = roi.angle;
             r.type = roi.type;
             d.rois.push_back(r);
         }
 
         d.templateImage = d.name + ".png";
+        if (includeAssets)
+            d.legacyTemplateImage = TemplateState::FrozenTemplate().clone();
+
+        d.taskGroups.clear();
+        for (const TaskGroupDefinition& source : ToolChainState::ReadOnlyTaskGroups())
+        {
+            RecipeTaskGroup group;
+            group.name = source.name;
+            group.enabled = source.enabled;
+            group.imagePath = source.imagePath;
+            d.taskGroups.push_back(std::move(group));
+        }
 
         // 工具实例
         d.tools.clear();
@@ -623,17 +719,20 @@ namespace RecipeManager
         {
             const auto &src = ToolChainState::ReadOnlyTools()[ti];
             RecipeToolInstance t;
-            t.CaptureFrom(src);
+            t.CaptureFrom(src, includeAssets);
             if (!src.templateImg.empty() || !src.shpTplImage.empty())
                 t.templateFile = d.name + "_tpl" + std::to_string(ti) + ".png";
             if (!src.differenceReferenceImage.empty())
                 t.differenceReferenceFile = d.name + "_diff_ref_" + std::to_string(ti) + ".png";
+            if (!src.mcfRefImage.empty())
+                t.multiColorReferenceFile = d.name + "_mcf_ref_" +
+                    std::to_string(ti) + ".png";
 
             if (src.type == 10)
             {
                 if (src.toolImpl)
                 {
-                    auto* finder = dynamic_cast<MultiColorFinder*>(src.toolImpl);
+                    auto* finder = dynamic_cast<MultiColorFinder*>(src.toolImpl.get());
                     if (finder)
                         t.mcfPointsJson = finder->Save().dump();
                 }
@@ -648,18 +747,29 @@ namespace RecipeManager
     // ===================== Apply recipe to current runtime =====================
     void Apply(const RecipeData &data)
     {
-        if (!data.imagePath.empty())
-            FrameNavigation::RequestImagePath(ResolveRecipeAssetPath(data.imagePath));
+        ToolController::SetLoopIntervalMs(data.loopIntervalMs);
 
         // ROI
-        ROIState::Items().clear();
+        std::vector<ROI> restoredROIs;
+        restoredROIs.reserve(data.rois.size());
         for (const auto &r : data.rois)
         {
             ROI roi;
             roi.start = ImVec2(r.startX, r.startY);
             roi.end = ImVec2(r.endX, r.endY);
+            roi.angle = r.angle;
             roi.type = r.type;
-            ROIState::Items().push_back(roi);
+            restoredROIs.push_back(std::move(roi));
+        }
+        if (!data.imagePath.empty())
+        {
+            ROIState::QueueRestoreAfterImageLoad(restoredROIs);
+            FrameNavigation::RequestImagePath(ResolveRecipeAssetPath(data.imagePath));
+        }
+        else
+        {
+            ROIState::CancelQueuedRestore();
+            ROIState::ReplaceAll(std::move(restoredROIs));
         }
 
         // 工具实例
@@ -670,14 +780,14 @@ namespace RecipeManager
         {
             ToolInstance threshold;
             threshold.type = 3;
-            threshold.dbgUseGray = data.threshold.useGray;
-            threshold.dbgEnableBlur = data.threshold.pipeBlur;
-            threshold.dbgBlurSize = data.threshold.pipeBlurSize;
-            threshold.dbgEnableThresh = data.threshold.pipeThreshold;
-            threshold.dbgThreshold = data.threshold.pipeThresholdVal;
-            threshold.dbgEnableCanny = data.threshold.pipeCanny;
-            threshold.dbgCannyLow = data.threshold.pipeCannyLow;
-            threshold.dbgCannyHigh = data.threshold.pipeCannyHigh;
+            threshold.threshold.useGray = data.threshold.useGray;
+            threshold.threshold.enableBlur = data.threshold.pipeBlur;
+            threshold.threshold.blurSize = data.threshold.pipeBlurSize;
+            threshold.threshold.enableThreshold = data.threshold.pipeThreshold;
+            threshold.threshold.threshold = data.threshold.pipeThresholdVal;
+            threshold.threshold.enableCanny = data.threshold.pipeCanny;
+            threshold.threshold.cannyLow = data.threshold.pipeCannyLow;
+            threshold.threshold.cannyHigh = data.threshold.pipeCannyHigh;
             ToolChainState::AddTool(std::move(threshold));
         }
         for (size_t ti = 0; ti < data.tools.size(); ti++)
@@ -700,8 +810,8 @@ namespace RecipeManager
                     const json points = json::parse(t.mcfPointsJson, nullptr, false);
                     if (!points.is_discarded())
                     {
-                        it.toolImpl = ITool::Create(10).release();
-                        if (auto* finder = dynamic_cast<MultiColorFinder*>(it.toolImpl))
+                        it.toolImpl = ITool::Create(10);
+                        if (auto* finder = dynamic_cast<MultiColorFinder*>(it.toolImpl.get()))
                             finder->Load(points);
                     }
                     else
@@ -713,6 +823,18 @@ namespace RecipeManager
 
             ToolChainState::AddTool(std::move(it));
         }
+
+        std::vector<TaskGroupDefinition> restoredGroups;
+        restoredGroups.reserve(data.taskGroups.size());
+        for (const RecipeTaskGroup& source : data.taskGroups)
+        {
+            TaskGroupDefinition group;
+            group.name = source.name;
+            group.enabled = source.enabled;
+            group.imagePath = ResolveRecipeAssetPath(source.imagePath);
+            restoredGroups.push_back(std::move(group));
+        }
+        ToolChainState::ReplaceTaskGroups(std::move(restoredGroups));
 
         ToolChainState::EnsureToolIds();
         for (ToolInstance& tool : ToolChainState::Tools())

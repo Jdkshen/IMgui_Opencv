@@ -293,6 +293,14 @@ ToolResult MeasurementTool::Execute(VisionContext& context)
     using namespace CaliperOperators;
     ToolResult result;
     result.toolName = GetName();
+    const auto cancelled = [&]()
+    {
+        result.success = false;
+        result.message = "执行已取消";
+        return result;
+    };
+    if (context.IsCancellationRequested())
+        return cancelled();
     const CalibrationModel model = EffectiveCalibration(*this);
     const char* unit = DistanceUnit(model);
     double value = 0.0;
@@ -339,10 +347,14 @@ ToolResult MeasurementTool::Execute(VisionContext& context)
             if (mode == 1)
             {
                 const auto pairs = CollectEdgePairs(gray, region, caliperCount, params, quality);
+                if (context.IsCancellationRequested())
+                    return cancelled();
                 std::vector<double> widths;
                 std::vector<double> pixelWidths;
                 for (const EdgePair& pair : pairs)
                 {
+                    if (context.IsCancellationRequested())
+                        return cancelled();
                     widths.push_back(Distance(model, pair.first.position, pair.second.position));
                     pixelWidths.push_back(cv::norm(pair.second.position - pair.first.position));
                     AddLine(result, pair.first.position, pair.second.position);
@@ -361,6 +373,8 @@ ToolResult MeasurementTool::Execute(VisionContext& context)
             else if (mode == 4)
             {
                 EdgePoint edge = FindEdge(gray, region.center, region.normal, region.tangent, params);
+                if (context.IsCancellationRequested())
+                    return cancelled();
                 quality.totalCalipers = 1;
                 quality.validCalipers = edge.valid ? 1 : 0;
                 quality.meanEdgeStrength = edge.strength;
@@ -382,6 +396,8 @@ ToolResult MeasurementTool::Execute(VisionContext& context)
             else
             {
                 const auto edges = CollectLineEdges(gray, region, caliperCount, params, quality);
+                if (context.IsCancellationRequested())
+                    return cancelled();
                 std::vector<cv::Point2f> points;
                 points.reserve(edges.size());
                 for (const EdgePoint& edge : edges)
@@ -422,6 +438,8 @@ ToolResult MeasurementTool::Execute(VisionContext& context)
             const cv::Point2f center = ToPoint(circleROI->start);
             const float radius = circleROI->CircleRadius();
             const auto edges = CollectCircleEdges(gray, center, radius, caliperCount, caliper, quality);
+            if (context.IsCancellationRequested())
+                return cancelled();
             std::vector<cv::Point2f> points;
             for (const EdgePoint& edge : edges)
                 points.push_back(edge.position);
@@ -507,6 +525,8 @@ ToolResult MeasurementTool::Execute(VisionContext& context)
 
     if (!measured)
         return result;
+    if (context.IsCancellationRequested())
+        return cancelled();
 
     const char* valueUnit = angleValue ? "deg" : unit;
     result.measurements.insert(result.measurements.begin(), {"value", value, valueUnit});

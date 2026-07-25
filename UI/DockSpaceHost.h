@@ -1,6 +1,7 @@
 #pragma once
 #define NOMINMAX
 #include <windows.h>
+#include <string>
 #include <vector>
 #include <opencv2/core/mat.hpp>
 #include "imgui/imgui.h"
@@ -32,4 +33,10 @@ namespace UI
     // 绘制主停靠空间（菜单栏 + DockSpace 容器）
     void DrawDockSpaceHost();
     bool SaveCurrentRecipe();
+    void MarkCurrentRecipeDirty();
+    void MarkCurrentRecipeAssetsDirty();
+    void UpdateCurrentRecipeAutoSave();
+    bool IsCurrentRecipeDirty();
+    const char* CurrentRecipeName();
+    std::string CurrentRecipePath();
 }

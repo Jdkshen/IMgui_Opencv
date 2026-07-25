@@ -90,6 +90,7 @@ void Update()
             // 后处理：适配窗口、清空交互状态、清空模板匹配
             FrameNavigation::FitImageToWindow();
             ROIState::ClearInteraction();
+            ROIState::ApplyQueuedRestore();
 TemplateState::ClearResults();
         }
         catch (const std::exception& e)
@@ -104,6 +105,7 @@ TemplateState::ClearResults();
         }
     }, [](const std::string& error)
     {
+        ROIState::CancelQueuedRestore();
         s_LastError = error;
     });
 }

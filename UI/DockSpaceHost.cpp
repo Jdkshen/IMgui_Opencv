@@ -3,9 +3,11 @@
 #include "ToolsWindow.h"
 #include "Sidebar.h"
 #include "HardwareWindow.h"
+#include "RunResultWindow.h"
 #include "../Core/ThemeManager.h"
 #include "../Core/VisionContext.h"
 #include "../Core/RecipeManager.h"
+#include "../Core/RecipeAutosaveService.h"
 #include "../Core/TemplateState.h"
 #include "../Core/FrameSourceState.h"
 #include "../Core/ImageState.h"
@@ -97,13 +99,55 @@ namespace UI
     static bool g_PendingAutoRunAfterRecipeLoad = false;
     static std::string g_LastExportPath;
 
+    std::string CurrentRecipePath()
+    {
+        const std::wstring path = GetRecipesDirW() +
+            ToWide(g_CurrentRecipeName) + L".recipe";
+        return ToNarrow(path);
+    }
+
+    const char* CurrentRecipeName()
+    {
+        return g_CurrentRecipeName;
+    }
+
+    bool IsCurrentRecipeDirty()
+    {
+        const RecipeAutosaveSnapshot snapshot = RecipeAutosaveService::Snapshot();
+        return snapshot.dirty || snapshot.pending || snapshot.saving;
+    }
+
+    void MarkCurrentRecipeDirty()
+    {
+        RecipeAutosaveService::ConfigureTarget(CurrentRecipePath());
+        RecipeAutosaveService::MarkDirty(RecipeDirtyKind::Parameters);
+    }
+
+    void MarkCurrentRecipeAssetsDirty()
+    {
+        RecipeAutosaveService::ConfigureTarget(CurrentRecipePath());
+        RecipeAutosaveService::MarkDirty(RecipeDirtyKind::All);
+    }
+
     bool SaveCurrentRecipe()
     {
-        std::wstring dir = GetRecipesDirW();
+        const std::wstring dir = GetRecipesDirW();
         CreateDirectoryW(dir.c_str(), nullptr);
-        std::wstring path = dir + ToWide(g_CurrentRecipeName) + L".recipe";
+        const std::string path = CurrentRecipePath();
         RecipeData data = RecipeManager::Capture(g_CurrentRecipeName);
-        return RecipeManager::Save(ToNarrow(path).c_str(), data);
+        RecipeAutosaveService::ConfigureTarget(path);
+        return RecipeAutosaveService::SaveNow(std::move(data));
+    }
+
+    void UpdateCurrentRecipeAutoSave()
+    {
+        RecipeAutosaveService::ConfigureTarget(CurrentRecipePath());
+        if (RecipeAutosaveService::ShouldCapture(ImGui::IsAnyItemActive()))
+        {
+            const RecipeAutosaveSnapshot snapshot = RecipeAutosaveService::Snapshot();
+            RecipeAutosaveService::Submit(RecipeManager::Capture(
+                g_CurrentRecipeName, snapshot.assetDirty));
+        }
     }
 
     static std::string ExportPrefix(const char* kind)
@@ -434,6 +478,7 @@ TemplateState::ClearResults();
 
     void DrawAppMainMenuItems()
     {
+        UpdateCurrentRecipeAutoSave();
         ProcessPendingAutoRunAfterRecipeLoad();
 
         if (ImGui::BeginMenu("文件(F)"))
@@ -516,6 +561,10 @@ TemplateState::ClearResults();
                 g_ShowSidebar = !g_ShowSidebar;
             if (ImGui::Selectable("性能窗口", g_ShowStats))
                 g_ShowStats = !g_ShowStats;
+            if (ImGui::MenuItem("执行后自动显示结果", nullptr, IsRunResultAutoShowEnabled()))
+                SetRunResultAutoShowEnabled(!IsRunResultAutoShowEnabled());
+            if (ImGui::MenuItem("查看上次运行结果", nullptr, IsRunResultWindowVisible(), HasRunResultSnapshot()))
+                SetRunResultWindowVisible(!IsRunResultWindowVisible());
             if (ImGui::Selectable("图像预览", g_ShowOpenCV))
                 g_ShowOpenCV = !g_ShowOpenCV;
             if (ImGui::Selectable("功能窗口", g_ShowTools))
@@ -581,6 +630,21 @@ TemplateState::ClearResults();
                 ToolController::RequestStepNext();
             if (ImGui::MenuItem("重置单步"))
                 ToolController::RequestStepReset();
+            ImGui::Separator();
+            if (ImGui::MenuItem("循环执行"))
+                ToolController::RequestRunAll(true);
+            if (ImGui::MenuItem("停止循环", nullptr, false, ToolController::IsLoopEnabled()))
+                ToolController::SetLoopEnabled(false);
+
+            int loopIntervalMs = ToolController::GetLoopIntervalMs();
+            ImGui::TextDisabled("循环等待时间");
+            ImGui::SetNextItemWidth(120.0f);
+            if (ImGui::InputInt("ms##RunMenuLoopInterval", &loopIntervalMs, 10, 100))
+            {
+                ToolController::SetLoopIntervalMs(loopIntervalMs);
+                MarkCurrentRecipeDirty();
+            }
+            ImGui::SetItemTooltip("每轮工具链完成后，等待指定时间再开始下一轮；0 表示立即继续");
             ImGui::Separator();
             if (ImGui::MenuItem("导出结果(JSON)"))
                 ExportCurrentResults();
@@ -671,20 +735,20 @@ TemplateState::ClearResults();
 
             ImGuiID top, main, left, right, bottom;
 
-            float leftPixels = ClampFloat(dockSize.x * 0.14f, 220.0f, 270.0f);
-            float rightPixels = ClampFloat(dockSize.x * 0.24f, 380.0f, 480.0f);
-            float bottomPixels = ClampFloat(dockSize.y * 0.21f, 165.0f, 230.0f);
+            float leftPixels = ClampFloat(dockSize.x * 0.18f, 300.0f, 360.0f);
+            float rightPixels = ClampFloat(dockSize.x * 0.28f, 360.0f, 460.0f);
+            float bottomPixels = ClampFloat(dockSize.y * 0.18f, 145.0f, 205.0f);
 
             // 底部日志/统计先横贯全宽，再在上方切左/中/右。
             // 这样全屏时不会出现左右栏一直空到底的竖条。
-            float bottomRatio = ClampFloat(bottomPixels / dockSize.y, 0.16f, 0.27f);
+            float bottomRatio = ClampFloat(bottomPixels / dockSize.y, 0.14f, 0.23f);
             ImGui::DockBuilderSplitNode(dockspace_id, ImGuiDir_Down, bottomRatio, &bottom, &top);
 
-            float leftRatio = ClampFloat(leftPixels / dockSize.x, 0.10f, 0.20f);
+            float leftRatio = ClampFloat(leftPixels / dockSize.x, 0.15f, 0.24f);
             ImGui::DockBuilderSplitNode(top, ImGuiDir_Left, leftRatio, &left, &main);
 
             float remainingAfterLeft = dockSize.x - leftPixels;
-            float rightRatio = ClampFloat(rightPixels / remainingAfterLeft, 0.22f, 0.34f);
+            float rightRatio = ClampFloat(rightPixels / remainingAfterLeft, 0.25f, 0.36f);
             ImGui::DockBuilderSplitNode(main, ImGuiDir_Right, rightRatio, &right, &main);
 
             ImGui::DockBuilderDockWindow("功能窗口", right );

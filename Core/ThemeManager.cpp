@@ -45,11 +45,11 @@ void ApplyTheme(int theme)
         ImGui::StyleColorsDark();
         ImVec4 *c = style.Colors;
         c[ImGuiCol_Text]                  = ImVec4(0.86f, 0.89f, 0.92f, 1.00f);
-        c[ImGuiCol_TextDisabled]          = ImVec4(0.48f, 0.53f, 0.59f, 1.00f);
+        c[ImGuiCol_TextDisabled]          = ImVec4(0.56f, 0.61f, 0.67f, 1.00f);
         c[ImGuiCol_WindowBg]              = ImVec4(0.075f, 0.086f, 0.100f, 1.00f);
         c[ImGuiCol_ChildBg]               = ImVec4(0.090f, 0.105f, 0.120f, 1.00f);
         c[ImGuiCol_PopupBg]               = ImVec4(0.105f, 0.122f, 0.140f, 0.98f);
-        c[ImGuiCol_Border]                = ImVec4(0.20f, 0.23f, 0.27f, 1.00f);
+        c[ImGuiCol_Border]                = ImVec4(0.16f, 0.19f, 0.22f, 1.00f);
         c[ImGuiCol_BorderShadow]          = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
         c[ImGuiCol_FrameBg]               = ImVec4(0.125f, 0.148f, 0.175f, 1.00f);
         c[ImGuiCol_FrameBgHovered]        = ImVec4(0.17f, 0.22f, 0.25f, 1.00f);
@@ -65,13 +65,13 @@ void ApplyTheme(int theme)
         c[ImGuiCol_CheckMark]             = ImVec4(0.28f, 0.75f, 0.84f, 1.00f);
         c[ImGuiCol_SliderGrab]            = ImVec4(0.25f, 0.62f, 0.72f, 1.00f);
         c[ImGuiCol_SliderGrabActive]      = ImVec4(0.32f, 0.78f, 0.86f, 1.00f);
-        c[ImGuiCol_Button]                = ImVec4(0.15f, 0.18f, 0.22f, 1.00f);
+        c[ImGuiCol_Button]                = ImVec4(0.14f, 0.17f, 0.20f, 1.00f);
         c[ImGuiCol_ButtonHovered]         = ImVec4(0.18f, 0.30f, 0.35f, 1.00f);
         c[ImGuiCol_ButtonActive]          = ImVec4(0.15f, 0.43f, 0.52f, 1.00f);
         c[ImGuiCol_Header]                = ImVec4(0.14f, 0.21f, 0.24f, 1.00f);
         c[ImGuiCol_HeaderHovered]         = ImVec4(0.18f, 0.31f, 0.36f, 1.00f);
         c[ImGuiCol_HeaderActive]          = ImVec4(0.17f, 0.39f, 0.46f, 1.00f);
-        c[ImGuiCol_Separator]             = ImVec4(0.20f, 0.23f, 0.27f, 1.00f);
+        c[ImGuiCol_Separator]             = ImVec4(0.16f, 0.19f, 0.22f, 1.00f);
         c[ImGuiCol_SeparatorHovered]      = ImVec4(0.25f, 0.58f, 0.66f, 1.00f);
         c[ImGuiCol_SeparatorActive]       = ImVec4(0.30f, 0.72f, 0.80f, 1.00f);
         c[ImGuiCol_Tab]                   = ImVec4(0.095f, 0.112f, 0.130f, 1.00f);
@@ -144,31 +144,31 @@ void ApplyTheme(int theme)
     }
     g_CurrentTheme = theme;
 
-    style.DisabledAlpha = 0.55f;
-    style.WindowPadding = ImVec2(8.0f, 8.0f);
-    style.FramePadding = ImVec2(7.0f, 4.0f);
-    style.CellPadding = ImVec2(7.0f, 5.0f);
-    style.ItemSpacing = ImVec2(7.0f, 5.0f);
+    style.DisabledAlpha = 0.65f;
+    style.WindowPadding = ImVec2(10.0f, 10.0f);
+    style.FramePadding = ImVec2(8.0f, 5.0f);
+    style.CellPadding = ImVec2(8.0f, 6.0f);
+    style.ItemSpacing = ImVec2(8.0f, 6.0f);
     style.ItemInnerSpacing = ImVec2(6.0f, 4.0f);
-    style.IndentSpacing = 18.0f;
-    style.ScrollbarSize = 11.0f;
-    style.GrabMinSize = 8.0f;
+    style.IndentSpacing = 20.0f;
+    style.ScrollbarSize = 12.0f;
+    style.GrabMinSize = 10.0f;
     style.WindowBorderSize = 1.0f;
     style.ChildBorderSize = 1.0f;
     style.PopupBorderSize = 1.0f;
-    style.FrameBorderSize = 1.0f;
+    style.FrameBorderSize = 0.0f;
     style.TabBorderSize = 0.0f;
     style.TabBarBorderSize = 1.0f;
     style.TabBarOverlineSize = 2.0f;
     style.SeparatorTextBorderSize = 1.0f;
-    style.SeparatorTextPadding = ImVec2(10.0f, 4.0f);
+    style.SeparatorTextPadding = ImVec2(10.0f, 5.0f);
     style.WindowRounding = 0.0f;
-    style.ChildRounding = 4.0f;
-    style.FrameRounding = 4.0f;
-    style.PopupRounding = 4.0f;
-    style.GrabRounding = 3.0f;
-    style.ScrollbarRounding = 5.0f;
-    style.TabRounding = 4.0f;
+    style.ChildRounding = 5.0f;
+    style.FrameRounding = 5.0f;
+    style.PopupRounding = 6.0f;
+    style.GrabRounding = 4.0f;
+    style.ScrollbarRounding = 6.0f;
+    style.TabRounding = 5.0f;
     if (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
     {
         style.WindowRounding = 0.0f;

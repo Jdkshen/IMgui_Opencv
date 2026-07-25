@@ -16,11 +16,6 @@ namespace OpenCVYoloDetector
     static int s_InputW = 320;
     static int s_InputH = 320;
 
-    float g_OpenCVYoloPreMs = 0.0f;
-    float g_OpenCVYoloInfMs = 0.0f;
-    float g_OpenCVYoloPostMs = 0.0f;
-    float g_OpenCVYoloTotalMs = 0.0f;
-
     static std::vector<std::string> DefaultCocoClasses()
     {
         return {
@@ -259,8 +254,11 @@ namespace OpenCVYoloDetector
         return detections;
     }
 
-    std::vector<DetectedObject> Detect(const cv::Mat &image, float confThreshold, float nmsThreshold, cv::Rect roi)
+    std::vector<DetectedObject> Detect(const cv::Mat &image, float confThreshold,
+        float nmsThreshold, cv::Rect roi, Timing* timing)
     {
+        if (timing)
+            *timing = Timing{};
         try
         {
             if (s_Net.empty() || image.empty())
@@ -295,10 +293,13 @@ namespace OpenCVYoloDetector
             }
             auto t3 = std::chrono::steady_clock::now();
 
-            g_OpenCVYoloPreMs = std::chrono::duration<float, std::milli>(t1 - t0).count();
-            g_OpenCVYoloInfMs = std::chrono::duration<float, std::milli>(t2 - t1).count();
-            g_OpenCVYoloPostMs = std::chrono::duration<float, std::milli>(t3 - t2).count();
-            g_OpenCVYoloTotalMs = std::chrono::duration<float, std::milli>(t3 - total0).count();
+            if (timing)
+            {
+                timing->preprocessMs = std::chrono::duration<float, std::milli>(t1 - t0).count();
+                timing->inferenceMs = std::chrono::duration<float, std::milli>(t2 - t1).count();
+                timing->postprocessMs = std::chrono::duration<float, std::milli>(t3 - t2).count();
+                timing->totalMs = std::chrono::duration<float, std::milli>(t3 - total0).count();
+            }
             return result;
         }
         catch (const cv::Exception &e)
@@ -313,10 +314,6 @@ namespace OpenCVYoloDetector
         {
             LogSystem::Add(LOG_ERROR, "YOLO OpenCV DNN: inference failed with an unknown error");
         }
-        g_OpenCVYoloPreMs = 0.0f;
-        g_OpenCVYoloInfMs = 0.0f;
-        g_OpenCVYoloPostMs = 0.0f;
-        g_OpenCVYoloTotalMs = 0.0f;
         return {};
     }
 
@@ -326,9 +323,5 @@ namespace OpenCVYoloDetector
         s_ModelPath.clear();
         s_ClassesPath.clear();
         s_Classes.clear();
-        g_OpenCVYoloPreMs = 0.0f;
-        g_OpenCVYoloInfMs = 0.0f;
-        g_OpenCVYoloPostMs = 0.0f;
-        g_OpenCVYoloTotalMs = 0.0f;
     }
 }

@@ -39,6 +39,17 @@ inline const char* ToolResultStatusName(ToolResultStatus status)
     }
 }
 
+struct ToolResultTiming
+{
+    float prepareMs = 0.0f;
+    float executeMs = 0.0f;
+    float publishMs = 0.0f;
+    float wallMs = 0.0f;
+    float backendPreprocessMs = 0.0f;
+    float backendInferenceMs = 0.0f;
+    float backendPostprocessMs = 0.0f;
+};
+
 struct ToolResult
 {
     // ===== 基础状态 =====
@@ -50,6 +61,7 @@ struct ToolResult
     std::string message;
     ToolResultStatus status = ToolResultStatus::Pass;
     std::string statusReason;
+    ToolResultTiming timing;
 
     // ===== 通用测量（长度/面积/角度等）=====
     struct Measurement { std::string name; double value = 0; std::string unit; };

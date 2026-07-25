@@ -47,7 +47,15 @@ struct RecipeROI
     float startY = 0.0f;
     float endX = 0.0f;
     float endY = 0.0f;
+    float angle = 0.0f;
     int type = 0;
+};
+
+struct RecipeTaskGroup
+{
+    std::string name;
+    bool enabled = true;
+    std::string imagePath;
 };
 
 // Recipe snapshot for one tool. Runtime parameters remain serialized by
@@ -58,12 +66,13 @@ struct RecipeToolInstance
     cv::Mat templateImage;
     std::string differenceReferenceFile;
     cv::Mat differenceReferenceImage;
+    std::string multiColorReferenceFile;
     cv::Mat multiColorReferenceImage;
     std::string mcfPointsJson;
 
     nlohmann::json ToJson() const;
     void LoadToolJson(const nlohmann::json& json);
-    void CaptureFrom(const ToolInstance& source);
+    void CaptureFrom(const ToolInstance& source, bool includeAssets = true);
     ToolInstance CreateToolInstance() const;
 
 private:
@@ -74,19 +83,28 @@ struct RecipeData
 {
     std::string name;
     std::string imagePath;
+    int loopIntervalMs = 150;
     std::string templateImage;
+    cv::Mat legacyTemplateImage;
     // Deprecated compatibility fields. New recipes use tools[*].ToJson().
     RecipeThreshold threshold;
     RecipeTemplateMatch tmMatch;
     std::vector<RecipeROI> rois;
+    std::vector<RecipeTaskGroup> taskGroups;
     std::vector<RecipeToolInstance> tools;
 };
 
 namespace RecipeManager
 {
-    bool Save(const char* filepath, const RecipeData& data);
+    struct SaveOptions
+    {
+        bool writeAssets = true;
+    };
+
+    bool Save(const char* filepath, const RecipeData& data,
+        const SaveOptions& options = {});
     bool Load(const char* filepath, RecipeData& data);
     std::vector<std::string> List(const char* exeDir = nullptr);
-    RecipeData Capture(const char* name);
+    RecipeData Capture(const char* name, bool includeAssets = true);
     void Apply(const RecipeData& data);
 }

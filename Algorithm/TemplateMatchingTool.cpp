@@ -47,9 +47,17 @@ cv::Mat PrepareTemplate(const cv::Mat& input, const TemplateMatchingTool& tool)
     if ((tool.tplGray || tool.tplBinary || tool.tplEdge) && output.channels() > 1)
         output = ToolImageUtils::ToGray(output);
     if (tool.tplBinary)
-        cv::threshold(output, output, tool.tplBinThresh, 255, cv::THRESH_BINARY);
+    {
+        cv::Mat transformed;
+        cv::threshold(output, transformed, tool.tplBinThresh, 255, cv::THRESH_BINARY);
+        output = std::move(transformed);
+    }
     if (tool.tplEdge)
-        cv::Canny(output, output, tool.tplEdgeLow, tool.tplEdgeHigh);
+    {
+        cv::Mat transformed;
+        cv::Canny(output, transformed, tool.tplEdgeLow, tool.tplEdgeHigh);
+        output = std::move(transformed);
+    }
     return output;
 }
 
@@ -59,7 +67,11 @@ cv::Mat PrepareImage(const cv::Mat& input, const TemplateMatchingTool& tool)
     if ((tool.imgUseGray || tool.imgEnableThreshold) && output.channels() > 1)
         output = ToolImageUtils::ToGray(output);
     if (tool.imgEnableThreshold)
-        cv::threshold(output, output, tool.imgThreshold, 255, cv::THRESH_BINARY);
+    {
+        cv::Mat transformed;
+        cv::threshold(output, transformed, tool.imgThreshold, 255, cv::THRESH_BINARY);
+        output = std::move(transformed);
+    }
     return output;
 }
 }
@@ -104,6 +116,14 @@ ToolResult TemplateMatchingTool::Execute(VisionContext& ctx)
 {
     ToolResult result;
     result.toolName = GetName();
+    const auto cancelled = [&]()
+    {
+        result.success = false;
+        result.message = "执行已取消";
+        return result;
+    };
+    if (ctx.IsCancellationRequested())
+        return cancelled();
     if (ctx.image.empty() || templateImg.empty())
     {
         result.success = false;
@@ -113,6 +133,8 @@ ToolResult TemplateMatchingTool::Execute(VisionContext& ctx)
 
     cv::Mat source = PrepareImage(ctx.image, *this);
     cv::Mat templ = PrepareTemplate(templateImg, *this);
+    if (ctx.IsCancellationRequested())
+        return cancelled();
     if (source.empty() || templ.empty())
     {
         result.success = false;
@@ -169,17 +191,23 @@ ToolResult TemplateMatchingTool::Execute(VisionContext& ctx)
     const int candidateLimit = (std::max)(maxResults * 8, maxResults);
     for (int angle = angleStart; angle <= angleEnd; angle += angleStep)
     {
+        if (ctx.IsCancellationRequested())
+            return cancelled();
         const cv::Mat rotated = RotateTemplate(templ, static_cast<float>(angle));
         if (rotated.empty())
             continue;
         for (const cv::Rect& searchRect : searchRects)
         {
+            if (ctx.IsCancellationRequested())
+                return cancelled();
             if (rotated.cols > searchRect.width || rotated.rows > searchRect.height)
                 continue;
             cv::Mat scores;
             cv::matchTemplate(source(searchRect), rotated, scores, cv::TM_CCOEFF_NORMED);
             for (int i = 0; i < candidateLimit; ++i)
             {
+                if (ctx.IsCancellationRequested())
+                    return cancelled();
                 double score = 0.0;
                 cv::Point location;
                 cv::minMaxLoc(scores, nullptr, &score, nullptr, &location);
@@ -205,6 +233,8 @@ ToolResult TemplateMatchingTool::Execute(VisionContext& ctx)
     std::vector<Candidate> accepted;
     for (const Candidate& candidate : candidates)
     {
+        if (ctx.IsCancellationRequested())
+            return cancelled();
         bool overlaps = false;
         for (const Candidate& previous : accepted)
         {
@@ -223,6 +253,8 @@ ToolResult TemplateMatchingTool::Execute(VisionContext& ctx)
 
     for (size_t i = 0; i < accepted.size(); ++i)
     {
+        if (ctx.IsCancellationRequested())
+            return cancelled();
         const Candidate& candidate = accepted[i];
         ToolResult::Region region;
         region.bbox = cv::Rect(static_cast<int>(std::lround(candidate.box.x / scale)),

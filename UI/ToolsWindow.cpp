@@ -2,12 +2,15 @@
 #include "DockSpaceHost.h"
 #include "../Core/ThemeManager.h"
 #include "../Renderer/FontManager.h"
+#include "../Renderer/PreviewTextureCache.h"
 #include "../Algorithm/ThresholdTool.h"
 #include "../include/imgui/imgui.h"
 #include "../include/imgui/imgui_internal.h"
 #include <windows.h>
 #include "ImageViewer.h"
+#include "GeometryDrawEditor.h"
 #include "ROIManager.h"
+#include "Tools/BasicToolPanels.h"
 #include "../Core/VideoCapture.h"
 #include "../Core/VisionContext.h"
 #include "../Core/ToolExecutor.h"
@@ -18,11 +21,13 @@
 #include "../Core/ToolAssetService.h"
 #include "../Core/ToolROIService.h"
 #include "../Core/ImageState.h"
+#include "../Core/ImageImportService.h"
 #include "../Core/ROIState.h"
 #include "../Core/CalibrationFitter.h"
 #include "../Core/OpenFileDialog.h"
 #include "../Core/TemplateState.h"
 #include "../Core/RealtimeDetectionState.h"
+#include "../Core/RecipeAutosaveService.h"
 #include "../Log/LogSystem.h"
 #include "../Algorithm/YOLODetector.h"
 #include "../Algorithm/OpenCVYoloDetector.h"
@@ -458,6 +463,7 @@ namespace UI
 
         {7, "直线检测", ToolCategory::Geometry,  "▬"},
         {15, "工业测量", ToolCategory::Geometry, "M"},
+        {17, "几何绘制", ToolCategory::Geometry, "G"},
 
         {9, "颜色分析", ToolCategory::Analysis,  "◆"},
         {10, "多点找色", ToolCategory::Detection, "◉"},
@@ -472,11 +478,558 @@ namespace UI
         ToolChainState::MoveOriginalToolToFront();
     }
 
+    namespace
+    {
+        std::uint64_t s_selectedTaskGroupId = 0;
+        std::uint64_t s_renameTaskGroupId = 0;
+        char s_taskGroupNameBuffer[96]{};
+        int s_pendingTaskGroupDelete = -1;
+        std::string s_taskGroupError;
+        bool s_showTaskGroupListWindow = true;
+        bool s_showTaskGroupToolsWindow = false;
+        bool s_requestTaskGroupListDock = true;
+        bool s_requestTaskGroupToolsDock = false;
+        std::string s_taskGroupToolFilter;
+        bool s_taskGroupToolFilterUngrouped = false;
+        bool s_requestToolsWindowFocus = false;
+
+        void SelectTaskGroupInTools(std::uint64_t groupId, const std::string& groupName)
+        {
+            const bool selectionChanged = s_selectedTaskGroupId != groupId;
+            s_selectedTaskGroupId = groupId;
+            s_taskGroupToolFilter = groupId == 0 ? std::string{} : groupName;
+            s_taskGroupToolFilterUngrouped = groupId == 0;
+            if (selectionChanged)
+                ToolController::RequestStepReset();
+            if (selectionChanged && groupId != 0)
+            {
+                const int groupIndex = ToolChainState::TaskGroupIndexByName(groupName);
+                if (groupIndex >= 0)
+                {
+                    const std::string& imagePath =
+                        ToolChainState::ReadOnlyTaskGroups()[groupIndex].imagePath;
+                    if (!imagePath.empty())
+                    {
+                        const ImageImportResult result =
+                            ImageImportService::ImportSingleImage(imagePath);
+                        if (!result.success)
+                        {
+                            LogSystem::Add(LOG_ERROR,
+                                "任务图片加载失败 [%s]: %s",
+                                groupName.c_str(), result.message.c_str());
+                        }
+                    }
+                }
+            }
+            s_requestToolsWindowFocus = true;
+            g_ShowTools = true;
+            ToolChainState::SetActiveIndex(-1);
+        }
+
+        std::string TrimTaskGroupName(std::string value)
+        {
+            const std::size_t first = value.find_first_not_of(" \t\r\n");
+            if (first == std::string::npos)
+                return {};
+            const std::size_t last = value.find_last_not_of(" \t\r\n");
+            return value.substr(first, last - first + 1);
+        }
+
+        int TaskGroupIndexById(std::uint64_t id)
+        {
+            const auto& groups = ToolChainState::ReadOnlyTaskGroups();
+            for (int index = 0; index < static_cast<int>(groups.size()); ++index)
+            {
+                if (groups[index].id == id)
+                    return index;
+            }
+            return -1;
+        }
+
+        ImGuiID WindowDockId(const char* primaryWindow, const char* fallbackWindow = nullptr)
+        {
+            if (ImGuiWindow* window = ImGui::FindWindowByName(primaryWindow))
+            {
+                if (window->DockId != 0)
+                    return window->DockId;
+            }
+            if (fallbackWindow)
+            {
+                if (ImGuiWindow* window = ImGui::FindWindowByName(fallbackWindow))
+                    return window->DockId;
+            }
+            return 0;
+        }
+
+        std::string ToolManagerDisplayName(const ToolInstance& tool, int index)
+        {
+            const char* typeName = "工具";
+            for (const ToolMeta& meta : g_ToolRegistry)
+            {
+                if (meta.type == tool.type)
+                {
+                    typeName = meta.name;
+                    break;
+                }
+            }
+            const std::string title = tool.label.empty() ? std::string(typeName) : tool.label;
+            return std::to_string(index + 1) + ". " + title;
+        }
+
+        void CommitTaskGroupChange()
+        {
+            ToolController::OnToolChainChanged();
+            MarkCurrentRecipeDirty();
+        }
+
+        void DrawTaskGroupDropTarget(int groupIndex)
+        {
+            if (!ImGui::BeginDragDropTarget())
+                return;
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("TASK_GROUP_TOOL_ID"))
+            {
+                if (payload->DataSize == sizeof(std::uint64_t))
+                {
+                    const std::uint64_t toolId = *static_cast<const std::uint64_t*>(payload->Data);
+                    const int toolIndex = ToolChainState::IndexOfToolId(toolId);
+                    if (ToolChainState::AssignToolToTaskGroup(toolIndex, groupIndex))
+                        CommitTaskGroupChange();
+                }
+            }
+            ImGui::EndDragDropTarget();
+        }
+
+        void DrawTaskGroupToolRow(int toolIndex, int selectedGroupIndex)
+        {
+            ToolInstance* tool = ToolChainState::At(toolIndex);
+            if (!tool)
+                return;
+
+            ImGui::PushID(static_cast<int>(tool->toolId));
+            ImGui::TableNextRow(0, ImGui::GetFrameHeight());
+            ImGui::TableNextColumn();
+            const std::string displayName = ToolManagerDisplayName(*tool, toolIndex);
+            ImGui::Selectable(displayName.c_str(), false,
+                ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap);
+            if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
+            {
+                const std::uint64_t toolId = tool->toolId;
+                ImGui::SetDragDropPayload("TASK_GROUP_TOOL_ID", &toolId, sizeof(toolId));
+                ImGui::Text("移动工具：%s", displayName.c_str());
+                ImGui::EndDragDropSource();
+            }
+
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("%s", tool->groupName.empty() ? "未分组" : tool->groupName.c_str());
+            ImGui::TableNextColumn();
+            const bool alreadyAssigned = selectedGroupIndex >= 0
+                ? ToolChainState::TaskGroupIndexByName(tool->groupName) == selectedGroupIndex
+                : tool->groupName.empty();
+            ImGui::BeginDisabled(alreadyAssigned);
+            const char* actionText = selectedGroupIndex >= 0 ? "移入" : "移出";
+            if (ImGui::SmallButton(actionText) &&
+                ToolChainState::AssignToolToTaskGroup(toolIndex, selectedGroupIndex))
+            {
+                CommitTaskGroupChange();
+            }
+            ImGui::EndDisabled();
+            ImGui::PopID();
+        }
+
+        int NormalizeSelectedTaskGroupIndex()
+        {
+            int selectedGroupIndex = TaskGroupIndexById(s_selectedTaskGroupId);
+            if (s_selectedTaskGroupId != 0 && selectedGroupIndex < 0)
+            {
+                s_selectedTaskGroupId = 0;
+                s_renameTaskGroupId = 0;
+                s_taskGroupToolFilter.clear();
+                s_taskGroupToolFilterUngrouped = true;
+                selectedGroupIndex = -1;
+            }
+            return selectedGroupIndex;
+        }
+
+        void DrawTaskGroupDeletePopup()
+        {
+            if (s_pendingTaskGroupDelete >= 0 && !ImGui::IsPopupOpen("确认删除任务"))
+                ImGui::OpenPopup("确认删除任务");
+            if (!ImGui::BeginPopupModal("确认删除任务", nullptr,
+                ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
+                return;
+
+            int toolCount = 0;
+            const auto& taskGroups = ToolChainState::ReadOnlyTaskGroups();
+            if (s_pendingTaskGroupDelete < static_cast<int>(taskGroups.size()))
+            {
+                const std::string& groupName = taskGroups[s_pendingTaskGroupDelete].name;
+                toolCount = static_cast<int>(std::count_if(
+                    ToolChainState::ReadOnlyTools().begin(),
+                    ToolChainState::ReadOnlyTools().end(),
+                    [&groupName](const ToolInstance& tool)
+                    {
+                        return tool.groupName == groupName;
+                    }));
+            }
+            ImGui::Text("将同时删除该任务中的 %d 个工具。", toolCount);
+            ImGui::TextColored(ImVec4(0.95f, 0.43f, 0.30f, 1.0f),
+                "删除后无法撤销。");
+            ImGui::Spacing();
+            if (ImGui::Button("删除任务和工具", ImVec2(150.0f, 0.0f)))
+            {
+                if (ToolChainState::RemoveTaskGroup(s_pendingTaskGroupDelete))
+                {
+                    SelectTaskGroupInTools(0, {});
+                    s_renameTaskGroupId = 0;
+                    CommitTaskGroupChange();
+                }
+                s_pendingTaskGroupDelete = -1;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("取消", ImVec2(110.0f, 0.0f)))
+            {
+                s_pendingTaskGroupDelete = -1;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+
+        void DrawTaskGroupListWindow()
+        {
+            if (!s_showTaskGroupListWindow)
+                return;
+
+            ImGuiViewport* viewport = ImGui::GetMainViewport();
+            const float defaultHeight = (std::clamp)(viewport->WorkSize.y * 0.76f, 500.0f, 820.0f);
+            ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + 18.0f,
+                viewport->WorkPos.y + (viewport->WorkSize.y - defaultHeight) * 0.5f),
+                ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowSize(ImVec2(360.0f, defaultHeight), ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowSizeConstraints(ImVec2(300.0f, 420.0f),
+                ImVec2(600.0f, FLT_MAX));
+            if (s_requestTaskGroupListDock)
+            {
+                const ImGuiID dockId = WindowDockId("设备连接", "侧边栏");
+                if (dockId != 0)
+                {
+                    ImGui::SetNextWindowDockID(dockId, ImGuiCond_Always);
+                    s_requestTaskGroupListDock = false;
+                }
+            }
+            if (!ImGui::Begin("任务列表###task_group_list_window",
+                &s_showTaskGroupListWindow, ImGuiWindowFlags_NoCollapse))
+            {
+                ImGui::End();
+                return;
+            }
+
+            const bool canCreate = ToolChainState::ReadOnlyTaskGroups().size() <
+                ToolChainState::MaximumTaskGroups();
+            ImGui::BeginDisabled(!canCreate);
+            if (ImGui::Button("+ 新建任务", ImVec2(112.0f, 0.0f)))
+            {
+                const int createdIndex = ToolChainState::CreateTaskGroup();
+                if (createdIndex >= 0)
+                {
+                    const TaskGroupDefinition& createdGroup =
+                        ToolChainState::ReadOnlyTaskGroups()[createdIndex];
+                    SelectTaskGroupInTools(createdGroup.id, createdGroup.name);
+                    s_renameTaskGroupId = 0;
+                    s_taskGroupError.clear();
+                    CommitTaskGroupChange();
+                }
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (ImGui::Button("打开工具分配"))
+            {
+                s_showTaskGroupToolsWindow = true;
+                s_requestTaskGroupToolsDock = true;
+            }
+
+            int selectedGroupIndex = NormalizeSelectedTaskGroupIndex();
+            ImGui::SeparatorText("任务列表");
+            const float settingsHeight = selectedGroupIndex >= 0 ? 232.0f : 58.0f;
+            const float listHeight = (std::max)(160.0f,
+                ImGui::GetContentRegionAvail().y - settingsHeight);
+            if (ImGui::BeginChild("##task_group_list", ImVec2(0.0f, listHeight),
+                ImGuiChildFlags_Borders))
+            {
+                const bool ungroupedSelected = s_selectedTaskGroupId == 0;
+                if (ImGui::Selectable("未分组", ungroupedSelected, 0, ImVec2(0.0f, 34.0f)))
+                    SelectTaskGroupInTools(0, {});
+                DrawTaskGroupDropTarget(-1);
+
+                const auto& groups = ToolChainState::ReadOnlyTaskGroups();
+                for (int index = 0; index < static_cast<int>(groups.size()); ++index)
+                {
+                    const TaskGroupDefinition& group = groups[index];
+                    ImGui::PushID(static_cast<int>(group.id));
+                    int toolCount = 0;
+                    for (const ToolInstance& tool : ToolChainState::ReadOnlyTools())
+                    {
+                        if (tool.groupName == group.name)
+                            ++toolCount;
+                    }
+                    char rowLabel[160]{};
+                    std::snprintf(rowLabel, sizeof(rowLabel), "%s  (%d)%s",
+                        group.name.c_str(), toolCount,
+                        group.imagePath.empty() ? "" : "  [图]");
+                    if (ImGui::Selectable(rowLabel, s_selectedTaskGroupId == group.id,
+                        0, ImVec2(0.0f, 34.0f)))
+                    {
+                        SelectTaskGroupInTools(group.id, group.name);
+                    }
+                    DrawTaskGroupDropTarget(index);
+                    ImGui::PopID();
+                }
+            }
+            ImGui::EndChild();
+
+            selectedGroupIndex = NormalizeSelectedTaskGroupIndex();
+            if (selectedGroupIndex >= 0)
+            {
+                const TaskGroupDefinition& selectedGroup =
+                    ToolChainState::ReadOnlyTaskGroups()[selectedGroupIndex];
+                if (s_renameTaskGroupId != selectedGroup.id)
+                {
+                    std::snprintf(s_taskGroupNameBuffer, sizeof(s_taskGroupNameBuffer),
+                        "%s", selectedGroup.name.c_str());
+                    s_renameTaskGroupId = selectedGroup.id;
+                    s_taskGroupError.clear();
+                }
+
+                ImGui::SeparatorText("任务设置");
+                ImGui::SetNextItemWidth(-1.0f);
+                const bool renameSubmitted = ImGui::InputText("##task_group_name",
+                    s_taskGroupNameBuffer, IM_ARRAYSIZE(s_taskGroupNameBuffer),
+                    ImGuiInputTextFlags_EnterReturnsTrue);
+                if (renameSubmitted || ImGui::IsItemDeactivatedAfterEdit())
+                {
+                    const std::string newName = TrimTaskGroupName(s_taskGroupNameBuffer);
+                    if (ToolChainState::RenameTaskGroup(selectedGroupIndex, newName))
+                    {
+                        s_taskGroupToolFilter = newName;
+                        s_taskGroupToolFilterUngrouped = false;
+                        s_taskGroupError.clear();
+                        CommitTaskGroupChange();
+                    }
+                    else
+                    {
+                        s_taskGroupError = "名称不能为空，也不能与其他任务重复";
+                    }
+                }
+                if (!s_taskGroupError.empty())
+                {
+                    ImGui::TextColored(ImVec4(0.92f, 0.34f, 0.20f, 1.0f),
+                        "%s", s_taskGroupError.c_str());
+                }
+
+                bool enabled = selectedGroup.enabled;
+                if (ImGui::Checkbox("启用该任务", &enabled) &&
+                    ToolChainState::SetTaskGroupEnabled(selectedGroupIndex, enabled))
+                {
+                    CommitTaskGroupChange();
+                }
+                const std::size_t imageSlash = selectedGroup.imagePath.find_last_of("\\/");
+                const char* imageName = selectedGroup.imagePath.empty()
+                    ? "未设置（使用当前公共图片）"
+                    : selectedGroup.imagePath.c_str() +
+                        (imageSlash == std::string::npos ? 0 : imageSlash + 1);
+                ImGui::TextDisabled("任务图片: %s", imageName);
+                if (!selectedGroup.imagePath.empty())
+                    ImGui::SetItemTooltip("%s", selectedGroup.imagePath.c_str());
+                if (ImGui::Button("选择任务图片"))
+                {
+                    const std::string imagePath = OpenFileDialog();
+                    if (!imagePath.empty())
+                    {
+                        const ImageImportResult result =
+                            ImageImportService::ImportSingleImage(imagePath);
+                        if (result.success && ToolChainState::SetTaskGroupImagePath(
+                            selectedGroupIndex, imagePath))
+                        {
+                            CommitTaskGroupChange();
+                        }
+                        else if (!result.success)
+                        {
+                            LogSystem::Add(LOG_ERROR, "%s", result.message.c_str());
+                        }
+                    }
+                }
+                ImGui::SameLine();
+                ImGui::BeginDisabled(selectedGroup.imagePath.empty());
+                if (ImGui::Button("清除任务图片") &&
+                    ToolChainState::SetTaskGroupImagePath(selectedGroupIndex, {}))
+                {
+                    CommitTaskGroupChange();
+                }
+                ImGui::EndDisabled();
+                ImGui::BeginDisabled(selectedGroupIndex <= 0);
+                if (ImGui::Button("上移"))
+                {
+                    if (ToolChainState::MoveTaskGroup(
+                        selectedGroupIndex, selectedGroupIndex - 1))
+                    {
+                        CommitTaskGroupChange();
+                    }
+                }
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                ImGui::BeginDisabled(selectedGroupIndex + 1 >=
+                    static_cast<int>(ToolChainState::ReadOnlyTaskGroups().size()));
+                if (ImGui::Button("下移"))
+                {
+                    if (ToolChainState::MoveTaskGroup(
+                        selectedGroupIndex, selectedGroupIndex + 1))
+                    {
+                        CommitTaskGroupChange();
+                    }
+                }
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                if (ImGui::Button("删除任务"))
+                    s_pendingTaskGroupDelete = selectedGroupIndex;
+            }
+            else
+            {
+                ImGui::SeparatorText("未分组");
+                ImGui::TextDisabled("把右侧工具拖到任意任务即可分组。");
+            }
+
+            DrawTaskGroupDeletePopup();
+            ImGui::End();
+        }
+
+        void DrawTaskGroupToolsWindow()
+        {
+            if (!s_showTaskGroupToolsWindow)
+                return;
+
+            ImGuiViewport* viewport = ImGui::GetMainViewport();
+            const float defaultWidth = (std::clamp)(viewport->WorkSize.x * 0.44f,
+                480.0f, 720.0f);
+            const float defaultHeight = (std::clamp)(viewport->WorkSize.y * 0.76f,
+                500.0f, 820.0f);
+            ImGui::SetNextWindowPos(ImVec2(
+                viewport->WorkPos.x + viewport->WorkSize.x - defaultWidth - 18.0f,
+                viewport->WorkPos.y + (viewport->WorkSize.y - defaultHeight) * 0.5f),
+                ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowSize(ImVec2(defaultWidth, defaultHeight),
+                ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowSizeConstraints(ImVec2(430.0f, 360.0f),
+                ImVec2(FLT_MAX, FLT_MAX));
+            if (s_requestTaskGroupToolsDock)
+            {
+                const ImGuiID dockId = WindowDockId("功能窗口");
+                if (dockId != 0)
+                {
+                    ImGui::SetNextWindowDockID(dockId, ImGuiCond_Always);
+                    s_requestTaskGroupToolsDock = false;
+                }
+            }
+            if (!ImGui::Begin("任务工具分配###task_group_tools_window",
+                &s_showTaskGroupToolsWindow, ImGuiWindowFlags_NoCollapse))
+            {
+                ImGui::End();
+                return;
+            }
+
+            if (ImGui::Button("打开任务列表"))
+            {
+                s_showTaskGroupListWindow = true;
+                s_requestTaskGroupListDock = true;
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("拖动工具到左侧任务，或使用“移入/移出”按钮");
+
+            const int selectedGroupIndex = NormalizeSelectedTaskGroupIndex();
+            const std::string selectedName = selectedGroupIndex >= 0
+                ? ToolChainState::ReadOnlyTaskGroups()[selectedGroupIndex].name
+                : std::string{};
+            ImGui::SeparatorText(selectedGroupIndex >= 0
+                ? selectedName.c_str() : "未分组工具");
+
+            if (ImGui::BeginTable("##task_group_tools", 3,
+                ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg |
+                ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp,
+                ImVec2(0.0f, ImGui::GetContentRegionAvail().y)))
+            {
+                ImGui::TableSetupScrollFreeze(0, 1);
+                ImGui::TableSetupColumn("工具", ImGuiTableColumnFlags_WidthStretch, 0.55f);
+                ImGui::TableSetupColumn("当前任务", ImGuiTableColumnFlags_WidthStretch, 0.30f);
+                ImGui::TableSetupColumn("操作", ImGuiTableColumnFlags_WidthFixed, 58.0f);
+                ImGui::TableHeadersRow();
+                for (int pass = 0; pass < 2; ++pass)
+                {
+                    for (int toolIndex = 0;
+                        toolIndex < static_cast<int>(ToolChainState::Count()); ++toolIndex)
+                    {
+                        const ToolInstance* tool = ToolChainState::AtReadOnly(toolIndex);
+                        if (!tool)
+                            continue;
+                        const bool inSelected = selectedGroupIndex >= 0
+                            ? tool->groupName == selectedName : tool->groupName.empty();
+                        if ((pass == 0) != inSelected)
+                            continue;
+                        DrawTaskGroupToolRow(toolIndex, selectedGroupIndex);
+                    }
+                }
+                ImGui::EndTable();
+            }
+            ImGui::End();
+        }
+
+        void DrawTaskGroupManagerWindows()
+        {
+            DrawTaskGroupListWindow();
+            DrawTaskGroupToolsWindow();
+        }
+    }
+
+    bool BindSelectedTaskImagePath(const std::string& imagePath)
+    {
+        if (imagePath.empty() || s_selectedTaskGroupId == 0 ||
+            s_taskGroupToolFilterUngrouped || s_taskGroupToolFilter.empty())
+        {
+            return false;
+        }
+        const int groupIndex = TaskGroupIndexById(s_selectedTaskGroupId);
+        if (groupIndex < 0 ||
+            ToolChainState::ReadOnlyTaskGroups()[groupIndex].name !=
+                s_taskGroupToolFilter)
+        {
+            return false;
+        }
+        if (!ToolChainState::SetTaskGroupImagePath(groupIndex, imagePath))
+            return false;
+        MarkCurrentRecipeDirty();
+        return true;
+    }
+
     void ShowToolsWindow()
     {
         static cv::Mat g_PersistOriginal; // 持久保存原始图
+        if (GeometryDrawEditor::ConsumeChanged())
+            SaveCurrentRecipe();
+
+        std::vector<std::uint64_t> activeToolIds;
+        activeToolIds.reserve(ToolChainState::Count());
+        for (const ToolInstance& tool : ToolChainState::ReadOnlyTools())
+            activeToolIds.push_back(tool.toolId);
+        PreviewTextureCache::Prune(activeToolIds);
+
+        DrawTaskGroupManagerWindows();
+
         if (!g_ShowTools)
             return;
+
+        if (s_requestToolsWindowFocus)
+        {
+            ImGui::SetNextWindowFocus();
+            s_requestToolsWindowFocus = false;
+        }
 
         ImGui::Begin("功能窗口", &g_ShowTools,
             ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
@@ -504,6 +1057,7 @@ namespace UI
             case 13: return IM_COL32(67, 160, 255, 255);  // OCR
             case 14: return IM_COL32(38, 198, 218, 255);  // QR code
             case 15: return IM_COL32(255, 193, 7, 255);   // measurement
+            case 17: return IM_COL32(0, 172, 193, 255);   // geometry draw
             default: return IM_COL32(120, 140, 160, 255);
             }
         };
@@ -554,6 +1108,10 @@ namespace UI
                 drawList->AddText(ImVec2(p.x + size * 0.20f, p.y + size * 0.16f), white, "M");
                 drawList->AddLine(ImVec2(p.x + 4, p.y + size - 5), ImVec2(p.x + size - 4, p.y + size - 5), white, 1.2f);
                 break;
+            case 17:
+                drawList->AddRect(ImVec2(p.x + 3, p.y + 4), ImVec2(p.x + size - 4, p.y + size - 4), white, 0.0f, 0, 1.3f);
+                drawList->AddLine(ImVec2(p.x + 3, p.y + size - 3), ImVec2(p.x + size - 3, p.y + 3), white, 1.3f);
+                break;
             case 6:
                 drawList->AddTriangleFilled(ImVec2(center.x, p.y + 3), ImVec2(p.x + size - 3, p.y + size - 3), ImVec2(p.x + 3, p.y + size - 3), white);
                 break;
@@ -579,29 +1137,56 @@ namespace UI
         // ---- 调度器：每帧消费执行队列（替代旧 ExecState 状态机） ----
         ToolController::Tick();
 
-        ImGui::TextColored(isDark ? ImVec4(0.42f, 0.78f, 0.84f, 1.0f) : ImVec4(0.05f, 0.39f, 0.46f, 1.0f),
-            "工具链");
-        ImGui::SameLine();
-        ImGui::TextDisabled("%zu 个", ToolChainState::Count());
-
         std::vector<std::string> toolGroups;
-        for (const ToolInstance& tool : ToolChainState::ReadOnlyTools())
+        for (const TaskGroupDefinition& group : ToolChainState::ReadOnlyTaskGroups())
+            toolGroups.push_back(group.name);
+        if (!s_taskGroupToolFilter.empty() &&
+            std::find(toolGroups.begin(), toolGroups.end(), s_taskGroupToolFilter) == toolGroups.end())
         {
-            if (tool.groupName.empty() ||
-                std::find(toolGroups.begin(), toolGroups.end(), tool.groupName) != toolGroups.end())
-                continue;
-            toolGroups.push_back(tool.groupName);
-        }
-        std::sort(toolGroups.begin(), toolGroups.end());
-        static std::string s_groupFilter;
-        if (!s_groupFilter.empty() &&
-            std::find(toolGroups.begin(), toolGroups.end(), s_groupFilter) == toolGroups.end())
-        {
-            s_groupFilter.clear();
+            s_taskGroupToolFilter.clear();
+            s_taskGroupToolFilterUngrouped = false;
         }
 
-        if (ImGui::Button("批量操作"))
+        std::vector<int> visibleToolIndices;
+        visibleToolIndices.reserve(ToolChainState::Count());
+        for (int index = 0; index < static_cast<int>(ToolChainState::Count()); ++index)
+        {
+            const ToolInstance* tool = ToolChainState::AtReadOnly(index);
+            if (!tool)
+                continue;
+            if ((s_taskGroupToolFilterUngrouped && !tool->groupName.empty()) ||
+                (!s_taskGroupToolFilter.empty() &&
+                    tool->groupName != s_taskGroupToolFilter))
+            {
+                continue;
+            }
+            visibleToolIndices.push_back(index);
+        }
+
+        const char* chainTitle = !s_taskGroupToolFilter.empty()
+            ? s_taskGroupToolFilter.c_str()
+            : (s_taskGroupToolFilterUngrouped ? "未分组" : "全部工具");
+        ImGui::TextColored(isDark ? ImVec4(0.42f, 0.78f, 0.84f, 1.0f) : ImVec4(0.05f, 0.39f, 0.46f, 1.0f),
+            "%s · 工具链", chainTitle);
+        ImGui::SameLine();
+        ImGui::TextDisabled("%zu 个", visibleToolIndices.size());
+
+        const bool hasTools = !ToolChainState::Empty();
+        const float topActionGap = ImGui::GetStyle().ItemSpacing.x;
+        const float topActionWidth = (std::max)(90.0f,
+            (ImGui::GetContentRegionAvail().x - topActionGap) * 0.5f);
+        if (ImGui::Button("任务分组管理", ImVec2(topActionWidth, 0.0f)))
+        {
+            s_showTaskGroupListWindow = true;
+            s_showTaskGroupToolsWindow = true;
+            s_requestTaskGroupListDock = true;
+            s_requestTaskGroupToolsDock = true;
+        }
+        ImGui::SameLine(0.0f, topActionGap);
+        ImGui::BeginDisabled(!hasTools);
+        if (ImGui::Button("批量操作", ImVec2(topActionWidth, 0.0f)))
             ImGui::OpenPopup("ToolBatchActions");
+        ImGui::EndDisabled();
         if (ImGui::BeginPopup("ToolBatchActions"))
         {
             bool changed = false;
@@ -680,29 +1265,74 @@ namespace UI
             }
             ImGui::EndPopup();
         }
-        ImGui::SetNextItemWidth(-1.0f);
-        const char* groupPreview = s_groupFilter.empty() ? "全部分组" : s_groupFilter.c_str();
-        if (ImGui::BeginCombo("##group_filter", groupPreview))
+        if (toolGroups.empty())
         {
-            if (ImGui::Selectable("全部分组", s_groupFilter.empty()))
+            ImGui::TextDisabled("暂无分组");
+        }
+        else
+        {
+            ImGui::SetNextItemWidth(-1.0f);
+            const char* groupPreview = s_taskGroupToolFilterUngrouped
+                ? "未分组"
+                : (s_taskGroupToolFilter.empty() ? "全部分组" : s_taskGroupToolFilter.c_str());
+            if (ImGui::BeginCombo("##group_filter", groupPreview))
             {
-                s_groupFilter.clear();
-                ToolChainState::SetActiveIndex(-1);
-            }
-            for (const std::string& group : toolGroups)
-            {
-                if (ImGui::Selectable(group.c_str(), s_groupFilter == group))
+                if (ImGui::Selectable("全部分组",
+                    s_taskGroupToolFilter.empty() && !s_taskGroupToolFilterUngrouped))
                 {
-                    s_groupFilter = group;
+                    s_taskGroupToolFilter.clear();
+                    s_taskGroupToolFilterUngrouped = false;
+                    s_selectedTaskGroupId = 0;
+                    ToolController::RequestStepReset();
                     ToolChainState::SetActiveIndex(-1);
                 }
+                if (ImGui::Selectable("未分组", s_taskGroupToolFilterUngrouped))
+                {
+                    s_taskGroupToolFilter.clear();
+                    s_taskGroupToolFilterUngrouped = true;
+                    s_selectedTaskGroupId = 0;
+                    ToolController::RequestStepReset();
+                    ToolChainState::SetActiveIndex(-1);
+                }
+                for (const std::string& group : toolGroups)
+                {
+                    if (ImGui::Selectable(group.c_str(),
+                        !s_taskGroupToolFilterUngrouped && s_taskGroupToolFilter == group))
+                    {
+                        const int groupIndex = ToolChainState::TaskGroupIndexByName(group);
+                        if (groupIndex >= 0)
+                        {
+                            SelectTaskGroupInTools(
+                                ToolChainState::ReadOnlyTaskGroups()[groupIndex].id,
+                                group);
+                        }
+                    }
+                }
+                ImGui::EndCombo();
             }
-            ImGui::EndCombo();
+            ImGui::SetItemTooltip("筛选工具分组");
         }
-        ImGui::SetItemTooltip("筛选工具分组");
+
+        const RecipeAutosaveSnapshot recipeSave = RecipeAutosaveService::Snapshot();
+        ImGui::TextDisabled("当前配方: %s", CurrentRecipeName());
+        ImGui::SetItemTooltip("%s%s%s%s%s", CurrentRecipePath().c_str(),
+            recipeSave.lastSavedAt.empty() ? "" : "\n最后保存: ",
+            recipeSave.lastSavedAt.c_str(),
+            recipeSave.lastError.empty() ? "" : "\n错误: ",
+            recipeSave.lastError.c_str());
+        ImGui::SameLine();
+        const bool saveFailed = !recipeSave.lastError.empty();
+        const bool saveBusy = recipeSave.dirty || recipeSave.pending || recipeSave.saving;
+        ImGui::TextColored(saveFailed
+            ? ImVec4(0.95f, 0.38f, 0.32f, 1.0f)
+            : saveBusy ? ImVec4(0.95f, 0.72f, 0.22f, 1.0f)
+            : ImVec4(0.35f, 0.78f, 0.48f, 1.0f),
+            "%s", saveFailed ? "保存失败" : saveBusy ? "保存中" : "已保存");
 
         if (ImGui::Button("+ 添加工具", ImVec2(-1, 0)))
             ImGui::OpenPopup("AddToolPopup");
+        ImGui::SetNextWindowSizeConstraints(
+            ImVec2(290.0f, 0.0f), ImVec2(380.0f, FLT_MAX));
         if (ImGui::BeginPopup("AddToolPopup"))
         {
             for (int c = 0; c < (int)ToolCategory::COUNT; c++)
@@ -716,19 +1346,33 @@ namespace UI
                         char itemId[32];
                         snprintf(itemId, sizeof(itemId), "##tool_%d", meta.type);
                         ImVec2 rowPos = ImGui::GetCursorScreenPos();
-                        const float rowH = ImGui::GetTextLineHeightWithSpacing();
+                        const float rowH = (std::max)(
+                            28.0f, ImGui::GetTextLineHeightWithSpacing());
                         if (ImGui::Selectable(itemId, false, 0, ImVec2(0.0f, rowH)))
                         {
                             ToolInstance tool{};
                             tool.type = meta.type;
-                            tool.label = meta.name ? meta.name : "";
-                            ToolChainState::AddTool(std::move(tool));
+                            // 从具体任务视图添加工具时，直接归入该任务；
+                            // “全部分组/未分组”视图仍保持新增为未分组。
+                            if (!s_taskGroupToolFilterUngrouped &&
+                                !s_taskGroupToolFilter.empty() &&
+                                ToolChainState::TaskGroupIndexByName(
+                                    s_taskGroupToolFilter) >= 0)
+                            {
+                                tool.groupName = s_taskGroupToolFilter;
+                            }
+                            const int addedIndex = ToolChainState::AddTool(std::move(tool));
+                            const ToolInstance* addedTool = ToolChainState::AtReadOnly(addedIndex);
+                            const std::uint64_t addedToolId = addedTool ? addedTool->toolId : 0;
                             MoveOriginalToolToFront();
+                            ToolController::OnToolChainChanged();
+                            ToolChainState::SetActiveIndex(
+                                ToolChainState::IndexOfToolId(addedToolId));
                             SaveCurrentRecipe();
                         }
 
                         ImDrawList *drawList = ImGui::GetWindowDrawList();
-                        const float iconSize = 16.0f;
+                        const float iconSize = 18.0f;
                         const float iconX = rowPos.x + ImGui::GetStyle().FramePadding.x;
                         const float iconY = rowPos.y + (rowH - iconSize) * 0.5f;
                         ImFontAtlasRect iconRect;
@@ -767,6 +1411,21 @@ namespace UI
                 if (m.type == type)
                     return m.name;
             return "?";
+        };
+
+        auto CaptureToolPersistentState = [](const ToolInstance& tool)
+        {
+            nlohmann::json state = tool.ToRecipeJson();
+            if (tool.type == 10 && tool.toolImpl)
+            {
+                if (const auto* finder = dynamic_cast<const MultiColorFinder*>(tool.toolImpl.get()))
+                {
+                    const nlohmann::json finderState = finder->Save();
+                    state["mcfPoints"] = finderState.value(
+                        "points", nlohmann::json::array());
+                }
+            }
+            return state;
         };
 
         // ---- UI 辅助：统一视觉风格 ----
@@ -861,10 +1520,10 @@ namespace UI
             }
         };
 
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 5));
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6, 5));
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 4.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(7, 4));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5, 4));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 3.0f);
 
         ImVec4 themeCard      = isDark ? ImVec4(0.095f, 0.110f, 0.130f, 1.0f) : ImVec4(0.965f, 0.975f, 0.980f, 1.0f);
         ImVec4 themeCardHover = isDark ? ImVec4(0.130f, 0.160f, 0.180f, 1.0f) : ImVec4(0.895f, 0.925f, 0.935f, 1.0f);
@@ -887,9 +1546,9 @@ namespace UI
             &SecondaryButton, &SectionHeader](const char *title, const char *icon = "")
         {
             ImGui::PushID(currentCardInst * 100 + currentCardType);
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6, 5));
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 4));
-            ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 4.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5, 3));
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(7, 3));
+            ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 3.0f);
             char childId[96];
             snprintf(childId, sizeof(childId), "##tool_card_%d_%d", currentCardInst, currentCardType);
             ImGui::BeginChild(childId, ImVec2(0.0f, 0.0f),
@@ -920,65 +1579,102 @@ namespace UI
             ImGui::Separator();
             if (cardTool)
             {
-                static std::unordered_map<int, bool> s_labelEnabled;
-                bool labelEnabled = !cardTool->label.empty() || s_labelEnabled[currentCardInst];
-                if (ImGui::Checkbox("标签", &labelEnabled))
+                if (cardTool->parametersDirty)
                 {
-                    s_labelEnabled[currentCardInst] = labelEnabled;
-                    if (labelEnabled && cardTool->label.empty())
-                    {
-                        cardTool->label = title ? title : "";
-                        SaveCurrentRecipe();
-                    }
-                    if (!labelEnabled)
-                    {
-                        cardTool->label.clear();
-                        SaveCurrentRecipe();
-                    }
+                    ImGui::TextColored(ImVec4(0.95f, 0.72f, 0.22f, 1.0f),
+                        "参数已修改，重新执行后更新结果");
                 }
-                ImGui::SameLine();
+                SectionHeader("实例设置");
+                bool labelEnabled = !cardTool->label.empty();
+                if (ImGui::Checkbox("使用标签", &labelEnabled))
+                {
+                    if (labelEnabled && cardTool->label.empty())
+                        cardTool->label = title ? title : "";
+                    if (!labelEnabled)
+                        cardTool->label.clear();
+                    MarkCurrentRecipeDirty();
+                }
                 ImGui::BeginDisabled(!labelEnabled);
                 if (labelEnabled && cardTool->label.empty())
                     cardTool->label = title ? title : "";
                 char labelBuf[128];
                 snprintf(labelBuf, sizeof(labelBuf), "%s", cardTool->label.c_str());
+                ImGui::TextDisabled("标签名称");
                 ImGui::SetNextItemWidth(-1.0f);
                 if (ImGui::InputText("##tool_label", labelBuf, IM_ARRAYSIZE(labelBuf)))
+                {
                     cardTool->label = labelBuf;
-                if (ImGui::IsItemDeactivatedAfterEdit())
-                    SaveCurrentRecipe();
+                    MarkCurrentRecipeDirty();
+                }
                 ImGui::EndDisabled();
                 bool showResultLabels = cardTool->showResultLabels;
-                if (ImGui::Checkbox("结果标签", &showResultLabels))
-                {
-                    cardTool->showResultLabels = showResultLabels;
-                    SaveCurrentRecipe();
-                }
                 bool enabled = cardTool->enabled;
                 if (ImGui::Checkbox("启用工具", &enabled))
                 {
                     cardTool->enabled = enabled;
-                    SaveCurrentRecipe();
+                    MarkCurrentRecipeDirty();
                 }
-                char groupBuf[96];
-                snprintf(groupBuf, sizeof(groupBuf), "%s", cardTool->groupName.c_str());
+                if (ImGui::GetContentRegionAvail().x > 150.0f)
+                    ImGui::SameLine();
+                if (ImGui::Checkbox("显示结果标签", &showResultLabels))
+                {
+                    cardTool->showResultLabels = showResultLabels;
+                    MarkCurrentRecipeDirty();
+                }
+                ImGui::TextDisabled("任务分组");
+                ImGui::SameLine();
+                if (cardTool->groupName.empty())
+                    ImGui::TextDisabled("未分组");
+                else
+                    ImGui::TextColored(ImVec4(0.30f, 0.76f, 0.88f, 1.0f),
+                        "%s", cardTool->groupName.c_str());
                 ImGui::SetNextItemWidth(-1.0f);
-                if (ImGui::InputText("分组##tool_group", groupBuf, IM_ARRAYSIZE(groupBuf)))
-                    cardTool->groupName = groupBuf;
-                if (ImGui::IsItemDeactivatedAfterEdit())
-                    SaveCurrentRecipe();
+                const char* groupPreview = cardTool->groupName.empty()
+                    ? "未分组" : cardTool->groupName.c_str();
+                if (ImGui::BeginCombo("##tool_group_select", groupPreview))
+                {
+                    if (ImGui::Selectable("未分组", cardTool->groupName.empty()) &&
+                        ToolChainState::AssignToolToTaskGroup(currentCardInst, -1))
+                    {
+                        CommitTaskGroupChange();
+                    }
+                    const auto& taskGroups = ToolChainState::ReadOnlyTaskGroups();
+                    for (int groupIndex = 0;
+                        groupIndex < static_cast<int>(taskGroups.size()); ++groupIndex)
+                    {
+                        const bool selected = cardTool->groupName == taskGroups[groupIndex].name;
+                        if (ImGui::Selectable(taskGroups[groupIndex].name.c_str(), selected) &&
+                            ToolChainState::AssignToolToTaskGroup(currentCardInst, groupIndex))
+                        {
+                            CommitTaskGroupChange();
+                        }
+                    }
+                    ImGui::Separator();
+                    ImGui::BeginDisabled(taskGroups.size() >= ToolChainState::MaximumTaskGroups());
+                    if (ImGui::Selectable("+ 新建任务并加入"))
+                    {
+                        const int createdIndex = ToolChainState::CreateTaskGroup();
+                        if (createdIndex >= 0 &&
+                            ToolChainState::AssignToolToTaskGroup(currentCardInst, createdIndex))
+                        {
+                            CommitTaskGroupChange();
+                        }
+                    }
+                    ImGui::EndDisabled();
+                    ImGui::EndCombo();
+                }
                 bool collapsed = cardTool->collapsed;
                 if (ImGui::Checkbox("折叠卡片", &collapsed))
                 {
                     cardTool->collapsed = collapsed;
                     if (collapsed && ToolChainState::ActiveIndex() == currentCardInst)
                         ToolChainState::SetActiveIndex(-1);
-                    SaveCurrentRecipe();
+                    MarkCurrentRecipeDirty();
                 }
                 if (cardTool->type == 4 || cardTool->type == 11 || cardTool->type == 13)
                 {
                     if (ImGui::Checkbox("模型缺失时跳过", &cardTool->skipIfModelMissing))
-                        SaveCurrentRecipe();
+                        MarkCurrentRecipeDirty();
                 }
                 if (SecondaryButton("复制工具"))
                     duplicateToolIndex = currentCardInst;
@@ -1286,6 +1982,16 @@ namespace UI
 
         // ---- 工具 UI 函数注册 ----
         g_ToolUIMap.clear();
+        ToolPanelContext basicPanelContext;
+        basicPanelContext.beginCard = [&](const char* title) { BeginCard(title); };
+        basicPanelContext.endCard = EndCard;
+        basicPanelContext.sectionHeader = SectionHeader;
+        basicPanelContext.primaryButton = PrimaryButton;
+        basicPanelContext.secondaryButton = [&](const char* label) { return SecondaryButton(label); };
+        basicPanelContext.parameterLabel = ParamLabel;
+        basicPanelContext.runTool = RunToolFromCard;
+        basicPanelContext.drawSearchROI = DrawSearchROIControls;
+        RegisterBasicToolPanels(g_ToolUIMap, basicPanelContext);
 
         // 0: 边缘检测
         g_ToolUIMap[0] = [&](ToolInstance &it, int inst)
@@ -1315,6 +2021,7 @@ namespace UI
             if (SecondaryButton("重置参数"))
             {
                 ToolAssetService::ClearAsset(it, ToolAssetKind::TemplateMatch);
+                MarkCurrentRecipeAssetsDirty();
                 it.tplGray = false; it.tplBinary = false; it.tplBinThresh = 128;
                 it.tplEdge = false; it.tplEdgeLow = 50; it.tplEdgeHigh = 150;
                 it.imgUseGray = false; it.imgEnableThreshold = false; it.imgThreshold = 128;
@@ -1359,7 +2066,7 @@ TemplateState::ClearResults();
                     {
                         LogSystem::Add(LOG_INFO, "模板匹配: 模板已抓取 %dx%d",
                             result.bounds.width, result.bounds.height);
-                        SaveCurrentRecipe();
+                        MarkCurrentRecipeAssetsDirty();
                     }
                     else
                         LogSystem::Add(LOG_WARN, "模板匹配: ROI区域无效或超出图像范围");
@@ -1374,7 +2081,7 @@ TemplateState::ClearResults();
                 if (SecondaryButton("清除模板"))
                 {
                     ToolAssetService::ClearAsset(it, ToolAssetKind::TemplateMatch);
-                    SaveCurrentRecipe();
+                    MarkCurrentRecipeAssetsDirty();
                 }
             }
 
@@ -1384,28 +2091,43 @@ TemplateState::ClearResults();
                 ImGui::Checkbox("显示预览##tm", &it.showTemplatePreview);
                 if (it.showTemplatePreview)
                 {
-                // 模板预览
-                cv::Mat tpl = it.templateImg.clone();
-                if (it.tplGray && tpl.channels() > 1) cv::cvtColor(tpl, tpl, cv::COLOR_BGR2GRAY);
-                if (it.tplBinary) { if (tpl.channels() > 1) cv::cvtColor(tpl, tpl, cv::COLOR_BGR2GRAY); cv::threshold(tpl, tpl, it.tplBinThresh, 255, cv::THRESH_BINARY); }
-                if (it.tplEdge) { if (tpl.channels() > 1) cv::cvtColor(tpl, tpl, cv::COLOR_BGR2GRAY); cv::Canny(tpl, tpl, it.tplEdgeLow, it.tplEdgeHigh); }
-                int maxPx = 80; float rs = maxPx / (float)std::max(tpl.cols, tpl.rows);
-                if (rs > 1.0f) rs = 1.0f;
-                int dw = (int)(tpl.cols * rs), dh = (int)(tpl.rows * rs);
-                if (dw < 2) dw = 2; if (dh < 2) dh = 2;
-                cv::Mat previewImage; cv::resize(tpl, previewImage, cv::Size(dw, dh), 0, 0, cv::INTER_NEAREST);
-                ImDrawList *dl = ImGui::GetWindowDrawList();
-                ImVec2 base = ImGui::GetCursorScreenPos(); float step = 2.0f;
-                bool isColor = !it.tplGray && !it.tplBinary && !it.tplEdge && previewImage.channels() >= 3;
-                for (int y = 0; y < dh; y++) for (int x = 0; x < dw; x++) {
-                    ImU32 col;
-                    if (isColor) { auto &px = previewImage.at<cv::Vec3b>(y, x); col = IM_COL32(px[2], px[1], px[0], 255); }
-                    else { uchar v = (previewImage.channels() == 1) ? previewImage.at<uchar>(y, x) : (uchar)(previewImage.at<cv::Vec3b>(y, x)[0] * 0.3f + previewImage.at<cv::Vec3b>(y, x)[1] * 0.59f + previewImage.at<cv::Vec3b>(y, x)[2] * 0.11f); col = IM_COL32(v, v, v, 255); }
-                    dl->AddRectFilled(ImVec2(base.x + x * step, base.y + y * step), ImVec2(base.x + (x + 1) * step, base.y + (y + 1) * step), col);
-                }
-                ImGui::Dummy(ImVec2(dw * step, dh * step));
-                ImGui::SetItemTooltip("模板预览");
-                ImGui::TextDisabled("模板: %dx%d", it.templateImg.cols, it.templateImg.rows);
+                    std::uint64_t signature = PreviewTextureCache::ImageSignature(it.templateImg);
+                    signature = PreviewTextureCache::CombineSignature(signature, it.tplGray);
+                    signature = PreviewTextureCache::CombineSignature(signature, it.tplBinary);
+                    signature = PreviewTextureCache::CombineSignature(signature, it.tplBinThresh);
+                    signature = PreviewTextureCache::CombineSignature(signature, it.tplEdge);
+                    signature = PreviewTextureCache::CombineSignature(signature, it.tplEdgeLow);
+                    signature = PreviewTextureCache::CombineSignature(signature, it.tplEdgeHigh);
+                    if (PreviewTextureCache::NeedsUpdate(it.toolId, PreviewTextureKind::TemplateMatch, signature))
+                    {
+                        cv::Mat preview = it.templateImg.clone();
+                        if (it.tplGray && preview.channels() > 1)
+                            cv::cvtColor(preview, preview, cv::COLOR_BGR2GRAY);
+                        if (it.tplBinary)
+                        {
+                            if (preview.channels() > 1)
+                                cv::cvtColor(preview, preview, cv::COLOR_BGR2GRAY);
+                            cv::threshold(preview, preview, it.tplBinThresh, 255, cv::THRESH_BINARY);
+                        }
+                        if (it.tplEdge)
+                        {
+                            if (preview.channels() > 1)
+                                cv::cvtColor(preview, preview, cv::COLOR_BGR2GRAY);
+                            cv::Canny(preview, preview, it.tplEdgeLow, it.tplEdgeHigh);
+                        }
+                        PreviewTextureCache::Queue(it.toolId, PreviewTextureKind::TemplateMatch,
+                            signature, preview, 80);
+                    }
+
+                    const PreviewTextureView preview = PreviewTextureCache::Get(
+                        it.toolId, PreviewTextureKind::TemplateMatch);
+                    const ImVec2 previewSize(preview.width * 2.0f, preview.height * 2.0f);
+                    if (preview.ready)
+                        ImGui::Image((ImTextureID)preview.gpuHandle.ptr, previewSize);
+                    else
+                        ImGui::Dummy(previewSize);
+                    ImGui::SetItemTooltip("模板预览");
+                    ImGui::TextDisabled("模板: %dx%d", it.templateImg.cols, it.templateImg.rows);
                 }
             }
             else
@@ -1498,94 +2220,6 @@ TemplateState::ClearResults();
             EndCard();
         };
 
-        // 2: Blob分析
-        g_ToolUIMap[2] = [&](ToolInstance &it, int inst)
-        {
-            BeginCard("Blob分析");
-            if (PrimaryButton("执行Blob分析"))
-            {
-                RunToolFromCard(inst);
-            }
-            DrawSearchROIControls(it, inst);
-            SectionHeader("参数");
-            ImGui::SliderInt("最小面积", &it.blobMinArea, 1, 10000);
-            ImGui::SliderInt("最大面积", &it.blobMaxArea, 100, 100000);
-            const char* blobThresholdModes[] = { "Otsu自动阈值", "手动阈值" };
-            ImGui::Combo("阈值模式", &it.blobThresholdMode,
-                blobThresholdModes, IM_ARRAYSIZE(blobThresholdModes));
-            if (it.blobThresholdMode == 1)
-                ImGui::SliderInt("阈值", &it.blobThreshold, 0, 255);
-            ImGui::Checkbox("反相", &it.blobInvert);
-            const char* connectivityModes[] = { "4邻域", "8邻域" };
-            int connectivityIndex = it.blobConnectivity == 4 ? 0 : 1;
-            if (ImGui::Combo("连通方式", &connectivityIndex,
-                connectivityModes, IM_ARRAYSIZE(connectivityModes)))
-                it.blobConnectivity = connectivityIndex == 0 ? 4 : 8;
-            ImGui::SliderFloat("最小圆度", &it.blobMinCircularity, 0.0f, 1.0f, "%.3f");
-            ImGui::SliderFloat("最大圆度", &it.blobMaxCircularity, it.blobMinCircularity, 1.0f, "%.3f");
-            ImGui::SliderFloat("最小长宽比", &it.blobMinAspectRatio, 0.0f, 20.0f, "%.2f");
-            ImGui::SliderFloat("最大长宽比", &it.blobMaxAspectRatio, it.blobMinAspectRatio, 100.0f, "%.2f");
-            ImGui::Checkbox("显示Blob标签", &it.blobShowLabels);
-            EndCard();
-        };
-
-        // 3: 阈值调试
-        g_ToolUIMap[3] = [&](ToolInstance &it, int inst)
-        {
-            BeginCard("阈值调试");
-            auto applyPreview = [&]()
-            {
-                PipelineState pipeline;
-                pipeline.enableBlur = it.dbgEnableBlur;
-                pipeline.blurSize = it.dbgBlurSize;
-                pipeline.enableThreshold = it.dbgEnableThresh;
-                pipeline.threshold = it.dbgThreshold;
-                pipeline.enableCanny = it.dbgEnableCanny;
-                pipeline.cannyLow = it.dbgCannyLow;
-                pipeline.cannyHigh = it.dbgCannyHigh;
-                ThresholdTool::ApplyProcess(it.dbgUseGray, pipeline);
-            };
-
-            if (SecondaryButton("重置参数"))
-            {
-                it.dbgUseGray = false;
-                it.dbgEnableBlur = false;
-                it.dbgBlurSize = 5;
-                it.dbgEnableThresh = false;
-                it.dbgThreshold = 128;
-                it.dbgEnableCanny = false;
-                it.dbgCannyLow = 50;
-                it.dbgCannyHigh = 150;
-                applyPreview();
-            }
-            if (PrimaryButton("执行处理"))
-                RunToolFromCard(inst);
-
-            DrawSearchROIControls(it, inst);
-            SectionHeader("参数");
-            if (ImGui::Checkbox("转为灰度", &it.dbgUseGray))
-                applyPreview();
-            if (ImGui::Checkbox("高斯模糊", &it.dbgEnableBlur))
-                applyPreview();
-            if (it.dbgEnableBlur && ImGui::SliderInt("模糊核", &it.dbgBlurSize, 1, 10))
-                applyPreview();
-            if (ImGui::Checkbox("二值化", &it.dbgEnableThresh))
-                applyPreview();
-            if (it.dbgEnableThresh && ImGui::SliderInt("阈值", &it.dbgThreshold, 0, 255))
-                applyPreview();
-            if (ImGui::Checkbox("Canny边缘", &it.dbgEnableCanny))
-                applyPreview();
-            if (it.dbgEnableCanny)
-            {
-                if (ImGui::SliderInt("Canny低", &it.dbgCannyLow, 0, 255))
-                    applyPreview();
-                if (ImGui::SliderInt("Canny高", &it.dbgCannyHigh, 0, 255))
-                    applyPreview();
-            }
-            if (ThresholdTool::LastTimeMs() > 0)
-                ImGui::TextDisabled("总耗时: %.3fms", ThresholdTool::LastTimeMs());
-            EndCard();
-        };
         // 4: YOLO
         g_ToolUIMap[4] = [&](ToolInstance &it, int inst)
         {
@@ -1740,13 +2374,13 @@ TemplateState::ClearResults();
 
             SectionHeader("状态");
             ImGui::TextDisabled("%s", OpenCVYoloDetector::IsLoaded() ? "OpenCV DNN 已加载" : "OpenCV DNN 未加载");
-            if (OpenCVYoloDetector::g_OpenCVYoloTotalMs > 0)
+            if (it.hasLastResult && it.lastResult.timing.executeMs > 0.0f)
             {
-                ImGui::TextColored(ImVec4(0.3f, 1, 0.3f, 1), "总耗时: %.3fms", OpenCVYoloDetector::g_OpenCVYoloTotalMs);
+                ImGui::TextColored(ImVec4(0.3f, 1, 0.3f, 1), "总耗时: %.3fms", it.lastResult.timing.executeMs);
                 ImGui::TextDisabled("预处理 %.3f | 推理 %.3f | 后处理 %.3f",
-                    OpenCVYoloDetector::g_OpenCVYoloPreMs,
-                    OpenCVYoloDetector::g_OpenCVYoloInfMs,
-                    OpenCVYoloDetector::g_OpenCVYoloPostMs);
+                    it.lastResult.timing.backendPreprocessMs,
+                    it.lastResult.timing.backendInferenceMs,
+                    it.lastResult.timing.backendPostprocessMs);
             }
 
             EndCard();
@@ -1819,7 +2453,7 @@ TemplateState::ClearResults();
                     if (ToolAssetService::CaptureCurrentImage(
                         it, ToolAssetKind::DifferenceReference).success)
                     {
-                        SaveCurrentRecipe();
+                        MarkCurrentRecipeAssetsDirty();
                     }
                 }
             }
@@ -1832,13 +2466,13 @@ TemplateState::ClearResults();
                     if (ToolAssetService::CaptureCurrentImage(
                         it, ToolAssetKind::DifferenceReference).success)
                     {
-                        SaveCurrentRecipe();
+                        MarkCurrentRecipeAssetsDirty();
                     }
                 }
                 if (SecondaryButton("清除参考图"))
                 {
                     ToolAssetService::ClearAsset(it, ToolAssetKind::DifferenceReference);
-                    SaveCurrentRecipe();
+                    MarkCurrentRecipeAssetsDirty();
                 }
             }
             DrawSearchROIControls(it, inst);
@@ -1849,7 +2483,6 @@ TemplateState::ClearResults();
             ImGui::SliderInt("形态学核", &it.differenceMorphKernelSize, 1, 15);
             ImGui::SliderInt("形态学迭代", &it.differenceMorphIterations, 1, 10);
             ImGui::Checkbox("反相差分", &it.differenceInvert);
-            ImGui::Checkbox("显示差异标签", &it.differenceShowLabels);
             EndCard();
         };
 
@@ -1863,7 +2496,7 @@ TemplateState::ClearResults();
                 it.qrDetectMulti = true;
                 it.qrEnhance = true;
                 it.qrMinSize = 24;
-                it.qrShowText = true;
+                it.showResultLabels = true;
                 it.qrEngine = 0;
                 it.qrFormatMask = BarcodeFormatAll;
                 it.qrFilterDuplicates = true;
@@ -2319,6 +2952,25 @@ TemplateState::ClearResults();
             EndCard();
         };
 
+        // 17: 几何绘制
+        g_ToolUIMap[17] = [&](ToolInstance &it, int inst)
+        {
+            BeginCard("几何绘制");
+            if (SecondaryButton("重置图形"))
+            {
+                it.geometryDrawType = static_cast<int>(GeometryPrimitiveType::Line);
+                it.geometryItems.clear();
+                GeometryDrawEditor::Cancel();
+                SaveCurrentRecipe();
+            }
+            if (PrimaryButton("执行几何绘制"))
+                RunToolFromCard(inst);
+            SectionHeader("图形编辑");
+            if (GeometryDrawEditor::DrawToolPanel(it, inst))
+                SaveCurrentRecipe();
+            EndCard();
+        };
+
         // 5: 轮廓分析
         g_ToolUIMap[5] = [&](ToolInstance &it, int inst)
         {
@@ -2328,7 +2980,7 @@ TemplateState::ClearResults();
                 it.cntUseGray = true; it.cntBlurSize = 5; it.cntThreshMode = 0; it.cntThreshValue = 128; it.cntAdaptBlock = 11;
                 it.cntInvert = false; it.cntRetrMode = 0; it.cntApproxMethod = 1; it.cntMinArea = 100;
                 it.cntMaxContours = 500; it.cntFilterConvex = false; it.cntApproxEps = 0.02f;
-                it.cntLineThick = 2; it.cntShowLabels = true; it.cntFillContours = false;
+                it.cntLineThick = 2; it.showResultLabels = true; it.cntFillContours = false;
                 it.cntMatchROI = false; it.cntMatchThresh = 0.1f;
             }
             if (ContourDetector::g_ContourTimeMs > 0)
@@ -2357,8 +3009,6 @@ TemplateState::ClearResults();
             ImGui::Checkbox("仅凸包##c", &it.cntFilterConvex);
             ImGui::SliderFloat("精度##c", &it.cntApproxEps, 0.005f, 0.05f, "%.3f");
             ImGui::SliderInt("线宽##c", &it.cntLineThick, 1, 5);
-            ImGui::Checkbox("标签##c", &it.cntShowLabels);
-            ImGui::SameLine();
             ImGui::Checkbox("填充##c", &it.cntFillContours);
             SectionHeader("高级");
             ImGui::Checkbox("ROI模板匹配##c", &it.cntMatchROI);
@@ -2374,10 +3024,12 @@ TemplateState::ClearResults();
             if (SecondaryButton("重置参数"))
             {
                 ToolAssetService::ClearAsset(it, ToolAssetKind::ShapeTemplate); it.shpBlurSize = 5; it.shpTplRetr = 0;
+                MarkCurrentRecipeAssetsDirty();
                 it.shpTplMinArea = 30; it.shpMinScore = 0.5f; it.shpShapeScore = 0.1f;
-                it.shpLineThick = 2; it.shpMethod = 0; it.shpShowLabels = true; it.shpMaxResults = 1;
+                it.shpLineThick = 2; it.shpMethod = 0; it.showResultLabels = true; it.shpMaxResults = 1;
                 it.shpTplGray = false; it.shpTplBinary = false; it.shpTplBinThresh = 128;
                 it.shpTplBlur = false; it.shpTplBlurK = 5; it.shpTplInvert = false;
+                it.showTemplatePreview = true;
             }
             if (ShapeMatcher::g_MatchTimeMs > 0)
                 ImGui::TextDisabled("上次: %d个 %.3fms", ShapeMatcher::g_MatchCount, ShapeMatcher::g_MatchTimeMs);
@@ -2417,7 +3069,7 @@ TemplateState::ClearResults();
                     {
                         LogSystem::Add(LOG_INFO, "形状匹配: 模板已捕获 %dx%d",
                             result.bounds.width, result.bounds.height);
-                        SaveCurrentRecipe();
+                        MarkCurrentRecipeAssetsDirty();
                     }
                     else
                         LogSystem::Add(LOG_WARN, "形状匹配: ROI 区域无效");
@@ -2437,59 +3089,52 @@ TemplateState::ClearResults();
                 if (SecondaryButton("清除模板"))
                 {
                     ToolAssetService::ClearAsset(it, ToolAssetKind::ShapeTemplate);
-                    SaveCurrentRecipe();
+                    MarkCurrentRecipeAssetsDirty();
                 }
             }
 
             // ---- 第二块：预览渲染（独立重新检查） ----
             if (!it.shpTplImage.empty())
             {
-                static bool shpShowPreview = true;
-                ImGui::Checkbox("显示预览##shp", &shpShowPreview);
-                if (shpShowPreview)
+                ImGui::Checkbox("显示预览##shp", &it.showTemplatePreview);
+                if (it.showTemplatePreview)
                 {
-                // 缩放到适合显示，逐像素渲染（应用预处理）
-                cv::Mat tpl = it.shpTplImage.clone();
-                if (it.shpTplGray && tpl.channels() > 1)
-                    cv::cvtColor(tpl, tpl, cv::COLOR_BGR2GRAY);
-                if (it.shpTplBlur)
-                    cv::GaussianBlur(tpl, tpl, cv::Size(it.shpTplBlurK | 1, it.shpTplBlurK | 1), 0);
-                if (it.shpTplBinary)
-                {
-                    if (tpl.channels() > 1) cv::cvtColor(tpl, tpl, cv::COLOR_BGR2GRAY);
-                    cv::threshold(tpl, tpl, it.shpTplBinThresh, 255, cv::THRESH_BINARY);
-                }
-                if (it.shpTplInvert)
-                    cv::bitwise_not(tpl, tpl);
-                int maxPx = 80;
-                float rs = maxPx / (float)std::max(tpl.cols, tpl.rows);
-                if (rs > 1.0f) rs = 1.0f;
-                int dw = (int)(tpl.cols * rs), dh = (int)(tpl.rows * rs);
-                if (dw < 2) dw = 2; if (dh < 2) dh = 2;
-                cv::Mat previewImage;
-                cv::resize(tpl, previewImage, cv::Size(dw, dh), 0, 0, cv::INTER_NEAREST);
-
-                ImDrawList *dl = ImGui::GetWindowDrawList();
-                ImVec2 base = ImGui::GetCursorScreenPos();
-                float step = 2.0f;
-                bool isColor = (previewImage.channels() >= 3);
-                for (int y = 0; y < dh; y++)
-                    for (int x = 0; x < dw; x++)
+                    std::uint64_t signature = PreviewTextureCache::ImageSignature(it.shpTplImage);
+                    signature = PreviewTextureCache::CombineSignature(signature, it.shpTplGray);
+                    signature = PreviewTextureCache::CombineSignature(signature, it.shpTplBlur);
+                    signature = PreviewTextureCache::CombineSignature(signature, it.shpTplBlurK);
+                    signature = PreviewTextureCache::CombineSignature(signature, it.shpTplBinary);
+                    signature = PreviewTextureCache::CombineSignature(signature, it.shpTplBinThresh);
+                    signature = PreviewTextureCache::CombineSignature(signature, it.shpTplInvert);
+                    if (PreviewTextureCache::NeedsUpdate(it.toolId, PreviewTextureKind::ShapeTemplate, signature))
                     {
-                        ImU32 col;
-                        if (isColor) {
-                            auto &px = previewImage.at<cv::Vec3b>(y, x);
-                            col = IM_COL32(px[2], px[1], px[0], 255);
-                        } else {
-                            uchar v = previewImage.at<uchar>(y, x);
-                            col = IM_COL32(v, v, v, 255);
+                        cv::Mat preview = it.shpTplImage.clone();
+                        if (it.shpTplGray && preview.channels() > 1)
+                            cv::cvtColor(preview, preview, cv::COLOR_BGR2GRAY);
+                        if (it.shpTplBlur)
+                            cv::GaussianBlur(preview, preview,
+                                cv::Size(it.shpTplBlurK | 1, it.shpTplBlurK | 1), 0);
+                        if (it.shpTplBinary)
+                        {
+                            if (preview.channels() > 1)
+                                cv::cvtColor(preview, preview, cv::COLOR_BGR2GRAY);
+                            cv::threshold(preview, preview, it.shpTplBinThresh, 255, cv::THRESH_BINARY);
                         }
-                        dl->AddRectFilled(ImVec2(base.x + x * step, base.y + y * step),
-                            ImVec2(base.x + (x + 1) * step, base.y + (y + 1) * step), col);
+                        if (it.shpTplInvert)
+                            cv::bitwise_not(preview, preview);
+                        PreviewTextureCache::Queue(it.toolId, PreviewTextureKind::ShapeTemplate,
+                            signature, preview, 80);
                     }
-                ImGui::Dummy(ImVec2(dw * step, dh * step));
-                ImGui::TextDisabled("模板: %dx%d", it.shpTplImage.cols, it.shpTplImage.rows);
-                } // shpShowPreview
+
+                    const PreviewTextureView preview = PreviewTextureCache::Get(
+                        it.toolId, PreviewTextureKind::ShapeTemplate);
+                    const ImVec2 previewSize(preview.width * 2.0f, preview.height * 2.0f);
+                    if (preview.ready)
+                        ImGui::Image((ImTextureID)preview.gpuHandle.ptr, previewSize);
+                    else
+                        ImGui::Dummy(previewSize);
+                    ImGui::TextDisabled("模板: %dx%d", it.shpTplImage.cols, it.shpTplImage.rows);
+                }
             }
             else if (shapeCaptureROI < 0)
                 ImGui::TextDisabled("未设置模板");
@@ -2516,8 +3161,6 @@ TemplateState::ClearResults();
             ImGui::Combo("方法##shp", &it.shpMethod, methodNames, 3);
             ImGui::SliderInt("线宽##shp", &it.shpLineThick, 1, 5);
             ImGui::SliderInt("最多##shp", &it.shpMaxResults, 1, 200);
-            ImGui::Checkbox("标签##shp", &it.shpShowLabels);
-
             EndCard();
         };
 
@@ -2530,7 +3173,7 @@ TemplateState::ClearResults();
                 it.lineCannyLow = 50; it.lineCannyHigh = 150;
                 it.lineMinLength = 100; it.lineMaxGap = 20; it.lineMinAngle = 0; it.lineMaxAngle = 180;
                 it.lineThickness = 2; it.lineMaxLines = 1;
-                it.lineShowLabels = true; it.lineUseROI = false;
+                it.showResultLabels = true; it.lineUseROI = false;
             }
             if (LineDetector::g_LineTimeMs > 0)
                 ImGui::TextDisabled("上次: %d条 %.3fms", LineDetector::g_LineCount, LineDetector::g_LineTimeMs);
@@ -2548,38 +3191,6 @@ TemplateState::ClearResults();
             ImGui::SliderFloat("最大角度##l", &it.lineMaxAngle, 0, 180);
             ImGui::SliderInt("线宽##l", &it.lineThickness, 1, 5);
             ImGui::SliderInt("最多条数##l", &it.lineMaxLines, 1, 100);
-            ImGui::Checkbox("标签##l", &it.lineShowLabels);
-            EndCard();
-        };
-
-        // 8: 形态学
-        g_ToolUIMap[8] = [&](ToolInstance &it, int inst)
-        {
-            BeginCard("形态学");
-            if (SecondaryButton("重置参数"))
-            {
-                it.morphOpType = 0; it.morphKernelSize = 3; it.morphKernelShape = 0; it.morphIterations = 1;
-                it.morphUseGray = false;
-            }
-            if (MorphologyTool::g_ProcTimeMs > 0)
-                ImGui::TextDisabled("上次: %.3fms", MorphologyTool::g_ProcTimeMs);
-            if (PrimaryButton("执行形态学##morph"))
-            {
-                RunToolFromCard(inst);
-            }
-            DrawSearchROIControls(it, inst);
-            SectionHeader("参数");
-            const char *morphNames[] = {"Erode 腐蚀", "Dilate 膨胀", "Open 开运算", "Close 闭运算", "Gradient 梯度", "TopHat 顶帽", "BlackHat 黑帽"};
-            ParamLabel("操作");
-            ImGui::Combo("##morph_op", &it.morphOpType, morphNames, 7);
-            ParamLabel("核大小");
-            ImGui::SliderInt("##morph_kernel_size", &it.morphKernelSize, 1, 15);
-            const char *ksh[] = {"矩形", "椭圆", "十字"};
-            ParamLabel("核形状");
-            ImGui::Combo("##morph_kernel_shape", &it.morphKernelShape, ksh, 3);
-            ParamLabel("迭代");
-            ImGui::SliderInt("##morph_iterations", &it.morphIterations, 1, 10);
-            ImGui::Checkbox("灰度##morph", &it.morphUseGray);
             EndCard();
         };
 
@@ -2589,26 +3200,28 @@ TemplateState::ClearResults();
             BeginCard("多点找色");
 
             // 兼容旧配方：只补齐本工具 ROI，不再写入全局 ROI。
-            static std::unordered_map<int, bool> s_mcfRoiRestored;
-            if (it.searchROIs.empty() && it.mcfRoiW > 0 && !s_mcfRoiRestored[inst])
+            static std::unordered_map<std::uint64_t, bool> s_mcfRoiRestored;
+            if (it.searchROIs.empty() && it.mcfRoiW > 0 && !s_mcfRoiRestored[it.toolId])
             {
                 ROI r; r.type = ROI_TYPE_RECT;
                 r.start = ImVec2((float)it.mcfRoiX, (float)it.mcfRoiY);
                 r.end   = ImVec2((float)(it.mcfRoiX + it.mcfRoiW), (float)(it.mcfRoiY + it.mcfRoiH));
                 it.searchROIs.push_back(r);
                 it.lineSaveROIs = it.searchROIs;
-                s_mcfRoiRestored[inst] = true;
+                s_mcfRoiRestored[it.toolId] = true;
             }
 
             if (SecondaryButton("重置参数"))
             {
                 ToolAssetService::ClearAsset(it, ToolAssetKind::MultiColorReference);
+                MarkCurrentRecipeAssetsDirty();
+                it.mcfShowPreview = true;
                 it.mcfImgGray = false; it.mcfImgBinary = false; it.mcfImgBinThresh = 128;
                 it.mcfUseROI = false; it.mcfMaxResults = 1;
                 it.mcfMinDist = 5.0f; it.mcfCrossSize = 10; it.mcfCrossThick = 2;
                 if (it.toolImpl)
                 {
-                    auto* mf = dynamic_cast<MultiColorFinder*>(it.toolImpl);
+                    auto* mf = dynamic_cast<MultiColorFinder*>(it.toolImpl.get());
                     if (mf) { mf->points.clear(); mf->refImage.release(); }
                 }
             }
@@ -2616,7 +3229,7 @@ TemplateState::ClearResults();
             bool hasPoints = false;
             if (it.toolImpl)
             {
-                auto* mf = dynamic_cast<MultiColorFinder*>(it.toolImpl);
+                auto* mf = dynamic_cast<MultiColorFinder*>(it.toolImpl.get());
                 if (mf) hasPoints = !mf->points.empty();
             }
             if (ToolChainState::McfLastCount() > 0)
@@ -2657,7 +3270,7 @@ TemplateState::ClearResults();
                     {
                         LogSystem::Add(LOG_INFO, "多点找色: 参考图已抓取 %dx%d",
                             result.bounds.width, result.bounds.height);
-                        SaveCurrentRecipe();
+                        MarkCurrentRecipeAssetsDirty();
                     }
                     else
                         LogSystem::Add(LOG_WARN, "多点找色: ROI区域无效或超出图像范围");
@@ -2675,10 +3288,10 @@ TemplateState::ClearResults();
                     ToolAssetService::ClearAsset(it, ToolAssetKind::MultiColorReference);
                     if (it.toolImpl)
                     {
-                        auto* mf = dynamic_cast<MultiColorFinder*>(it.toolImpl);
+                        auto* mf = dynamic_cast<MultiColorFinder*>(it.toolImpl.get());
                         if (mf) { mf->points.clear(); mf->refImage.release(); }
                     }
-                    SaveCurrentRecipe();
+                    MarkCurrentRecipeAssetsDirty();
                 }
             }
 
@@ -2687,31 +3300,11 @@ TemplateState::ClearResults();
             {
                 ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1), "参考图 %dx%d", it.mcfRefImage.cols, it.mcfRefImage.rows);
                 ImGui::SameLine();
-                static bool s_mcfPreviewOpen = true;
-                if (SecondaryButton(s_mcfPreviewOpen ? "隐藏预览" : "显示预览"))
-                    s_mcfPreviewOpen = !s_mcfPreviewOpen;
+                if (SecondaryButton(it.mcfShowPreview ? "隐藏预览" : "显示预览"))
+                    it.mcfShowPreview = !it.mcfShowPreview;
 
-                if (s_mcfPreviewOpen)
+                if (it.mcfShowPreview)
                 {
-                cv::Mat ref = it.mcfRefImage.clone();
-                // 应用预处理到参考图预览
-                if (it.mcfImgGray && ref.channels() > 1)
-                    cv::cvtColor(ref, ref, cv::COLOR_BGR2GRAY);
-                if (it.mcfImgBinary)
-                {
-                    if (ref.channels() > 1) cv::cvtColor(ref, ref, cv::COLOR_BGR2GRAY);
-                    cv::threshold(ref, ref, it.mcfImgBinThresh, 255, cv::THRESH_BINARY);
-                }
-                int maxPx = 120;
-                float rs = maxPx / (float)std::max(ref.cols, ref.rows);
-                if (rs > 1.0f) rs = 1.0f;
-                int dw = (int)(ref.cols * rs), dh = (int)(ref.rows * rs);
-                if (dw < 2) dw = 2; if (dh < 2) dh = 2;
-                cv::Mat previewImage; cv::resize(ref, previewImage, cv::Size(dw, dh), 0, 0, cv::INTER_NEAREST);
-
-                ImDrawList* dl = ImGui::GetWindowDrawList();
-                ImVec2 base = ImGui::GetCursorScreenPos();
-                float step = 2.0f;  // 对齐模板匹配的 2px 像素步长
                 auto ReadBgrAt = [](const cv::Mat& mat, int y, int x, uchar& b, uchar& g, uchar& r) -> bool
                 {
                     if (mat.empty() || mat.depth() != CV_8U ||
@@ -2733,22 +3326,46 @@ TemplateState::ClearResults();
                     }
                     return false;
                 };
-                for (int y = 0; y < dh; y++)
-                    for (int x = 0; x < dw; x++)
+
+                std::uint64_t signature = PreviewTextureCache::ImageSignature(it.mcfRefImage);
+                signature = PreviewTextureCache::CombineSignature(signature, it.mcfImgGray);
+                signature = PreviewTextureCache::CombineSignature(signature, it.mcfImgBinary);
+                signature = PreviewTextureCache::CombineSignature(signature, it.mcfImgBinThresh);
+                if (PreviewTextureCache::NeedsUpdate(
+                    it.toolId, PreviewTextureKind::MultiColorReference, signature))
+                {
+                    cv::Mat preview = it.mcfRefImage.clone();
+                    if (it.mcfImgGray && preview.channels() > 1)
+                        cv::cvtColor(preview, preview, cv::COLOR_BGR2GRAY);
+                    if (it.mcfImgBinary)
                     {
-                        ImU32 col;
-                        uchar b = 0, g = 0, r = 0;
-                        ReadBgrAt(previewImage, y, x, b, g, r);
-                        col = IM_COL32(r, g, b, 255);
-                        dl->AddRectFilled(ImVec2(base.x + x * step, base.y + y * step),
-                            ImVec2(base.x + (x + 1) * step, base.y + (y + 1) * step), col);
+                        if (preview.channels() > 1)
+                            cv::cvtColor(preview, preview, cv::COLOR_BGR2GRAY);
+                        cv::threshold(preview, preview, it.mcfImgBinThresh, 255, cv::THRESH_BINARY);
                     }
-                ImGui::Dummy(ImVec2(dw * step, dh * step));
+                    PreviewTextureCache::Queue(it.toolId, PreviewTextureKind::MultiColorReference,
+                        signature, preview, 120);
+                }
+
+                const PreviewTextureView preview = PreviewTextureCache::Get(
+                    it.toolId, PreviewTextureKind::MultiColorReference);
+                const ImVec2 base = ImGui::GetCursorScreenPos();
+                const ImVec2 previewSize(preview.width * 2.0f, preview.height * 2.0f);
+                if (preview.ready)
+                    ImGui::Image((ImTextureID)preview.gpuHandle.ptr, previewSize);
+                else
+                    ImGui::Dummy(previewSize);
+
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                const float scaleX = preview.width > 0
+                    ? previewSize.x / static_cast<float>(it.mcfRefImage.cols) : 0.0f;
+                const float scaleY = preview.height > 0
+                    ? previewSize.y / static_cast<float>(it.mcfRefImage.rows) : 0.0f;
 
                 // ---- 在小图上绘制已选颜色点的红色标记 ----
                 if (it.toolImpl)
                 {
-                    auto* mf = dynamic_cast<MultiColorFinder*>(it.toolImpl);
+                    auto* mf = dynamic_cast<MultiColorFinder*>(it.toolImpl.get());
                     if (mf && !mf->points.empty())
                     {
                         float markerR = 3.0f;
@@ -2756,8 +3373,8 @@ TemplateState::ClearResults();
                         for (int pi = 0; pi < (int)mf->points.size(); pi++)
                         {
                             const auto& pt = mf->points[pi];
-                            float sx = base.x + (ax + pt.x) * rs * step;
-                            float sy = base.y + (ay + pt.y) * rs * step;
+                            float sx = base.x + (ax + pt.x) * scaleX;
+                            float sy = base.y + (ay + pt.y) * scaleY;
                             ImU32 mkCol = (pi == 0) ? IM_COL32(255, 60, 60, 255) : IM_COL32(255, 120, 60, 255);
                             // 红色十字
                             dl->AddLine(ImVec2(sx - markerR, sy), ImVec2(sx + markerR, sy), mkCol, 1.5f);
@@ -2773,22 +3390,30 @@ TemplateState::ClearResults();
                 if (ImGui::IsItemClicked())
                 {
                     ImVec2 mouse = ImGui::GetMousePos();
-                    int px = (int)((mouse.x - base.x) / step / rs);
-                    int py = (int)((mouse.y - base.y) / step / rs);
-                    if (px >= 0 && px < ref.cols && py >= 0 && py < ref.rows)
+                    int px = scaleX > 0.0f ? static_cast<int>((mouse.x - base.x) / scaleX) : -1;
+                    int py = scaleY > 0.0f ? static_cast<int>((mouse.y - base.y) / scaleY) : -1;
+                    if (px >= 0 && px < it.mcfRefImage.cols && py >= 0 && py < it.mcfRefImage.rows)
                     {
                         uchar b = 0, g = 0, r = 0;
-                        if (!ReadBgrAt(ref, py, px, b, g, r))
+                        if (!ReadBgrAt(it.mcfRefImage, py, px, b, g, r))
                         {
                             LogSystem::Add(LOG_WARN, "取色失败: 图像格式不支持或坐标越界");
                         }
                         else
                         {
+                            if (it.mcfImgGray || it.mcfImgBinary)
+                            {
+                                uchar gray = cv::saturate_cast<uchar>(
+                                    0.114f * b + 0.587f * g + 0.299f * r);
+                                if (it.mcfImgBinary)
+                                    gray = gray > it.mcfImgBinThresh ? 255 : 0;
+                                b = g = r = gray;
+                            }
                             ColorPoint cp;
                             cp.b = b; cp.g = g; cp.r = r;
                             cp.tolerance = 10;
-                            if (!it.toolImpl) it.toolImpl = ITool::Create(10).release();
-                            auto* mf = dynamic_cast<MultiColorFinder*>(it.toolImpl);
+                            if (!it.toolImpl) it.toolImpl = ITool::Create(10);
+                            auto* mf = dynamic_cast<MultiColorFinder*>(it.toolImpl.get());
                             // 首点设为锚点，后续点偏移相对于锚点
                             if (mf && mf->points.empty())
                             {
@@ -2812,7 +3437,7 @@ TemplateState::ClearResults();
                 // ---- 颜色点列表（色块展示） ----
                 if (it.toolImpl)
                 {
-                    auto* mf = dynamic_cast<MultiColorFinder*>(it.toolImpl);
+                    auto* mf = dynamic_cast<MultiColorFinder*>(it.toolImpl.get());
                     if (mf && !mf->points.empty())
                     {
                         ImGui::Separator();
@@ -2860,7 +3485,7 @@ TemplateState::ClearResults();
                             mf->points.erase(mf->points.begin() + removeIdx);
                     }
                 }
-                } // s_mcfPreviewOpen
+                } // mcfShowPreview
             }
 
             // ---- 图像预处理 ----
@@ -2868,7 +3493,7 @@ TemplateState::ClearResults();
             auto UpdatePointColors = [&]() {
                 if (!it.mcfRefImage.empty() && it.toolImpl)
                 {
-                    auto* mf = dynamic_cast<MultiColorFinder*>(it.toolImpl);
+                    auto* mf = dynamic_cast<MultiColorFinder*>(it.toolImpl.get());
                     if (!mf || mf->points.empty()) return;
                     cv::Mat refProc = it.mcfRefImage.clone();
                     if (it.mcfImgGray && refProc.channels() > 1)
@@ -2946,44 +3571,13 @@ TemplateState::ClearResults();
             EndCard();
         };
 
-        // 9: 颜色分析
-        g_ToolUIMap[9] = [&](ToolInstance &it, int inst)
-        {
-            BeginCard("颜色分析");
-            if (SecondaryButton("重置参数"))
-            {
-                it.colorSpace = 0; it.colorHistBins = 32;
-                it.colorShowHist = true; it.colorHistHeight = 100;
-            }
-            if (PrimaryButton("执行颜色分析##color"))
-            {
-                RunToolFromCard(inst);
-            }
-            DrawSearchROIControls(it, inst);
-            SectionHeader("参数");
-            const char *csNames[] = {"BGR", "HSV", "Lab", "YCbCr", "Gray"};
-            ImGui::Combo("色域##color", &it.colorSpace, csNames, 5);
-            ImGui::SliderInt("直方图Bins##color", &it.colorHistBins, 8, 128);
-            ImGui::Checkbox("显示直方图##color", &it.colorShowHist);
-            if (it.colorShowHist)
-                ImGui::SliderInt("高度##color", &it.colorHistHeight, 50, 300);
-            SectionHeader("结果");
-            if (ColorAnalyzer::g_AnalyzeTimeMs > 0)
-            {
-                ImGui::TextDisabled("R:%.1f±%.1f G:%.1f±%.1f B:%.1f±%.1f",
-                                    ColorAnalyzer::g_LastResult.meanR, ColorAnalyzer::g_LastResult.stdR,
-                                    ColorAnalyzer::g_LastResult.meanG, ColorAnalyzer::g_LastResult.stdG,
-                                    ColorAnalyzer::g_LastResult.meanB, ColorAnalyzer::g_LastResult.stdB);
-                ImGui::TextDisabled("%.3fms", ColorAnalyzer::g_AnalyzeTimeMs);
-            }
-            EndCard();
-        };
-
         // ---- 手风琴工具列表（点击展开/收起，底部固定执行区预留空间） ----
         const ImGuiStyle& style = ImGui::GetStyle();
         const float actionButtonH = ImGui::GetFrameHeight() + 4.0f;
         const float bottomModeH = ImGui::GetFrameHeight() + 2.0f;
         const float bottomTimeH = ImGui::GetTextLineHeight();
+        const float bottomLoopSettingsH = ToolController::IsLoopEnabled()
+            ? ImGui::GetFrameHeightWithSpacing() : 0.0f;
         const ToolChainPreflightResult preflight = ToolChainState::Empty()
             ? ToolChainPreflightResult{}
             : ToolChainPreflight::Check(
@@ -3020,14 +3614,15 @@ TemplateState::ClearResults();
         }
         const float bottomSeparatorH = style.ItemSpacing.y + 1.0f;
         const float bottomPaddingH = style.WindowPadding.y + 4.0f;
+        const float bottomActionRowsH = actionButtonH * 2.0f + style.ItemSpacing.y;
         const float bottomH = ToolChainState::Empty()
             ? 0.0f
-            : actionButtonH + bottomModeH + bottomTimeH + preflightBlockH +
+            : bottomActionRowsH + bottomLoopSettingsH + bottomModeH + bottomTimeH + preflightBlockH +
               bottomSeparatorH + style.ItemSpacing.y * 5.0f + bottomPaddingH;
         ImGui::BeginChild("##ToolList", ImVec2(0, -bottomH), false,
             ImGuiWindowFlags_AlwaysVerticalScrollbar);
 
-        if (ToolChainState::Empty())
+        if (visibleToolIndices.empty())
         {
             ImVec2 avail = ImGui::GetContentRegionAvail();
             ImVec2 start = ImGui::GetCursorScreenPos();
@@ -3038,32 +3633,62 @@ TemplateState::ClearResults();
             drawList->AddRectFilled(start, ImVec2(start.x + avail.x, start.y + cardH), bg, 6.0f);
             drawList->AddRect(start, ImVec2(start.x + avail.x, start.y + cardH), border, 6.0f);
 
-            ImGui::Dummy(ImVec2(1.0f, 18.0f));
-            ImGui::Indent(12.0f);
-            ImGui::TextDisabled("暂无工具");
-            ImGui::TextWrapped("点击上方 [+ 添加工具] 组成处理链。");
-            ImGui::TextWrapped("每个工具默认读取原图工具输出。");
-            ImGui::Unindent(12.0f);
+            const char* emptyLines[] = {
+                "暂无工具",
+                "点击上方 [+ 添加工具] 组成处理链。",
+                "每个工具默认读取原图工具输出。"
+            };
+            const float lineH = ImGui::GetTextLineHeight();
+            const float lineGap = 4.0f;
+            const float blockH = lineH * IM_ARRAYSIZE(emptyLines) +
+                lineGap * (IM_ARRAYSIZE(emptyLines) - 1);
+            float lineY = start.y + (std::max)(0.0f, (cardH - blockH) * 0.5f);
+            for (int line = 0; line < IM_ARRAYSIZE(emptyLines); ++line)
+            {
+                const float textW = ImGui::CalcTextSize(emptyLines[line]).x;
+                const float lineX = start.x + (std::max)(12.0f, (avail.x - textW) * 0.5f);
+                ImGui::SetCursorScreenPos(ImVec2(lineX, lineY));
+                if (line == 0)
+                    ImGui::TextDisabled("%s", emptyLines[line]);
+                else
+                    ImGui::TextUnformatted(emptyLines[line]);
+                lineY += lineH + lineGap;
+            }
         }
         else
         {
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 3));
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3, 2));
             int selectedForRemove = -1;
             int moveFrom = -1;
             int moveTo = -1;
             static int s_scrollOpenedToolToTop = -1;
+            static int s_lastFollowedExecutionIndex = -1;
 
-            for (int inst = 0; inst < static_cast<int>(ToolChainState::Count()); inst++)
+            const int stepCursor = ToolController::GetStepCursor();
+            const bool batchExecutionActive = !ToolController::IsRuntimeMode() &&
+                ToolController::GetMode() != ToolController::Mode::Idle;
+            const int executionFollowIndex = batchExecutionActive
+                ? ToolController::GetCurrentIndex()
+                : (stepCursor > 0 ? stepCursor - 1 : -1);
+            if (executionFollowIndex < 0)
+                s_lastFollowedExecutionIndex = -1;
+            const bool executionTargetChanged = executionFollowIndex >= 0 &&
+                executionFollowIndex != s_lastFollowedExecutionIndex;
+
+            for (int visiblePosition = 0;
+                visiblePosition < static_cast<int>(visibleToolIndices.size());
+                ++visiblePosition)
             {
+                const int inst = visibleToolIndices[visiblePosition];
                 ToolInstance* listToolPtr = ToolChainState::At(inst);
                 if (!listToolPtr)
                     continue;
                 ToolInstance& listTool = *listToolPtr;
-                if (!s_groupFilter.empty() &&
-                    listTool.groupName != s_groupFilter)
-                    continue;
                 int type = listTool.type;
                 bool expanded = (ToolChainState::ActiveIndex() == inst && !listTool.collapsed);
+                const nlohmann::json persistentStateBefore = expanded
+                    ? CaptureToolPersistentState(listTool)
+                    : nlohmann::json();
                 float toolHeaderY = ImGui::GetCursorPosY();
                 if (s_scrollOpenedToolToTop == inst && expanded)
                 {
@@ -3071,10 +3696,8 @@ TemplateState::ClearResults();
                     s_scrollOpenedToolToTop = -1;
                 }
 
-                bool batchHl = (!ToolController::IsRuntimeMode()
-                            && ToolController::GetMode() != ToolController::Mode::Idle
-                            && inst == ToolController::GetCurrentIndex())
-                            || (ToolController::GetStepCursor() > 0 && inst == ToolController::GetStepCursor() - 1);
+                bool batchHl = (batchExecutionActive && inst == executionFollowIndex)
+                            || (stepCursor > 0 && inst == stepCursor - 1);
 
                 // ---- 卡片头部（始终可见） ----
                 char cardId[32];
@@ -3090,7 +3713,7 @@ TemplateState::ClearResults();
                 else
                     ImGui::PushStyleColor(ImGuiCol_ChildBg, themeCardHover);
 
-                ImGui::BeginChild(cardId, ImVec2(0, 32), 0, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+                ImGui::BeginChild(cardId, ImVec2(0, 30), 0, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
                 ImVec2 headerMin = ImGui::GetCursorScreenPos();
 
                 const char *name = ToolName(type);
@@ -3103,11 +3726,11 @@ TemplateState::ClearResults();
                 const std::string fullDisplayName = ToolInstanceTitle(name, listTool.label);
 
                 char indexLabel[32];
-                snprintf(indexLabel, sizeof(indexLabel), "%d", inst + 1);
+                snprintf(indexLabel, sizeof(indexLabel), "%d", visiblePosition + 1);
                 char typeLabel[32];
                 snprintf(typeLabel, sizeof(typeLabel), "#%d", type);
 
-                float childW = ImGui::GetWindowWidth();
+                float childW = ImGui::GetContentRegionAvail().x;
                 float childH = ImGui::GetWindowHeight();
                 const float controlSize = 24.0f;
                 const float controlPad = 4.0f;
@@ -3126,17 +3749,19 @@ TemplateState::ClearResults();
                         s_scrollOpenedToolToTop = inst;
                 }
                 if (ImGui::BeginPopupContextItem(cardId)) {
-                     const int firstMovable = ToolChainState::FirstMovableIndex();
+                    const int firstMovable = ToolChainState::FirstMovableIndex();
                     const bool canMove = inst >= firstMovable;
-                    const bool canMoveUp = canMove && inst > firstMovable;
-                    const bool canMoveDown = canMove && inst + 1 < static_cast<int>(ToolChainState::Count());
+                    const bool canMoveUp = canMove && visiblePosition > 0 &&
+                        visibleToolIndices[visiblePosition - 1] >= firstMovable;
+                    const bool canMoveDown = canMove &&
+                        visiblePosition + 1 < static_cast<int>(visibleToolIndices.size());
                     if (ImGui::MenuItem("上移", nullptr, false, canMoveUp)) {
                         moveFrom = inst;
-                        moveTo = inst - 1;
+                        moveTo = -1;
                     }
                     if (ImGui::MenuItem("下移", nullptr, false, canMoveDown)) {
                         moveFrom = inst;
-                        moveTo = inst + 1;
+                        moveTo = 1;
                     }
                     ImGui::Separator();
                     if (ImGui::MenuItem("复制", "Ctrl+C"))
@@ -3222,11 +3847,10 @@ TemplateState::ClearResults();
                 bool removeHovered = false;
                 char removeId[32];
                 snprintf(removeId, sizeof(removeId), "X##remove_tool_%d", inst);
-                ImVec2 removePos(childW - controlPad - controlSize, controlY);
-                ImGui::SetCursorPos(removePos);
-                ImGui::InvisibleButton(removeId, ImVec2(controlSize, controlSize));
                 ImVec2 removeMin(headerMin.x + childW - controlPad - controlSize, headerMin.y + controlY);
                 ImVec2 removeMax(removeMin.x + controlSize, removeMin.y + controlSize);
+                ImGui::SetCursorScreenPos(removeMin);
+                ImGui::InvisibleButton(removeId, ImVec2(controlSize, controlSize));
                 removeHovered = ImGui::IsItemHovered();
                 const bool removeClicked = ImGui::IsItemClicked();
                 ImU32 removeBg = ImGui::ColorConvertFloat4ToU32(removeHovered
@@ -3249,6 +3873,17 @@ TemplateState::ClearResults();
                 }
 
                 ImGui::EndChild();
+                if (executionTargetChanged && inst == executionFollowIndex)
+                {
+                    ImGuiWindow* toolListWindow = ImGui::GetCurrentWindow();
+                    const ImVec2 itemMin = ImGui::GetItemRectMin();
+                    const ImVec2 itemMax = ImGui::GetItemRectMax();
+                    if (itemMin.y < toolListWindow->ClipRect.Min.y)
+                        ImGui::SetScrollHereY(0.0f);
+                    else if (itemMax.y > toolListWindow->ClipRect.Max.y)
+                        ImGui::SetScrollHereY(1.0f);
+                    s_lastFollowedExecutionIndex = executionFollowIndex;
+                }
                 int headerColorStackNow = ImGui::GetCurrentContext()->ColorStack.Size;
                 if (headerColorStackNow > headerColorStackBase)
                     ImGui::PopStyleColor(headerColorStackNow - headerColorStackBase);
@@ -3284,6 +3919,14 @@ TemplateState::ClearResults();
                         currentCardType = -1;
                         currentCardInst = -1;
                     }
+
+                    const nlohmann::json persistentStateAfter =
+                        CaptureToolPersistentState(listTool);
+                    if (persistentStateAfter != persistentStateBefore)
+                    {
+                        listTool.MarkParametersChanged();
+                        MarkCurrentRecipeDirty();
+                    }
                 }
             }
 
@@ -3306,14 +3949,16 @@ TemplateState::ClearResults();
                     pasteToolAfterIndex = ToolChainState::ActiveIndex();
             }
 
-            if (moveFrom >= 0 && moveTo >= 0) {
-                if (ToolChainState::MoveTool(moveFrom, moveTo)) {
+            if (moveFrom >= 0 && moveTo != 0) {
+                GeometryDrawEditor::Cancel();
+                if (ToolChainState::MoveToolWithinTaskGroup(moveFrom, moveTo)) {
                     ToolController::OnToolChainChanged();
                     SaveCurrentRecipe();
                 }
             }
 
             if (selectedForRemove >= 0) {
+                GeometryDrawEditor::Cancel();
                 if (ToolChainState::RemoveTool(selectedForRemove)) {
                     ToolController::OnToolChainChanged();
                     SaveCurrentRecipe();
@@ -3321,6 +3966,7 @@ TemplateState::ClearResults();
             }
 
             if (duplicateToolIndex >= 0) {
+                GeometryDrawEditor::Cancel();
                 int insertedIndex = -1;
                 if (ToolChainState::DuplicateTool(duplicateToolIndex, &insertedIndex)) {
                     ToolController::OnToolChainChanged();
@@ -3330,6 +3976,7 @@ TemplateState::ClearResults();
             }
 
             if (pasteToolAfterIndex >= 0) {
+                GeometryDrawEditor::Cancel();
                 int insertedIndex = -1;
                 if (ToolChainState::PasteToolAfter(pasteToolAfterIndex, &insertedIndex)) {
                     ToolController::OnToolChainChanged();
@@ -3366,9 +4013,9 @@ TemplateState::ClearResults();
                 ImGui::TextColored(ImVec4(0.20f, 0.70f, 0.34f, 1.0f), "运行前检查通过");
             }
 
-            static bool s_looping = false;
             auto mode = ToolController::GetMode();
             bool running = (mode != ToolController::Mode::Idle);
+            const bool loopEnabled = ToolController::IsLoopEnabled();
 
             auto RunActionButton = [](const char* label, const ImVec2& size, const ImVec4& base, const ImVec4& hover, const ImVec4& active) -> bool
             {
@@ -3397,12 +4044,11 @@ TemplateState::ClearResults();
                 return clicked;
             };
 
-            float bottomAvailW = ImGui::GetContentRegionAvail().x;
-            float actionGap = 5.0f;
-            float runW = bottomAvailW * 0.40f;
-            float sideW = (bottomAvailW - runW - actionGap * 2.0f) * 0.5f;
-            if (runW < 92.0f) runW = 92.0f;
-            if (sideW < 66.0f) sideW = 66.0f;
+            const float bottomAvailW = ImGui::GetContentRegionAvail().x;
+            const float actionGap = style.ItemSpacing.x;
+            const float runW = (std::max)(0.0f, (bottomAvailW - actionGap) * 0.5f);
+            const float secondaryW = (std::max)(0.0f,
+                (bottomAvailW - actionGap * 2.0f) / 3.0f);
 
             const ImVec4 runBase = isDark ? ImVec4(0.10f, 0.40f, 0.48f, 1.0f) : ImVec4(0.12f, 0.49f, 0.57f, 1.0f);
             const ImVec4 runHover = isDark ? ImVec4(0.13f, 0.50f, 0.59f, 1.0f) : ImVec4(0.08f, 0.42f, 0.50f, 1.0f);
@@ -3410,43 +4056,112 @@ TemplateState::ClearResults();
             const ImVec4 subBase = isDark ? ImVec4(0.15f, 0.18f, 0.22f, 1.0f) : ImVec4(0.84f, 0.87f, 0.89f, 1.0f);
             const ImVec4 subHover = isDark ? ImVec4(0.20f, 0.27f, 0.30f, 1.0f) : ImVec4(0.76f, 0.84f, 0.86f, 1.0f);
             const ImVec4 subActive = isDark ? ImVec4(0.12f, 0.23f, 0.27f, 1.0f) : ImVec4(0.65f, 0.78f, 0.81f, 1.0f);
-            const ImVec4 loopBase = s_looping ? (isDark ? ImVec4(0.12f, 0.42f, 0.25f, 1.0f) : ImVec4(0.28f, 0.62f, 0.38f, 1.0f)) : subBase;
-            const ImVec4 loopHover = s_looping ? (isDark ? ImVec4(0.16f, 0.52f, 0.31f, 1.0f) : ImVec4(0.22f, 0.54f, 0.32f, 1.0f)) : subHover;
-            const ImVec4 loopActive = s_looping ? (isDark ? ImVec4(0.09f, 0.34f, 0.20f, 1.0f) : ImVec4(0.18f, 0.47f, 0.27f, 1.0f)) : subActive;
+            const ImVec4 loopBase = loopEnabled ? (isDark ? ImVec4(0.12f, 0.42f, 0.25f, 1.0f) : ImVec4(0.28f, 0.62f, 0.38f, 1.0f)) : subBase;
+            const ImVec4 loopHover = loopEnabled ? (isDark ? ImVec4(0.16f, 0.52f, 0.31f, 1.0f) : ImVec4(0.22f, 0.54f, 0.32f, 1.0f)) : subHover;
+            const ImVec4 loopActive = loopEnabled ? (isDark ? ImVec4(0.09f, 0.34f, 0.20f, 1.0f) : ImVec4(0.18f, 0.47f, 0.27f, 1.0f)) : subActive;
+            const bool hasCurrentTask = !s_taskGroupToolFilter.empty() &&
+                ToolChainState::TaskGroupIndexByName(s_taskGroupToolFilter) >= 0;
 
-            if (RunActionButton("全部执行", ImVec2(runW, actionButtonH), runBase, runHover, runActive))
+            if (RunActionButton("全部执行", ImVec2(runW, actionButtonH),
+                runBase, runHover, runActive))
             {
                 if (ImageState::Current().empty())
                     LogSystem::Add(LOG_WARN, "请先加载图片");
                 else
-                    ToolController::RequestRunAll(s_looping);
+                    ToolController::RequestRunAll(loopEnabled);
             }
             ImGui::SameLine();
 
-            // 单步执行
-            int stepCur = ToolController::GetStepCursor();
-            bool stepping = (stepCur > 0 && stepCur <= static_cast<int>(ToolChainState::Count()));
-            const ImVec4 stepBase = stepping ? runBase : subBase;
-            const ImVec4 stepHover = stepping ? runHover : subHover;
-            const ImVec4 stepActive = stepping ? runActive : subActive;
-            if (RunActionButton(stepping ? "单步中" : "单步", ImVec2(sideW, actionButtonH), stepBase, stepHover, stepActive))
+            ImGui::BeginDisabled(!hasCurrentTask);
+            if (RunActionButton("执行当前任务", ImVec2(runW, actionButtonH),
+                runBase, runHover, runActive))
             {
                 if (ImageState::Current().empty())
                     LogSystem::Add(LOG_WARN, "请先加载图片");
-                else if (stepCur >= static_cast<int>(ToolChainState::Count()))
+                else
+                    ToolController::RequestRunTaskGroup(s_taskGroupToolFilter, loopEnabled);
+            }
+            ImGui::EndDisabled();
+
+            // 单步执行：整条配方与当前任务使用两个明确入口。
+            int stepCur = ToolController::GetStepCursor();
+            const int allStepTotal = static_cast<int>(ToolChainState::Count());
+            const int currentTaskStepTotal = hasCurrentTask
+                ? static_cast<int>(std::count_if(
+                    ToolChainState::ReadOnlyTools().begin(),
+                    ToolChainState::ReadOnlyTools().end(),
+                    [](const ToolInstance& tool)
+                    {
+                        return tool.groupName == s_taskGroupToolFilter;
+                    })) : 0;
+            const bool allStepping = stepCur > 0 && !ToolController::IsStepTaskGroup();
+            const bool currentTaskStepping = stepCur > 0 &&
+                ToolController::IsStepTaskGroup() &&
+                ToolController::GetStepTaskGroupName() == s_taskGroupToolFilter;
+
+            if (RunActionButton(allStepping ? "全部单步中" : "全部单步",
+                ImVec2(secondaryW, actionButtonH),
+                allStepping ? runBase : subBase,
+                allStepping ? runHover : subHover,
+                allStepping ? runActive : subActive))
+            {
+                if (ImageState::Current().empty())
+                    LogSystem::Add(LOG_WARN, "请先加载图片");
+                else if (allStepping && stepCur >= allStepTotal)
                     ToolController::RequestStepReset();
                 else
                     ToolController::RequestStepNext();
             }
             ImGui::SameLine();
 
-            // 循环
-            if (RunActionButton(s_looping ? "循环开" : "循环", ImVec2(sideW, actionButtonH), loopBase, loopHover, loopActive))
+            ImGui::BeginDisabled(!hasCurrentTask || currentTaskStepTotal == 0);
+            if (RunActionButton(currentTaskStepping ? "任务单步中" : "当前任务单步",
+                ImVec2(secondaryW, actionButtonH),
+                currentTaskStepping ? runBase : subBase,
+                currentTaskStepping ? runHover : subHover,
+                currentTaskStepping ? runActive : subActive))
             {
-                s_looping = !s_looping;
-                if (!s_looping)
-                    ToolController::Reset();
+                if (ImageState::Current().empty())
+                    LogSystem::Add(LOG_WARN, "请先加载图片");
+                else if (currentTaskStepping && stepCur >= currentTaskStepTotal)
+                    ToolController::RequestStepReset();
+                else
+                    ToolController::RequestStepNextTaskGroup(s_taskGroupToolFilter);
             }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+
+            // 循环
+            if (RunActionButton(loopEnabled ? "循环开" : "循环",
+                ImVec2(secondaryW, actionButtonH), loopBase, loopHover, loopActive))
+            {
+                ToolController::SetLoopEnabled(!loopEnabled);
+            }
+
+            if (loopEnabled)
+            {
+                int loopIntervalMs = ToolController::GetLoopIntervalMs();
+                ImGui::SetNextItemWidth(110.0f);
+                if (ImGui::InputInt("循环等待(ms)##ToolChainLoopInterval", &loopIntervalMs, 10, 100))
+                {
+                    ToolController::SetLoopIntervalMs(loopIntervalMs);
+                    MarkCurrentRecipeDirty();
+                }
+                ImGui::SetItemTooltip("每轮完成后的等待时间；0 表示立即继续");
+            }
+
+            bool taskParallel = ToolController::IsTaskParallelEnabled();
+            ImGui::BeginDisabled(running || loopEnabled ||
+                ToolChainState::ReadOnlyTaskGroups().size() < 2);
+            if (ImGui::Checkbox("任务并行", &taskParallel))
+                ToolController::SetTaskParallelEnabled(taskParallel);
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::TextDisabled("最多 %d 个任务同时执行",
+                ToolController::GetTaskParallelLimit());
+            ImGui::SetItemTooltip(
+                "仅用于“全部执行”；每个任务内部仍按工具顺序执行。\n"
+                "循环、单步、单任务执行保持原来的顺序模式。");
 
             bool runtimeMode = ToolController::IsRuntimeMode();
             const float modeGap = 5.0f;
@@ -3466,17 +4181,45 @@ TemplateState::ClearResults();
             if (running)
             {
                 const float elapsedMs = ToolController::GetElapsedTimeMs();
-                ImGui::TextColored(progressColor,
-                    "运行中 %d/%zu | 已用 %.3fms | 上步 %.3fms",
-                    ToolController::GetCurrentIndex() + 1,
-                    ToolChainState::Count(),
-                    elapsedMs,
-                    stepMs);
+                if (loopEnabled)
+                {
+                    const int waitRemainingMs = ToolController::GetLoopWaitRemainingMs();
+                    if (waitRemainingMs > 0)
+                    {
+                        ImGui::TextColored(progressColor,
+                            "第%llu轮  本轮%.1fms  等待%d/%dms",
+                            static_cast<unsigned long long>(ToolController::GetLoopIteration()),
+                            totalMs,
+                            waitRemainingMs,
+                            ToolController::GetLoopIntervalMs());
+                    }
+                    else
+                    {
+                        ImGui::TextColored(progressColor,
+                            "第%llu轮  工具%d/%d  本轮%.1fms  上步%.1fms",
+                            static_cast<unsigned long long>(ToolController::GetLoopIteration()),
+                            ToolController::GetRunProgressCurrent(),
+                            ToolController::GetRunProgressTotal(),
+                            elapsedMs,
+                            stepMs);
+                    }
+                }
+                else
+                {
+                    ImGui::TextColored(progressColor,
+                        "运行中 %d/%d | 已用 %.3fms | 上步 %.3fms",
+                        ToolController::GetRunProgressCurrent(),
+                        ToolController::GetRunProgressTotal(),
+                        elapsedMs,
+                        stepMs);
+                }
             }
             else if (totalMs > 0.0f)
             {
                 ImGui::TextColored(timeColor,
-                    "上次全部执行: 总 %.3fms | 上步 %.3fms",
+                    "%s: 总 %.3fms | 上步 %.3fms",
+                    ToolController::WasLastRunTaskGroup()
+                        ? "上次当前任务" : "上次全部执行",
                     totalMs,
                     stepMs);
             }
@@ -3492,6 +4235,7 @@ TemplateState::ClearResults();
             ImGui::PopStyleColor(toolsColorStackNow - toolsColorStackBase);
 
         ImGui::End();
+        UpdateCurrentRecipeAutoSave();
     }
 
 } // namespace UI

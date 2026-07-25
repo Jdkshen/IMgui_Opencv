@@ -100,6 +100,7 @@
       <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
+      <DebugInformationFormat>OldStyle</DebugInformationFormat>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -124,7 +125,7 @@
       <AdditionalLibraryDirectories>$(ProjectDir)redist;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
-      <Command>del /Q "$(OutDir)opencv_world4*.dll" 2&gt;nul &amp; del /Q "$(OutDir)opencv_videoio_ffmpeg4*_64.dll" 2&gt;nul &amp; xcopy /Y /D "$(ProjectDir)assets\fonts\*" "$(OutDir)" &amp; if exist "$(ProjectDir)theme.cfg" xcopy /Y /D "$(ProjectDir)theme.cfg" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\onnxruntime*.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_world500d.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_ffmpeg500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_msmf500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\DirectML.dll" "$(OutDir)" &amp; xcopy /Y /D "$(ProjectDir)models\*.onnx" "$(OutDir)models\" &amp; xcopy /Y /D "$(ProjectDir)models\*.txt" "$(OutDir)models\" &amp; if exist "$(ProjectDir)models\ppocrv6" xcopy /Y /D /S /I "$(ProjectDir)models\ppocrv6\*" "$(OutDir)models\ppocrv6\"</Command>
+      <Command>del /Q "$(OutDir)opencv_world4*.dll" 2&gt;nul &amp; del /Q "$(OutDir)opencv_videoio_ffmpeg4*_64.dll" 2&gt;nul &amp; xcopy /Y /D "$(ProjectDir)assets\fonts\*" "$(OutDir)" &amp; if exist "$(ProjectDir)theme.cfg" xcopy /Y /D "$(ProjectDir)theme.cfg" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\onnxruntime*.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_world500d.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_ffmpeg500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_msmf500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\DirectML.dll" "$(OutDir)" &amp; if exist "$(ProjectDir)models\*.onnx" xcopy /Y /D "$(ProjectDir)models\*.onnx" "$(OutDir)models\" &amp; if exist "$(ProjectDir)models\*.txt" xcopy /Y /D "$(ProjectDir)models\*.txt" "$(OutDir)models\" &amp; if exist "$(ProjectDir)models\ppocrv6" xcopy /Y /D /S /I "$(ProjectDir)models\ppocrv6\*" "$(OutDir)models\ppocrv6\"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -136,6 +137,7 @@
       <PreprocessorDefinitions>NDEBUG;_WINDOWS;IMGUI_OPENCV_ENABLE_NCNN_OCR;IMGUI_OPENCV_ENABLE_ZXING_CPP;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
+      <DebugInformationFormat>OldStyle</DebugInformationFormat>
       <AdditionalOptions>/utf-8 /FS %(AdditionalOptions)</AdditionalOptions>
       <AdditionalIncludeDirectories>$(ProjectDir)include\directx;$(ProjectDir)include\ncnn;$(ProjectDir)include\opencv;$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
@@ -147,7 +149,7 @@
       <AdditionalDependencies>opencv_world500.lib;ncnn.lib;zxingcpp.lib;open62541.lib;d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;Comdlg32.lib;Ws2_32.lib;Iphlpapi.lib</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>del /Q "$(OutDir)opencv_world4*.dll" 2&gt;nul &amp; del /Q "$(OutDir)opencv_videoio_ffmpeg4*_64.dll" 2&gt;nul &amp; xcopy /Y /D "$(ProjectDir)assets\fonts\*" "$(OutDir)" &amp; if exist "$(ProjectDir)theme.cfg" xcopy /Y /D "$(ProjectDir)theme.cfg" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\onnxruntime*.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\ncnn.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_world500.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_ffmpeg500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_msmf500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\DirectML.dll" "$(OutDir)" &amp; xcopy /Y /D "$(ProjectDir)models\*.onnx" "$(OutDir)models\" &amp; xcopy /Y /D "$(ProjectDir)models\*.txt" "$(OutDir)models\" &amp; if exist "$(ProjectDir)models\ppocrv6" xcopy /Y /D /S /I "$(ProjectDir)models\ppocrv6\*" "$(OutDir)models\ppocrv6\"</Command>
+      <Command>del /Q "$(OutDir)opencv_world4*.dll" 2&gt;nul &amp; del /Q "$(OutDir)opencv_videoio_ffmpeg4*_64.dll" 2&gt;nul &amp; xcopy /Y /D "$(ProjectDir)assets\fonts\*" "$(OutDir)" &amp; if exist "$(ProjectDir)theme.cfg" xcopy /Y /D "$(ProjectDir)theme.cfg" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\onnxruntime*.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\ncnn.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_world500.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_ffmpeg500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_msmf500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\DirectML.dll" "$(OutDir)" &amp; if exist "$(ProjectDir)models\*.onnx" xcopy /Y /D "$(ProjectDir)models\*.onnx" "$(OutDir)models\" &amp; if exist "$(ProjectDir)models\*.txt" xcopy /Y /D "$(ProjectDir)models\*.txt" "$(OutDir)models\" &amp; if exist "$(ProjectDir)models\ppocrv6" xcopy /Y /D /S /I "$(ProjectDir)models\ppocrv6\*" "$(OutDir)models\ppocrv6\"</Command>
     </PostBuildEvent>
     <PreLinkEvent>
       <Command>
@@ -164,6 +166,7 @@
     <ClInclude Include="Core\CalibrationFitter.h" />
     <ClInclude Include="Core\VideoCapture.h" />
     <ClInclude Include="Core\RecipeManager.h" />
+    <ClInclude Include="Core\RecipeAutosaveService.h" />
     <ClInclude Include="Core\FrameNavigation.h" />
     <ClInclude Include="Core\FixtureTransform.h" />
     <ClInclude Include="Core\FrameSourceState.h" />
@@ -175,6 +178,8 @@
     <ClInclude Include="Core\OpenCvCameraAdapter.h" />
     <ClInclude Include="Core\Open62541OpcUaAdapter.h" />
     <ClInclude Include="Core\HardwareRuntimeService.h" />
+    <ClInclude Include="Core\HardwareSettingsService.h" />
+    <ClInclude Include="Core\FrameArchiveService.h" />
     <ClInclude Include="Core\ImageViewState.h" />
     <ClInclude Include="Core\TemplateState.h" />
     <ClInclude Include="Core\FrameRenderer.h" />
@@ -185,7 +190,12 @@
     <ClInclude Include="Core\ROIState.h" />
     <ClInclude Include="Core\ROIEditorState.h" />
     <ClInclude Include="Core\ROI.h" />
+    <ClInclude Include="Core\RotatedROI.h" />
+    <ClInclude Include="Core\GeometryPrimitive.h" />
     <ClInclude Include="Core\ToolInstance.h" />
+    <ClInclude Include="Core\ToolSettings.h" />
+    <ClInclude Include="Core\ToolExecutionGraph.h" />
+    <ClInclude Include="Core\SpcDatabase.h" />
     <ClInclude Include="Core\ToolAssetService.h" />
     <ClInclude Include="Core\ToolROIService.h" />
     <ClInclude Include="Core\ToolJudgement.h" />
@@ -230,6 +240,7 @@
     <ClInclude Include="Algorithm\ThresholdTool.h" />
     <ClInclude Include="Algorithm\ContourDetector.h" />
     <ClInclude Include="Algorithm\EdgeTool.h" />
+    <ClInclude Include="Algorithm\GeometryDrawTool.h" />
     <ClInclude Include="Algorithm\ShapeMatcher.h" />
     <ClInclude Include="Algorithm\LineDetector.h" />
     <ClInclude Include="Algorithm\BlobTool.h" />
@@ -243,13 +254,17 @@
     <ClInclude Include="Algorithm\QRCodeTool.h" />
     <ClInclude Include="Algorithm\WindowsPPOCREngine.h" />
     <ClInclude Include="Renderer\FontManager.h" />
+    <ClInclude Include="Renderer\PreviewTextureCache.h" />
+    <ClInclude Include="UI\Tools\BasicToolPanels.h" />
     <ClInclude Include="UI\DockSpaceHost.h" />
     <ClInclude Include="UI\ImageViewer.h" />
+    <ClInclude Include="UI\GeometryDrawEditor.h" />
     <ClInclude Include="UI\HardwareWindow.h" />
     <ClInclude Include="UI\LogWindow.h" />
     <ClInclude Include="UI\ROIManager.h" />
     <ClInclude Include="UI\Sidebar.h" />
     <ClInclude Include="UI\StatsWindow.h" />
+    <ClInclude Include="UI\RunResultWindow.h" />
     <ClInclude Include="UI\ToolsWindow.h" />
     <ClInclude Include="Windows_imgui.h" />
   </ItemGroup>
@@ -264,6 +279,7 @@
     <ClCompile Include="Core\CalibrationFitter.cpp" />
     <ClCompile Include="Core\VideoCapture.cpp" />
     <ClCompile Include="Core\RecipeManager.cpp" />
+    <ClCompile Include="Core\RecipeAutosaveService.cpp" />
     <ClCompile Include="Core\FrameNavigation.cpp" />
     <ClCompile Include="Core\FixtureTransform.cpp" />
     <ClCompile Include="Core\FrameSourceState.cpp" />
@@ -275,6 +291,8 @@
     <ClCompile Include="Core\OpenCvCameraAdapter.cpp" />
     <ClCompile Include="Core\Open62541OpcUaAdapter.cpp" />
     <ClCompile Include="Core\HardwareRuntimeService.cpp" />
+    <ClCompile Include="Core\HardwareSettingsService.cpp" />
+    <ClCompile Include="Core\FrameArchiveService.cpp" />
     <ClCompile Include="Core\ImageViewState.cpp" />
     <ClCompile Include="Core\TemplateState.cpp" />
     <ClCompile Include="Core\FrameRenderer.cpp" />
@@ -283,12 +301,15 @@
     <ClCompile Include="Core\LiveYoloRunner.cpp" />
     <ClCompile Include="Core\ROIState.cpp" />
     <ClCompile Include="Core\ROIEditorState.cpp" />
+    <ClCompile Include="Core\RotatedROI.cpp" />
+    <ClCompile Include="Core\GeometryPrimitive.cpp" />
     <ClCompile Include="Core\VisionContext.cpp" />
     <ClCompile Include="Core\ToolExecutor.cpp" />
     <ClCompile Include="Core\ToolInstance.cpp" />
     <ClCompile Include="Core\ToolAssetService.cpp" />
     <ClCompile Include="Core\ToolROIService.cpp" />
     <ClCompile Include="Core\ToolController.cpp" />
+    <ClCompile Include="Core\ToolExecutionGraph.cpp" />
     <ClCompile Include="Core\ToolJudgement.cpp" />
     <ClCompile Include="Core\ToolChainState.cpp" />
     <ClCompile Include="Core\ToolChainValidator.cpp" />
@@ -298,6 +319,7 @@
     <ClCompile Include="Core\OpenCVTest.cpp" />
     <ClCompile Include="Core\ResultExporter.cpp" />
     <ClCompile Include="Core\InspectionHistory.cpp" />
+    <ClCompile Include="Core\SpcDatabase.cpp" />
     <ClCompile Include="Core\ResultROIResolver.cpp" />
     <ClCompile Include="Core\OpenFileDialog.cpp" />
     <ClCompile Include="include\imgui\imgui.cpp" />
@@ -321,6 +343,7 @@
     <ClCompile Include="Algorithm\ThresholdTool.cpp" />
     <ClCompile Include="Algorithm\ContourDetector.cpp" />
     <ClCompile Include="Algorithm\EdgeTool.cpp" />
+    <ClCompile Include="Algorithm\GeometryDrawTool.cpp" />
     <ClCompile Include="Algorithm\ShapeMatcher.cpp" />
     <ClCompile Include="Algorithm\LineDetector.cpp" />
     <ClCompile Include="Algorithm\BlobTool.cpp" />
@@ -334,14 +357,18 @@
     <ClCompile Include="Algorithm\QRCodeTool.cpp" />
     <ClCompile Include="Algorithm\WindowsPPOCREngine.cpp" />
     <ClCompile Include="Renderer\FontManager.cpp" />
+    <ClCompile Include="Renderer\PreviewTextureCache.cpp" />
     <ClCompile Include="UI\DockSpaceHost.cpp" />
     <ClCompile Include="UI\ImageViewer.cpp" />
+    <ClCompile Include="UI\GeometryDrawEditor.cpp" />
     <ClCompile Include="UI\HardwareWindow.cpp" />
     <ClCompile Include="UI\LogWindow.cpp" />
     <ClCompile Include="UI\ROIManager.cpp" />
     <ClCompile Include="UI\Sidebar.cpp" />
     <ClCompile Include="UI\StatsWindow.cpp" />
+    <ClCompile Include="UI\RunResultWindow.cpp" />
     <ClCompile Include="UI\ToolsWindow.cpp" />
+    <ClCompile Include="UI\Tools\BasicToolPanels.cpp" />
     <ClCompile Include="Windows_imgui.cpp" />
   </ItemGroup>
   <ItemGroup>

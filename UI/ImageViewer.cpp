@@ -2,6 +2,8 @@
 #include "../imgui/imgui.h"
 #include "../imgui/imgui_impl_dx12.h"
 #include "ImageViewer.h"
+#include "ToolsWindow.h"
+#include "GeometryDrawEditor.h"
 #include "ROIManager.h"
 #include "../Core/OpenFileDialog.h"
 #include "../Core/DX12Context.h"
@@ -30,6 +32,12 @@ void ReportImageImportError(std::string message)
 {
     s_ImageImportError = std::move(message);
     s_OpenImageImportError = true;
+}
+
+void BindImportedImageToSelectedTask(const ImageImportResult& result)
+{
+    if (result.success && !result.imagePath.empty())
+        UI::BindSelectedTaskImagePath(result.imagePath);
 }
 }
 
@@ -313,90 +321,106 @@ namespace UI
 
 			float buttonWidth = 100.0f;
 
-				auto ToolbarLabel = [](const char* label)
-				{
-					ImGui::TextDisabled("%s", label);
-					ImGui::SameLine();
+			const ImVec4 toolbarBg = isDark
+				? ImVec4(0.090f, 0.108f, 0.125f, 1.0f)
+				: ImVec4(0.955f, 0.970f, 0.978f, 1.0f);
+			const ImVec4 toolbarBorder = isDark
+				? ImVec4(0.16f, 0.22f, 0.25f, 1.0f)
+				: ImVec4(0.70f, 0.77f, 0.80f, 1.0f);
+			const ImVec4 toolbarLabelColor = isDark
+				? ImVec4(0.42f, 0.78f, 0.84f, 1.0f)
+				: ImVec4(0.05f, 0.39f, 0.46f, 1.0f);
+			const bool compactToolbar = ImGui::GetContentRegionAvail().x < 1000.0f;
+			auto ToolbarLabel = [&toolbarLabelColor](const char* label)
+			{
+				ImGui::AlignTextToFramePadding();
+				ImGui::TextColored(toolbarLabelColor, "%s", label);
+				ImGui::SameLine(0.0f, 6.0f);
 			};
 
-			ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 4));
-			ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5, 4));
+			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 6));
+			ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 5));
+			ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6, 5));
+			ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 5.0f);
+			ImGui::PushStyleColor(ImGuiCol_ChildBg, toolbarBg);
+			ImGui::PushStyleColor(ImGuiCol_Border, toolbarBorder);
+			ImGui::BeginChild("##ImageToolbar", ImVec2(0.0f, 0.0f),
+				ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY |
+				ImGuiChildFlags_AlwaysUseWindowPadding,
+				ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
-				ToolbarLabel("视图");
-				if (ImGui::Button("放大"))
-					ZoomAtCenter(0.1f);
-				ImGui::SameLine();
-				if (ImGui::Button("缩小"))
-					ZoomAtCenter(-0.1f);
-				ImGui::SameLine();
-				if (ImGui::Button("适合窗口"))
-					FitImageToWindow();
-				ImGui::SameLine();
-				ToolbarLabel("ROI");
-					if (ImGui::Button("清空ROI"))
-					{
-						ClearROIState();
-						gDrawingROI = false;
-						ResultOverlayState::ClearResults();
-					}
-				ImGui::SameLine();
-				if (ImGui::Button("打印ROI"))
-					PrintROIToLog();
-				ImGui::SameLine();
-				if (ImGui::Button("清理图片"))
-					ClearImage();
+			ToolbarLabel("视图");
+			if (ImGui::Button("放大"))
+				ZoomAtCenter(0.1f);
+			ImGui::SameLine();
+			if (ImGui::Button("缩小"))
+				ZoomAtCenter(-0.1f);
+			ImGui::SameLine();
+			if (ImGui::Button("适合窗口"))
+				FitImageToWindow();
+			ImGui::SameLine(0.0f, 14.0f);
+			ToolbarLabel("编辑");
+			if (ImGui::Button("清空ROI"))
+			{
+				ClearROIState();
+				gDrawingROI = false;
+				ResultOverlayState::ClearResults();
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("打印ROI"))
+				PrintROIToLog();
+			ImGui::SameLine();
+			if (ImGui::Button("清理图片"))
+				ClearImage();
 
-				ToolbarLabel("采集");
-				// 打开视频文件
-				if (ImGui::Button("打开视频"))
+			ImGui::Dummy(ImVec2(0.0f, 2.0f));
+			ToolbarLabel("来源");
+			if (ImGui::Button("打开视频"))
 			{
 				std::string path = OpenVideoDialog();
-			if (!path.empty())
-			{
-							FrameNavigation::OpenVideoSource(path);
-					}
-				}
-				ImGui::SameLine();
-				// 打开摄像头
-				if (ImGui::Button("打开摄像头"))
-				{
-						FrameNavigation::OpenCameraSource(0);
-				}
-				ImGui::SameLine();
-				ToolbarLabel("网格");
-				// 像素网格开关（放大后显示像素格子）
-				if (gZoom >= 3.0f)
+				if (!path.empty())
+					FrameNavigation::OpenVideoSource(path);
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("打开摄像头"))
+				FrameNavigation::OpenCameraSource(0);
+			ImGui::SameLine(0.0f, 14.0f);
+			ToolbarLabel("显示");
+			if (gZoom >= 3.0f)
 			{
 				ImGui::Checkbox("像素网格", &g_ShowPixelGrid);
-		}
-		else
-		{
-			ImGui::BeginDisabled();
-			bool dummy = false;
-			ImGui::Checkbox("像素网格", &dummy);
-			ImGui::EndDisabled();
-			if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-				ImGui::SetTooltip("放大到 3x 以上可用");
 			}
+			else
+			{
+				ImGui::BeginDisabled();
+				bool dummy = false;
+				ImGui::Checkbox("像素网格", &dummy);
+				ImGui::EndDisabled();
+				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+					ImGui::SetTooltip("放大到 3x 以上可用");
+			}
+			ImGui::SameLine();
+			ImGui::Checkbox("坐标网格", &g_ShowCoordGrid);
+			ImGui::SameLine();
+			ImGui::SetNextItemWidth(80);
+			ImGui::SliderInt("步长(px)", &g_GridStep, 1, 500);
+			if (compactToolbar)
+				ImGui::Dummy(ImVec2(0.0f, 2.0f));
+			else
+				ImGui::SameLine(0.0f, 14.0f);
+			ToolbarLabel("结果");
+			auto& overlaySettings = ResultOverlayState::MutableSettings();
+			ImGui::Checkbox("标签##result_overlay_labels", &overlaySettings.showLabels);
+			ImGui::SameLine();
+			ImGui::Checkbox("避让##result_overlay_avoid", &overlaySettings.avoidLabelOverlap);
+			ImGui::SameLine();
+			ImGui::SetNextItemWidth(90);
+			ImGui::SliderInt("最大标签##result_overlay_max", &overlaySettings.maxVisibleLabels, 0, 200);
 
-				// 坐标网格：固定步长，跟随图片平移（参照 ImGui Demo Canvas 实现）
-				ImGui::SameLine();
-				ImGui::Checkbox("坐标网格", &g_ShowCoordGrid);
-					ImGui::SameLine();
-					ImGui::SetNextItemWidth(80);
-					ImGui::SliderInt("步长(px)", &g_GridStep, 1, 500);
-					ImGui::SameLine();
-					ToolbarLabel("结果");
-					auto& overlaySettings = ResultOverlayState::MutableSettings();
-					ImGui::Checkbox("标签##result_overlay_labels", &overlaySettings.showLabels);
-					ImGui::SameLine();
-					ImGui::Checkbox("避让##result_overlay_avoid", &overlaySettings.avoidLabelOverlap);
-					ImGui::SameLine();
-					ImGui::SetNextItemWidth(90);
-					ImGui::SliderInt("最大标签##result_overlay_max", &overlaySettings.maxVisibleLabels, 0, 200);
-
-				ImGui::PopStyleVar(2);
-			ImGui::Separator();
+			ImGui::EndChild();
+			ImGui::PopStyleColor(2);
+			ImGui::PopStyleVar(4);
+			ImGui::Spacing();
 
 		// ===== 视频/摄像头播放控制栏（仅当视频打开时显示）=====
 		const FrameNavigation::PlaybackState playback = FrameNavigation::CurrentPlayback();
@@ -517,7 +541,8 @@ namespace UI
 		}
 
 		// 左键拖拽平移（未拖动ROI时）
-		if (!gDraggingROI && gActiveHandle == HANDLE_NONE &&
+			if (!GeometryDrawEditor::IsCanvasActive() &&
+				!gDraggingROI && gActiveHandle == HANDLE_NONE &&
 			ImGui::IsWindowHovered() && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
 		{
 			ImVec2 delta = ImGui::GetIO().MouseDelta;
@@ -612,8 +637,9 @@ namespace UI
 			}
 
 			// 统一结果叠加层（Contour/Shape/Line/MCF 已全部迁移至此）
-			DrawUnifiedResults(dl);
-			DrawFixtureOverlays(dl);
+				DrawUnifiedResults(dl);
+				DrawFixtureOverlays(dl);
+				GeometryDrawEditor::DrawCanvasOverlay(dl);
 
 			// 坐标网格：固定步长，跟随平移（参照 ImGui Demo）
 			if (g_ShowCoordGrid)
@@ -645,7 +671,8 @@ namespace UI
 		}
 
 		// 处理ROI交互 + 绘制匹配结果
-		HandleROIInteraction();
+			if (!GeometryDrawEditor::HandleCanvasInteraction())
+				HandleROIInteraction();
 		ImGui::EndChild();
 
 		ImGui::Separator();
@@ -658,8 +685,11 @@ namespace UI
 				{
 					const ImageImportResult result = ImageImportService::ImportFolder(folderPath);
 					if (result.success)
+					{
+						BindImportedImageToSelectedTask(result);
 						LogSystem::Add(LOG_INFO, kImageLogColor, "加载文件夹: %s, 共 %zu 张图片",
 							folderPath.c_str(), result.imageCount);
+					}
 					else
 					{
 						LogSystem::Add(LOG_WARN, kImageLogColor, "%s", result.message.c_str());
@@ -674,7 +704,7 @@ namespace UI
 		if (!hasFirst)
 			ImGui::BeginDisabled();
 			if (ImGui::Button("首张", ImVec2(buttonWidth, 0)))
-				ImageImportService::NavigateToImage(0);
+				BindImportedImageToSelectedTask(ImageImportService::NavigateToImage(0));
 		if (!hasFirst)
 			ImGui::EndDisabled();
 		ImGui::SameLine();
@@ -684,7 +714,7 @@ namespace UI
 		if (!hasPrev)
 			ImGui::BeginDisabled();
 			if (ImGui::Button("上一张", ImVec2(buttonWidth, 0)))
-				ImageImportService::NavigatePreviousImage();
+				BindImportedImageToSelectedTask(ImageImportService::NavigatePreviousImage());
 		if (!hasPrev)
 			ImGui::EndDisabled();
 		ImGui::SameLine();
@@ -695,20 +725,21 @@ namespace UI
 		if (!hasNext)
 			ImGui::BeginDisabled();
 			if (ImGui::Button("下一张", ImVec2(buttonWidth, 0)))
-				ImageImportService::NavigateNextImage();
+				BindImportedImageToSelectedTask(ImageImportService::NavigateNextImage());
 		if (!hasNext)
 			ImGui::EndDisabled();
 		ImGui::SameLine();
 
-		// 图片计数显示
+		// 图片计数与两侧按钮保持相同高度，并在固定状态槽中居中。
+		char imageListStatus[64];
 		if (!FrameNavigation::ImageList().empty() && FrameNavigation::CurrentImageIndex() >= 0)
-		{
-			ImGui::Text(" %d / %zu ", FrameNavigation::CurrentImageIndex() + 1, FrameNavigation::ImageList().size());
-		}
+			snprintf(imageListStatus, sizeof(imageListStatus), "%d / %zu##image_list_status",
+				FrameNavigation::CurrentImageIndex() + 1, FrameNavigation::ImageList().size());
 		else
-		{
-			ImGui::Text(" 无列表 ");
-		}
+			snprintf(imageListStatus, sizeof(imageListStatus), "无列表##image_list_status");
+		ImGui::BeginDisabled();
+		ImGui::Button(imageListStatus, ImVec2(78.0f, 0.0f));
+		ImGui::EndDisabled();
 		ImGui::SameLine();
 
 		if (ImGui::Button("选择图片", ImVec2(buttonWidth, 0)))
@@ -718,7 +749,10 @@ namespace UI
 			{
 					const ImageImportResult result = ImageImportService::ImportSingleImage(selectedPath);
 					if (result.success)
+					{
+						BindImportedImageToSelectedTask(result);
 						LogSystem::Add(LOG_INFO, kImageLogColor, "选择图片路径: %s", selectedPath.c_str());
+					}
 					else
 					{
 						LogSystem::Add(LOG_ERROR, kImageLogColor, "%s", result.message.c_str());

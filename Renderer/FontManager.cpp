@@ -171,7 +171,7 @@ namespace FontManager
             LogSystem::Add(LOG_INFO, "Tool PNG icons merged: %d", loaded);
     }
 
-    ImFont *InitFonts(float dpi_scale)
+    ImFont *InitFonts(float)
     {
         ImGuiIO &io = ImGui::GetIO();
 
@@ -180,26 +180,28 @@ namespace FontManager
 
         ImFont *font = nullptr;
 
-        // Local simsun.ttc
-        std::string localFont = GetExeDir() + "simsun.ttc";
-        if (FileExists(localFont.c_str()))
+        constexpr float kBaseFontSize = 14.0f;
+
+        // Prefer Microsoft YaHei UI for a cleaner Chinese application UI.
+        const char *preferredFont = "C:/Windows/Fonts/msyh.ttc";
+        if (FileExists(preferredFont))
         {
             font = io.Fonts->AddFontFromFileTTF(
-                localFont.c_str(), 12.0f * dpi_scale,
+                preferredFont, kBaseFontSize,
                 nullptr, BuildIconGlyphRanges());
-            LogSystem::Add(LOG_INFO, "simsun.ttc loaded");
+            LogSystem::Add(LOG_INFO, "Microsoft YaHei UI loaded");
         }
 
-        // System msyh.ttc
+        // Packaged fallback keeps Chinese glyphs available on minimal systems.
         if (!font)
         {
-            const char *path = "C:/Windows/Fonts/msyh.ttc";
-            if (FileExists(path))
+            std::string localFont = GetExeDir() + "simsun.ttc";
+            if (FileExists(localFont.c_str()))
             {
                 font = io.Fonts->AddFontFromFileTTF(
-                    path, 12.0f * dpi_scale,
+                    localFont.c_str(), kBaseFontSize,
                     nullptr, BuildIconGlyphRanges());
-                LogSystem::Add(LOG_INFO, "msyh.ttc loaded");
+                LogSystem::Add(LOG_INFO, "simsun.ttc fallback loaded");
             }
         }
 
@@ -220,7 +222,7 @@ namespace FontManager
                 miCfg.MergeMode = true;
                 miCfg.PixelSnapH = true;
                 static const ImWchar iconRanges[] = { 0xE000, 0xF8FF, 0 };
-                io.Fonts->AddFontFromFileTTF(miPath.c_str(), 18.0f * dpi_scale, &miCfg, iconRanges);
+                io.Fonts->AddFontFromFileTTF(miPath.c_str(), 18.0f, &miCfg, iconRanges);
                 LogSystem::Add(LOG_INFO, "MaterialIcons-Regular.ttf merged");
             }
         }
@@ -235,7 +237,7 @@ namespace FontManager
                 builder.AddText("📦🎯📐🎨🧪📊⚙️▶🔬🛠️📁💾");
                 ImVector<ImWchar> emojiRanges;
                 builder.BuildRanges(&emojiRanges);
-                io.Fonts->AddFontFromFileTTF(emojiPath, 16.0f * dpi_scale, &emojiCfg, emojiRanges.Data);
+                io.Fonts->AddFontFromFileTTF(emojiPath, 16.0f, &emojiCfg, emojiRanges.Data);
                 LogSystem::Add(LOG_INFO, "Segoe UI Emoji merged");
             }
         }

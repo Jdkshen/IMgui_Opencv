@@ -1,11 +1,14 @@
 #include "InspectionHistory.h"
+#include "SpcDatabase.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <fstream>
+#include <filesystem>
 #include <limits>
 #include <utility>
 
@@ -14,6 +17,40 @@ namespace
 std::vector<InspectionHistory::Sample> s_samples;
 std::uint64_t s_nextSequence = 1;
 constexpr std::size_t kMaximumSamples = 100000;
+bool s_databaseLoaded = false;
+std::string s_databasePathOverride;
+
+std::string DefaultDatabasePath()
+{
+    char* localAppData = nullptr;
+    std::size_t environmentLength = 0;
+    _dupenv_s(&localAppData, &environmentLength, "LOCALAPPDATA");
+    std::filesystem::path directory = localAppData && *localAppData
+        ? std::filesystem::path(localAppData) / "IMgui_Opencv"
+        : std::filesystem::temp_directory_path() / "IMgui_Opencv";
+    std::free(localAppData);
+    std::error_code error;
+    std::filesystem::create_directories(directory, error);
+    return (directory / "spc_history.db").string();
+}
+
+void EnsureDatabaseLoaded()
+{
+    if (s_databaseLoaded)
+        return;
+    s_databaseLoaded = true;
+    const std::string path = s_databasePathOverride.empty()
+        ? DefaultDatabasePath() : s_databasePathOverride;
+    if (!SpcDatabase::Open(path))
+        return;
+    for (const SpcDatabaseRecord& record : SpcDatabase::LoadRecent(kMaximumSamples))
+    {
+        s_samples.push_back({record.sequence, record.timestamp, record.toolId,
+            record.toolName, record.measurementName, record.value, record.unit,
+            record.status});
+        s_nextSequence = (std::max)(s_nextSequence, record.sequence + 1);
+    }
+}
 
 std::string CurrentTimestamp()
 {
@@ -48,13 +85,24 @@ std::string CsvEscape(const std::string& value)
 
 namespace InspectionHistory
 {
+void ConfigureDatabase(const std::string& path)
+{
+    SpcDatabase::Close();
+    s_samples.clear();
+    s_nextSequence = 1;
+    s_databaseLoaded = false;
+    s_databasePathOverride = path;
+}
+
 const std::vector<Sample>& Samples()
 {
+    EnsureDatabaseLoaded();
     return s_samples;
 }
 
 std::vector<std::string> MeasurementNames()
 {
+    EnsureDatabaseLoaded();
     std::vector<std::string> names;
     for (const Sample& sample : s_samples)
     {
@@ -70,6 +118,7 @@ std::vector<std::string> MeasurementNames()
 std::vector<double> Trend(const std::string& measurementName,
     std::size_t maximumSamples)
 {
+    EnsureDatabaseLoaded();
     std::vector<double> values;
     for (const Sample& sample : s_samples)
     {
@@ -85,12 +134,15 @@ std::vector<double> Trend(const std::string& measurementName,
 
 void Clear()
 {
+    EnsureDatabaseLoaded();
     s_samples.clear();
     s_nextSequence = 1;
+    SpcDatabase::Clear();
 }
 
 void Add(Sample sample)
 {
+    EnsureDatabaseLoaded();
     if (sample.sequence == 0)
         sample.sequence = s_nextSequence++;
     else if (sample.sequence >= s_nextSequence)
@@ -99,7 +151,17 @@ void Add(Sample sample)
         sample.timestamp = CurrentTimestamp();
     if (s_samples.size() >= kMaximumSamples)
         s_samples.erase(s_samples.begin(), s_samples.begin() + 1000);
+    SpcDatabaseRecord record;
+    record.sequence = sample.sequence;
+    record.timestamp = sample.timestamp;
+    record.toolId = sample.toolId;
+    record.toolName = sample.toolName;
+    record.measurementName = sample.measurementName;
+    record.value = sample.value;
+    record.unit = sample.unit;
+    record.status = sample.status;
     s_samples.push_back(std::move(sample));
+    SpcDatabase::Append(record);
 }
 
 void AddResult(std::uint64_t toolId, const std::string& toolName,
@@ -117,6 +179,7 @@ void AddResult(std::uint64_t toolId, const std::string& toolName,
 Statistics Compute(const std::string& measurementName,
     double nominal, double toleranceMinus, double tolerancePlus)
 {
+    EnsureDatabaseLoaded();
     Statistics statistics;
     std::vector<double> values;
     for (const Sample& sample : s_samples)
@@ -177,6 +240,7 @@ Statistics Compute(const std::string& measurementName,
 
 bool ExportCsv(const char* filepath)
 {
+    EnsureDatabaseLoaded();
     if (!filepath || !*filepath)
         return false;
     std::ofstream output(filepath, std::ios::binary);

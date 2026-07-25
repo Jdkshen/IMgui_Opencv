@@ -1,4 +1,5 @@
 #include "ROIManager.h"
+#include "DockSpaceHost.h"
 #include "../Core/DX12Context.h"
 #include "../Core/ROIState.h"
 #include "../Core/ImageViewState.h"
@@ -19,8 +20,7 @@ namespace
 float& gZoom = ImageViewState::Zoom();
 ImVec2& gPan = ImageViewState::Pan();
 ImVec2& imageScreenPos = ImageViewState::ImageScreenPos();
-std::vector<ROI>& s_rois = ROIState::Items();
-int& s_selectedROI = ROIState::SelectedIndexRef();
+const std::vector<ROI>& s_rois = ROIState::ReadOnlyItems();
 }
 
     void BeginROIDrawSequence(std::initializer_list<int> roiTypes)
@@ -146,8 +146,8 @@ int& s_selectedROI = ROIState::SelectedIndexRef();
                 float y1 = (std::min)(roi.start.y, roi.end.y);
                 float x2 = (std::max)(roi.start.x, roi.end.x);
                 float y2 = (std::max)(roi.start.y, roi.end.y);
-                LogSystem::Add(LOG_INFO, "ROI[%d] %s rect=(%.1f %.1f %.1f %.1f)",
-                               i, tname, x1, y1, x2 - x1, y2 - y1);
+                LogSystem::Add(LOG_INFO, "ROI[%d] %s rect=(%.1f %.1f %.1f %.1f) angle=%.2f",
+                               i, tname, x1, y1, x2 - x1, y2 - y1, roi.angle);
             }
         }
     }
@@ -173,9 +173,10 @@ int& s_selectedROI = ROIState::SelectedIndexRef();
         ImDrawList *drawList = ImGui::GetWindowDrawList();
         ImVec2 mouse = ImGui::GetMousePos();
         ImVec2 imageMouse = ScreenToImagePos(mouse);
+        const bool canvasHovered = ImGui::IsWindowHovered();
 
         // 右键按下：开始绘制新ROI
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+        if (canvasHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
         {
             gDrawingROI = true;
             gROIStart = imageMouse;
@@ -221,6 +222,7 @@ int& s_selectedROI = ROIState::SelectedIndexRef();
                     EnsureROIRuntimeId(roi);
                     ROIState::Add(roi, false);
                     AdvanceROIDrawSequence(roi);
+                    MarkCurrentRecipeDirty();
                 }
             }
             gDrawingROI = false;
@@ -229,22 +231,74 @@ int& s_selectedROI = ROIState::SelectedIndexRef();
         // 左键释放：停止拖动/缩放
         if (ImGui::IsMouseReleased(ImGuiMouseButton_Left))
         {
+            if (gActiveHandle != HANDLE_NONE && ROIState::SelectedIndex() >= 0)
+                MarkCurrentRecipeDirty();
             gDraggingROI = false;
             gActiveHandle = HANDLE_NONE;
         }
 
         struct Box
         {
-            ImVec2 lt, rt, lb, rb, t, b, l, r, c;
+            ImVec2 lt, rt, lb, rb, t, b, l, r, rotate, c;
         };
         auto GetBox = [&](const ROI &roi) -> Box
         {
-            float minX = std::min(roi.start.x, roi.end.x);
-            float maxX = std::max(roi.start.x, roi.end.x);
-            float minY = std::min(roi.start.y, roi.end.y);
-            float maxY = std::max(roi.start.y, roi.end.y);
-            return Box{
-                {minX, minY}, {maxX, minY}, {minX, maxY}, {maxX, maxY}, {(minX + maxX) * 0.5f, minY}, {(minX + maxX) * 0.5f, maxY}, {minX, (minY + maxY) * 0.5f}, {maxX, (minY + maxY) * 0.5f}, {(minX + maxX) * 0.5f, (minY + maxY) * 0.5f}};
+            const auto corners = roi.Corners();
+            const ImVec2 center = roi.Center();
+            const ImVec2 top((corners[0].x + corners[1].x) * 0.5f,
+                             (corners[0].y + corners[1].y) * 0.5f);
+            const ImVec2 bottom((corners[3].x + corners[2].x) * 0.5f,
+                                (corners[3].y + corners[2].y) * 0.5f);
+            const ImVec2 left((corners[0].x + corners[3].x) * 0.5f,
+                              (corners[0].y + corners[3].y) * 0.5f);
+            const ImVec2 right((corners[1].x + corners[2].x) * 0.5f,
+                               (corners[1].y + corners[2].y) * 0.5f);
+            const float handleDistance = 30.0f / (std::max)(gZoom, 0.01f);
+            const float topLength = (std::max)(1.0f,
+                std::hypot(top.x - center.x, top.y - center.y));
+            const ImVec2 rotate(
+                top.x + (top.x - center.x) * handleDistance / topLength,
+                top.y + (top.y - center.y) * handleDistance / topLength);
+            return Box{corners[0], corners[1], corners[3], corners[2],
+                       top, bottom, left, right, rotate, center};
+        };
+
+        auto ResizeRotatedRect = [&](ROI& roi, HandleType handle, const ImVec2& target)
+        {
+            const ImVec2 oldCenter = roi.Center();
+            const float radians = -roi.angle * static_cast<float>(CV_PI / 180.0);
+            const float cosine = std::cos(radians);
+            const float sine = std::sin(radians);
+            const float dx = target.x - oldCenter.x;
+            const float dy = target.y - oldCenter.y;
+            const float localX = dx * cosine - dy * sine;
+            const float localY = dx * sine + dy * cosine;
+
+            float left = -roi.Width() * 0.5f;
+            float right = roi.Width() * 0.5f;
+            float top = -roi.Height() * 0.5f;
+            float bottom = roi.Height() * 0.5f;
+            if (handle == HANDLE_LT || handle == HANDLE_LB || handle == HANDLE_L)
+                left = (std::min)(localX, right - gMinROIWidth);
+            if (handle == HANDLE_RT || handle == HANDLE_RB || handle == HANDLE_R)
+                right = (std::max)(localX, left + gMinROIWidth);
+            if (handle == HANDLE_LT || handle == HANDLE_RT || handle == HANDLE_T)
+                top = (std::min)(localY, bottom - gMinROIHeight);
+            if (handle == HANDLE_LB || handle == HANDLE_RB || handle == HANDLE_B)
+                bottom = (std::max)(localY, top + gMinROIHeight);
+
+            const float localCenterX = (left + right) * 0.5f;
+            const float localCenterY = (top + bottom) * 0.5f;
+            const float forwardRadians = roi.angle * static_cast<float>(CV_PI / 180.0);
+            const float forwardCosine = std::cos(forwardRadians);
+            const float forwardSine = std::sin(forwardRadians);
+            const ImVec2 newCenter(
+                oldCenter.x + localCenterX * forwardCosine - localCenterY * forwardSine,
+                oldCenter.y + localCenterX * forwardSine + localCenterY * forwardCosine);
+            const float halfWidth = (right - left) * 0.5f;
+            const float halfHeight = (bottom - top) * 0.5f;
+            roi.start = ImVec2(newCenter.x - halfWidth, newCenter.y - halfHeight);
+            roi.end = ImVec2(newCenter.x + halfWidth, newCenter.y + halfHeight);
         };
 
         auto CheckHandle = [&](ImVec2 p, HandleType type, int i) -> bool
@@ -254,7 +308,7 @@ int& s_selectedROI = ROIState::SelectedIndexRef();
             float dy = mouse.y - sp.y;
             if (sqrtf(dx * dx + dy * dy) < HANDLE_SIZE * 2.0f)
             {
-                s_selectedROI = i;
+                ROIState::SetSelectedIndex(i);
                 gActiveHandle = type;
                 return true;
             }
@@ -262,19 +316,21 @@ int& s_selectedROI = ROIState::SelectedIndexRef();
         };
 
         // 左键点击：检测是否点击到ROI的控制点或内部区域
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        if (canvasHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
         {
-            s_selectedROI = -1;
+            ROIState::SetSelectedIndex(-1);
             gActiveHandle = HANDLE_NONE;
 
             // 先检查当前类型ROI的控制点（8方向+中心）
             for (int i = 0; i < (int)s_rois.size(); i++)
             {
-                auto &roi = s_rois[i];
+                const auto &roi = s_rois[i];
                 if (roi.type != gCurrentROIType)
                     continue;
                 Box box = GetBox(roi);
 
+                if (roi.type == ROI_TYPE_RECT && CheckHandle(box.rotate, HANDLE_ROTATE, i))
+                    break;
                 if (CheckHandle(box.lt, HANDLE_LT, i))
                     break;
                 if (CheckHandle(box.rt, HANDLE_RT, i))
@@ -296,20 +352,14 @@ int& s_selectedROI = ROIState::SelectedIndexRef();
             }
 
             // 控制点未命中：从后往前检查内部区域 → 直接进入移动模式
-            if (s_selectedROI < 0)
+            if (ROIState::SelectedIndex() < 0)
             {
                 for (int i = (int)s_rois.size() - 1; i >= 0; i--)
                 {
-                    auto &roi = s_rois[i];
-                    float minX = std::min(roi.start.x, roi.end.x);
-                    float maxX = std::max(roi.start.x, roi.end.x);
-                    float minY = std::min(roi.start.y, roi.end.y);
-                    float maxY = std::max(roi.start.y, roi.end.y);
-
-                    if (imageMouse.x >= minX && imageMouse.x <= maxX &&
-                        imageMouse.y >= minY && imageMouse.y <= maxY)
+                    const auto &roi = s_rois[i];
+                    if (roi.Contains(imageMouse))
                     {
-                        s_selectedROI = i;
+                        ROIState::SetSelectedIndex(i);
                         gActiveHandle = HANDLE_CENTER; // 框内点击 = 直接移动
                         break;
                     }
@@ -318,17 +368,19 @@ int& s_selectedROI = ROIState::SelectedIndexRef();
         }
 
         // Delete键：删除选中的ROI
-        if (s_selectedROI >= 0 && ImGui::IsKeyPressed(ImGuiKey_Delete))
+        if (canvasHovered && ROIState::SelectedIndex() >= 0 && ImGui::IsKeyPressed(ImGuiKey_Delete))
         {
-            ROIState::RemoveAt(s_selectedROI);
+            if (ROIState::RemoveAt(ROIState::SelectedIndex()))
+                MarkCurrentRecipeDirty();
             gActiveHandle = HANDLE_NONE;
             gDraggingROI = false;
         }
 
         // 拖动/缩放：根据当前激活的控制点类型调整ROI
-        if (gActiveHandle != HANDLE_NONE && s_selectedROI >= 0)
+        const int selectedROIIndex = ROIState::SelectedIndex();
+        if (gActiveHandle != HANDLE_NONE && selectedROIIndex >= 0)
         {
-            auto &roi = s_rois[s_selectedROI];
+            ROI roi = s_rois[selectedROIIndex];
 
             if (gActiveHandle == HANDLE_CENTER)
             {
@@ -343,6 +395,19 @@ int& s_selectedROI = ROIState::SelectedIndexRef();
                 roi.end.x += delta.x;
                 roi.end.y += delta.y;
                 gLastMousePos = imageMouse;
+            }
+            else if (gActiveHandle == HANDLE_ROTATE && roi.type == ROI_TYPE_RECT)
+            {
+                const ImVec2 center = roi.Center();
+                roi.angle = static_cast<float>(
+                    std::atan2(imageMouse.y - center.y, imageMouse.x - center.x) *
+                    180.0 / CV_PI + 90.0);
+                while (roi.angle > 180.0f) roi.angle -= 360.0f;
+                while (roi.angle <= -180.0f) roi.angle += 360.0f;
+            }
+            else if (roi.type == ROI_TYPE_RECT)
+            {
+                ResizeRotatedRect(roi, gActiveHandle, imageMouse);
             }
             else
             {
@@ -359,13 +424,14 @@ int& s_selectedROI = ROIState::SelectedIndexRef();
                 }
                 NormalizeROI(roi);
             }
+            ROIState::Update(selectedROIIndex, std::move(roi));
         }
 
         // ===== 绘制所有ROI（按类型区分形状） =====
         for (int i = 0; i < (int)s_rois.size(); i++)
         {
-            auto &roi = s_rois[i];
-            bool selected = (i == s_selectedROI);
+            const auto &roi = s_rois[i];
+            bool selected = (i == ROIState::SelectedIndex());
             ImU32 col = GetROIColor(roi.type, selected);
             float thick = selected ? 2.5f : 2.0f;
 
@@ -380,7 +446,11 @@ int& s_selectedROI = ROIState::SelectedIndexRef();
             {
             case ROI_TYPE_RECT:
             {
-                drawList->AddRect(sp, ep, col, 0, 0, thick);
+                const auto corners = roi.Corners();
+                ImVec2 screenCorners[4] = {
+                    ImageToScreenPos(corners[0]), ImageToScreenPos(corners[1]),
+                    ImageToScreenPos(corners[2]), ImageToScreenPos(corners[3])};
+                drawList->AddPolyline(screenCorners, 4, col, ImDrawFlags_Closed, thick);
 
                 // VisionPro 风格：选中时绘制 8 个控制点 + 黄色中心圆
                 if (selected)
@@ -402,6 +472,13 @@ int& s_selectedROI = ROIState::SelectedIndexRef();
                     DrawHandle(box.lb); DrawHandle(box.rb);
                     DrawHandle(box.t);  DrawHandle(box.b);
                     DrawHandle(box.l);  DrawHandle(box.r);
+
+                    const ImVec2 top = ImageToScreenPos(box.t);
+                    const ImVec2 rotate = ImageToScreenPos(box.rotate);
+                    drawList->AddLine(top, rotate, IM_COL32(255, 170, 0, 255), 1.5f);
+                    drawList->AddCircleFilled(rotate, HANDLE_SIZE,
+                                              IM_COL32(255, 140, 0, 255));
+                    drawList->AddCircle(rotate, HANDLE_SIZE, IM_COL32(0, 0, 0, 255));
 
                     ImVec2 pc = ImageToScreenPos(box.c);
                     drawList->AddCircleFilled(pc, HANDLE_SIZE + 1, IM_COL32(255, 255, 0, 255));

@@ -8,7 +8,12 @@
 #include "Core/LiveYoloRunner.h"
 #include "Core/FrameRenderer.h"
 #include "Core/VisionContext.h"
+#include "Core/RecipeAutosaveService.h"
+#include "Core/ToolController.h"
+#include "Renderer/PreviewTextureCache.h"
 #include "UI/HardwareWindow.h"
+#include "UI/DockSpaceHost.h"
+#include "UI/RunResultWindow.h"
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -202,7 +207,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			UI::ShowStatsWindow();				  // 性能统计窗口
 			UI::ShowHardwareWindow();			  // 左侧设备连接页签
 			UI::ShowOpenCV();					  // 图片显示窗口
-		UI::ShowToolsWindow();				  // 工具窗口（ROI管理+算法入口）
+			UI::ShowToolsWindow();				  // 工具窗口（ROI管理+算法入口）
+			UI::ShowRunResultWindow();		  // 整链执行完成后的结果看板
 
 		// ----- 6.4 渲染 Dear ImGui 绘制数据 -----
 		ImGui::Render();
@@ -244,8 +250,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		// =========================
 		// ⭐ GPU上传（阈值处理/图像管线产出的结果上传到显存）
 		// =========================
-        if (ImageState::NeedUploadRef())
-		{
+	        if (ImageState::NeedUploadRef())
+			{
 			UploadToDX12(
 				g_pd3dDevice,
 				g_pd3dCommandList,
@@ -253,8 +259,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
                 ImageState::PendingUploadRef(),
 				DXGI_FORMAT_R8G8B8A8_UNORM,
 				gSrvCpuHandle);
-            ImageState::NeedUploadRef() = false;
-		}
+	            ImageState::NeedUploadRef() = false;
+			}
+			PreviewTextureCache::UploadPending(g_pd3dDevice, g_pd3dCommandList);
 
 		// ----- 6.6 渲染管线：状态切换 + 绘制 + 呈现 -----
 		FrameRenderer::RenderAndPresent(frameCtx, backBufferIdx, clear_color, io);
@@ -265,8 +272,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	WaitForPendingOperations();
 
 	// 关闭视频/音频资源（先于 ImGui 销毁）
-	HardwareRuntimeService::Shutdown();
-	VideoCapture::Close();
+	if (UI::IsCurrentRecipeDirty())
+		UI::SaveCurrentRecipe();
+		RecipeAutosaveService::Shutdown();
+		ToolController::Shutdown();
+		HardwareRuntimeService::Shutdown();
+		VideoCapture::Close();
+		PreviewTextureCache::Shutdown();
 
 	ImGui::LogFinish();
 	ImGui_ImplDX12_Shutdown();

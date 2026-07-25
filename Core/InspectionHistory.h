@@ -36,6 +36,7 @@ namespace InspectionHistory
     };
 
     const std::vector<Sample>& Samples();
+    void ConfigureDatabase(const std::string& path);
     std::vector<std::string> MeasurementNames();
     std::vector<double> Trend(const std::string& measurementName,
         std::size_t maximumSamples = 0);

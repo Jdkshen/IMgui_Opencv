@@ -209,6 +209,12 @@ ToolResult ShapeTool::Execute(VisionContext& ctx)
 {
     ToolResult r;
     r.toolName = "形状匹配";
+    if (ctx.IsCancellationRequested())
+    {
+        r.success = false;
+        r.message = "执行已取消";
+        return r;
+    }
     cv::Mat tpl = tplImage.empty() ? ctx.frozenTemplate : tplImage;
     if (tpl.empty())
     {
@@ -240,8 +246,20 @@ ToolResult ShapeTool::Execute(VisionContext& ctx)
     cv::Rect roi = ActiveSearchRect(ctx);
     const cv::Mat input = roi.empty() ? ctx.image : ctx.image(roi);
     auto ms = ShapeMatcher::Search(input, tpl, sp, cachedTplContours);
+    if (ctx.IsCancellationRequested())
+    {
+        r.success = false;
+        r.message = "执行已取消";
+        return r;
+    }
     for (const auto &m : ms)
     {
+        if (ctx.IsCancellationRequested())
+        {
+            r.success = false;
+            r.message = "执行已取消";
+            return r;
+        }
         ToolResult::Region reg;
         reg.bbox = m.bbox;
         reg.bbox.x += roi.x;

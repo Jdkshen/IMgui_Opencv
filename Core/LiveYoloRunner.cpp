@@ -171,6 +171,7 @@ void Update()
     std::vector<DetectedObject> objs;
     auto t0 = std::chrono::steady_clock::now();
     bool canDetect = true;
+    OpenCVYoloDetector::Timing openCVTiming;
     if (liveType == 11)
     {
         auto& it = tools[idx];
@@ -183,7 +184,7 @@ void Update()
         }
         else
         {
-            objs = OpenCVYoloDetector::Detect(image, confTh, nmsTh, roi);
+            objs = OpenCVYoloDetector::Detect(image, confTh, nmsTh, roi, &openCVTiming);
         }
     }
     else
@@ -211,10 +212,10 @@ void Update()
     float postMs = 0.0f;
     if (liveType == 11)
     {
-        totalMs = OpenCVYoloDetector::g_OpenCVYoloTotalMs;
-        preMs = OpenCVYoloDetector::g_OpenCVYoloPreMs;
-        infMs = OpenCVYoloDetector::g_OpenCVYoloInfMs;
-        postMs = OpenCVYoloDetector::g_OpenCVYoloPostMs;
+        totalMs = openCVTiming.totalMs > 0.0f ? openCVTiming.totalMs : measuredFrameMs;
+        preMs = openCVTiming.preprocessMs;
+        infMs = openCVTiming.inferenceMs;
+        postMs = openCVTiming.postprocessMs;
     }
     else
     {
