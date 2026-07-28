@@ -342,7 +342,11 @@ namespace RecipeManager
         json &taskGroups = j["taskGroups"] = json::array();
         for (const RecipeTaskGroup& group : data.taskGroups)
             taskGroups.push_back({{"name", group.name}, {"enabled", group.enabled},
-                {"imagePath", group.imagePath}});
+                {"imagePath", group.imagePath},
+                {"imageFolderPath", group.imageFolderPath},
+                {"imageFolderIndex", group.imageFolderIndex},
+                {"imageFolderCount", group.imageFolderCount},
+                {"cameraPreferred", group.cameraPreferred}});
 
         // Tool instances
         json &tools = j["tools"] = json::array();
@@ -564,6 +568,10 @@ namespace RecipeManager
                 group.name = groupJson.value("name", "");
                 group.enabled = groupJson.value("enabled", true);
                 group.imagePath = groupJson.value("imagePath", "");
+                group.imageFolderPath = groupJson.value("imageFolderPath", "");
+                group.imageFolderIndex = groupJson.value("imageFolderIndex", -1);
+                group.imageFolderCount = groupJson.value("imageFolderCount", 0);
+                group.cameraPreferred = groupJson.value("cameraPreferred", false);
                 if (!group.name.empty())
                     data.taskGroups.push_back(std::move(group));
             }
@@ -708,6 +716,10 @@ namespace RecipeManager
             group.name = source.name;
             group.enabled = source.enabled;
             group.imagePath = source.imagePath;
+            group.imageFolderPath = source.imageFolderPath;
+            group.imageFolderIndex = source.imageFolderIndex;
+            group.imageFolderCount = source.imageFolderCount;
+            group.cameraPreferred = source.cameraPreferred;
             d.taskGroups.push_back(std::move(group));
         }
 
@@ -832,6 +844,10 @@ namespace RecipeManager
             group.name = source.name;
             group.enabled = source.enabled;
             group.imagePath = ResolveRecipeAssetPath(source.imagePath);
+            group.imageFolderPath = ResolveRecipeAssetPath(source.imageFolderPath);
+            group.imageFolderIndex = source.imageFolderIndex;
+            group.imageFolderCount = source.imageFolderCount;
+            group.cameraPreferred = source.cameraPreferred;
             restoredGroups.push_back(std::move(group));
         }
         ToolChainState::ReplaceTaskGroups(std::move(restoredGroups));

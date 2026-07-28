@@ -582,12 +582,52 @@ bool SetTaskGroupEnabled(int index, bool enabled)
     return true;
 }
 
+bool SetTaskGroupCameraPreferred(int index, bool preferred)
+{
+    EnsureTaskGroupsFromToolsInternal();
+    if (index < 0 || index >= static_cast<int>(s_taskGroups.size()))
+        return false;
+    s_taskGroups[index].cameraPreferred = preferred;
+    return true;
+}
+
 bool SetTaskGroupImagePath(int index, const std::string& imagePath)
 {
     EnsureTaskGroupsFromToolsInternal();
     if (index < 0 || index >= static_cast<int>(s_taskGroups.size()))
         return false;
     s_taskGroups[index].imagePath = imagePath;
+    s_taskGroups[index].imageFolderPath.clear();
+    s_taskGroups[index].imageFolderIndex = -1;
+    s_taskGroups[index].imageFolderCount = 0;
+    return true;
+}
+
+bool SetTaskGroupImageFolder(int index, const std::string& folderPath,
+    const std::string& previewImagePath, int imageCount)
+{
+    EnsureTaskGroupsFromToolsInternal();
+    if (index < 0 || index >= static_cast<int>(s_taskGroups.size()) ||
+        folderPath.empty() || previewImagePath.empty() || imageCount <= 0)
+        return false;
+    s_taskGroups[index].imagePath = previewImagePath;
+    s_taskGroups[index].imageFolderPath = folderPath;
+    s_taskGroups[index].imageFolderIndex = -1;
+    s_taskGroups[index].imageFolderCount = imageCount;
+    return true;
+}
+
+bool SetTaskGroupFolderImagePosition(int index, const std::string& imagePath,
+    int imageIndex, int imageCount)
+{
+    EnsureTaskGroupsFromToolsInternal();
+    if (index < 0 || index >= static_cast<int>(s_taskGroups.size()) ||
+        s_taskGroups[index].imageFolderPath.empty() || imagePath.empty() ||
+        imageIndex < 0 || imageCount <= 0 || imageIndex >= imageCount)
+        return false;
+    s_taskGroups[index].imagePath = imagePath;
+    s_taskGroups[index].imageFolderIndex = imageIndex;
+    s_taskGroups[index].imageFolderCount = imageCount;
     return true;
 }
 

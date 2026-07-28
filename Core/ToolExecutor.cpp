@@ -380,16 +380,16 @@ public:
     }
 };
 
-struct LegacyIToolRegister
+struct OpenCVYoloIToolRegister
 {
-    LegacyIToolRegister()
+    OpenCVYoloIToolRegister()
     {
         ToolRegistry::Register(11, []() -> std::unique_ptr<ITool> { return std::make_unique<OpenCVYoloITool>(); });
         ToolRegistry::RegisterName(11, "OpenCVYolo");
     }
 };
 
-static LegacyIToolRegister s_LegacyIToolRegister;
+static OpenCVYoloIToolRegister s_OpenCVYoloIToolRegister;
 
 void SyncIToolParams(ToolInstance& it, const VisionContext& context)
 {

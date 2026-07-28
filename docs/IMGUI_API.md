@@ -1,6 +1,6 @@
 # Dear ImGui C++ API 完整参考手册
 
-> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+> 文档同步日期：2026-07-27。API 参考版本仍为项目内 Dear ImGui 1.92.8 WIP；此文档只描述 UI API，不代表项目的任务或硬件执行规则。
 
 
 > Dear ImGui v1.92.8 WIP | 基于项目 `include/imgui/imgui.h` 整理
@@ -1049,7 +1049,6 @@ void PrimRectUV(const ImVec2& a, const ImVec2& b, const ImVec2& uv_a, const ImVe
 void PushClipRect(const ImVec2& clip_rect_min, const ImVec2& clip_rect_max, bool intersect_with_current_clip_rect = false);
 void PushClipRectFullScreen();
 void PopClipRect();
-```
 ```
 
 ---

@@ -1,6 +1,6 @@
 # OpenCV 5.0 YOLO 实验功能
 
-> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+> 文档同步日期：2026-07-27。主进程 DNN 和独立 helper 的当前数据传递方式已核对；该实验工具仍走统一 `ToolResult` 与任务输入链。
 
 
 当前工程已统一切到仓库内置 OpenCV 5.0；`YOLO OpenCV 5.0` 仍保留为 OpenCV DNN 后端，用于和 ONNX Runtime YOLO 工具对比。
@@ -32,7 +32,7 @@
 这个按钮会启动独立进程：
 - `x64\Release\opencv5_helper\opencv5_yolo_helper.exe`
 
-按钮会把当前图片或摄像头帧通过 helper 进程管道传入 OpenCV 5.0 DNN，日志中会输出 `image=<pipe>`、`forward_ms`、`wall_ms`、`detections=...`。这个路径用于隔离测试 OpenCV 5.0 classic/new graph engine，不再走临时 raw 文件。
+按钮会把当前图片或摄像头帧写入临时 BGR raw 文件，把路径、宽高、通道、阈值等参数传给 helper；helper 退出后主程序删除临时文件。日志输出后端、`forward_ms`、`wall_ms`、检测数量和退出码。该路径用于隔离测试 classic/new graph engine，不与主进程 DNN 会话共享状态。
 
 helper 和主程序一样使用项目本地 `redist/` 的 OpenCV 5.0 world DLL，不再依赖本机安装目录。
 

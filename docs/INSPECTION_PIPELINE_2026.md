@@ -1,9 +1,6 @@
 # 检测工具链架构与功能说明
 
-> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
-
-
-更新时间：2026-07-19
+> 文档同步日期：2026-07-27。任务级输入、并行执行、PLC 指定任务入口、ToolResult 来源/耗时和配方 version 4 已同步。
 
 ## 1. 架构边界
 
@@ -11,6 +8,7 @@
 
 - `UI`：编辑工具参数、ROI、Fixture 和判定条件，展示执行结果。
 - `Core`：维护图像、ROI、工具链、配方、帧导航、结果发布、Fixture 和执行调度。
+- `HardwareRuntimeService`：把相机/PLC 事件转换为 Core 执行请求；PLC Trigger 只选择一个任务，不绕过预检、判定或结果聚合。
 - `Algorithm`：实现无 UI 依赖的 `ITool`、卡尺、拟合、识别和图像处理算法。
 - `VisionContext`：向算法提供本次执行的图像快照、ROI、模板和统一结果上下文。
 - `ToolResult`：统一输出状态、区域、检测框、线、文本、测量值和调试图像。
@@ -24,6 +22,8 @@
 - 文件夹默认递归扫描子目录，并跳过目录循环。
 - 空目录、不支持格式和解码失败通过 Core 错误状态在 UI 中提示。
 - `FrameNavigation` 在 Core 中维护图片列表、当前索引和导航请求。
+
+正式任务还可以各自绑定单图或递归图片文件夹。`ToolController` 在每轮开始时为每个任务准备图像，文件夹每轮推进一张；同一任务内工具共用本轮输入。任务选择相机优先时先使用新相机帧，失败再回退任务图片或公共图片。完整规则见 `TASK_GROUPS.md`。
 
 ## 3. 工具结果和判定
 
@@ -156,11 +156,22 @@ OpenCV 5 的点去畸变 API 来自 `opencv2/geometry/3d.hpp`。所有距离和�
 
 ## 8. 配方格式
 
-配方版本已更新为 2。主要新增结构：
+当前保存器写出配方 version 4。加载器继续读取旧 version 1/2/3 字段；仓库案例配方保留 version 2，用于兼容性回归。主要结构包括任务输入、稳定工具 ID、Fixture 和测量参数：
 
 ```json
 {
-  "version": 2,
+  "version": 4,
+  "taskGroups": [
+    {
+      "name": "任务01",
+      "enabled": true,
+      "imagePath": "images/sample.png",
+      "imageFolderPath": "",
+      "imageFolderIndex": -1,
+      "imageFolderCount": 0,
+      "cameraPreferred": false
+    }
+  ],
   "tools": [
     {
       "fixture": {
@@ -192,13 +203,14 @@ OpenCV 5 的点去畸变 API 来自 `opencv2/geometry/3d.hpp`。所有距离和�
 }
 ```
 
-加载器仍读取版本 1 的顶层测量字段；缺少新增字段时使用默认值。
+加载器仍读取旧版本顶层测量字段；缺少任务、稳定 ID、输入或测量字段时使用默认值。
 
 ## 9. 结果导出
 
 JSON 结果包含：
 
-- `sourceToolIndex`、工具名、标签、状态和原因。
+- `sourceToolIndex`、`sourceToolId`、工具名、标签、状态和原因。
+- prepare/execute/publish/wall 以及后端预处理/推理/后处理耗时。
 - 区域的 bbox、面积、分数、角度、标签和轮廓。
 - 检测框、线、文本和全部测量/质量字段。
 
@@ -212,10 +224,13 @@ Markdown 报告包含每个工具的耗时、状态、区域、线、文本和�
 Test\x64\Debug\RegressionTests.exe --caliper-only
 Test\x64\Debug\RegressionTests.exe --policy-only
 Test\x64\Debug\RegressionTests.exe --qr-only
+Test\x64\Debug\RegressionTests.exe --task-images-only
+Test\x64\Debug\RegressionTests.exe --hardware-camera-only
+Test\x64\Debug\RegressionTests.exe --plc-handshake-only
 ```
 
 `--caliper-only` 覆盖边缘极性、亚像素位置、边缘对、RANSAC 直线/圆、XY 标定、单应矩阵、零畸变和 Fixture 刚性变换。
 
 `--policy-only` 覆盖导入、统一判定、工业测量编排、结果 ROI、实例化模板匹配、工具重排和配方 v2 往返。
 
-完整回归还会运行 OCR、YOLO、Blob、颜色、阈值、形态学、边缘和图像状态测试。当前环境若缺少完整 NCNN OCR 模型，完整回归可能在 `NCNN OCR bundled model load failed` 停止；这不属于工业测量改动。
+完整回归还会运行 OCR、YOLO、Blob、颜色、阈值、形态学、边缘、图像状态、任务输入和硬件回退测试。缺少可选模型时应验证明确的跳过/错误路径；发布验收使用完整依赖运行一次全套回归。

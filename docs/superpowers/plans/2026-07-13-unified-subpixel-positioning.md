@@ -1,6 +1,6 @@
 # Unified Subpixel Positioning Implementation Plan
 
-> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+> 历史实施计划：记录 2026-07-13 亚像素迁移步骤；清单和代理提示仅属于当时流程，不应重新执行，当前说明见 `../../INSPECTION_PIPELINE_2026.md`。
 
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

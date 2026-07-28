@@ -1,11 +1,13 @@
 # 任务执行说明
 
-> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+> 文档同步日期：2026-07-27。本文中的“任务”主要指开发工作项；产品内任务分组见 [TASK_GROUPS.md](TASK_GROUPS.md)，PLC 触发时序见 [HARDWARE_INTEGRATION.md](HARDWARE_INTEGRATION.md)。
 
 
 本文档用于给开发者或 AI 助手派发项目任务。目标是让每个任务都有明确输入、修改范围、验收标准和文档同步要求。
 
-## 当前任务队列
+## 当前开发工作项
+
+> 注意：本节是项目开发清单，不是 PLC Trigger 运行队列。PLC 工业握手采用单槽模型，Busy 或等待 ACK 期间的新 Trigger 会被忽略，不会排队补跑。
 
 后续开发按以下顺序推进，除非用户明确指定插队任务：
 
@@ -24,8 +26,9 @@
 | P2-2 | 标定与 Fixture 产品化 | ✅ 多点 X/Y 比例拟合、透视拟合、逐点残差、RMS/最大残差、标定文件导入导出和 Fixture 坐标轴已接入；后续补镜头畸变标定 | `Core/CalibrationFitter.*`、`Core/CalibrationModel.*`、`Core/FixtureTransform.*`, `UI/ImageViewer.*` |
 | P2-3 | SPC 与报表 | ✅ 均值、标准差、Cp/Cpk、测量项选择、统计窗口、趋势图和 CSV 导出 | `Core/ResultExporter.*`、`Core/InspectionHistory.*`、`UI/StatsWindow.*` |
 | P3-1 | 工具链体验 | ✅ 启用/禁用、Core 工具剪贴板复制粘贴、稳定 ID、运行前检查、依赖显示/循环校验、分组筛选及批量启用/标签/失败策略 | `Core/ToolChainPreflight.*`、`Core/ToolChainValidator.*`、`Core/ToolChainState.*`、`UI/ToolsWindow.*` |
+| P3-2 | 多任务配方 | ✅ 最多 16 个任务；任务级单图/文件夹、相机优先、全部/当前任务/单步、最多 4 任务并行及任务结果总览均已接入并回归 | `Core/ToolChainState.*`、`Core/ToolController.*`、`UI/ToolsWindow.cpp`、`UI/RunResultWindow.cpp` |
 | P4-1 | 工程发布 | ✅ GitHub clean runner 已完成主程序、回归工程、完整测试、运行包校验和 artifact 上传；Git LFS 与可迁移案例资源已验证 | `.github/workflows/`、`scripts/`、`docs/RELEASE.md` |
-| P4-2 | 设备平台化 | ✅ 通用途径已完成并接入主程序：设备连接与控制面板作为左侧同区域页签，配置 OpenCV/UVC/RTSP 相机、普通 TCP 文本、Modbus TCP、Modbus PLC、open62541 OPC UA；异步抓帧进入统一图像链，批次结果自动发布 OK/NG；厂商专用 SDK 由目标设备适配 | `Core/HardwareRuntimeService.*`、`Core/TcpTextAdapter.*`、`Core/OpenCvCameraAdapter.*`、`Core/ModbusTcpAdapter.*`、`Core/ModbusPlcAdapter.*`、`Core/Open62541OpcUaAdapter.*`、`UI/HardwareWindow.*`、`UI/Sidebar.*` |
+| P4-2 | 设备平台化 | ✅ 通用途径已完成并接入主程序：OpenCV/UVC/RTSP 相机、TCP、Modbus TCP、Modbus PLC、OPC UA；Modbus IO 表支持 Trigger/Busy/Done/OK/NG/Error/Heartbeat/ACK、单任务拍照触发、单点/整套握手测试、超时报警和指数退避重连；厂商专用 SDK 由目标设备适配 | `Core/HardwareRuntimeService.*`、`Core/HardwareSettingsService.*`、`Core/ModbusTcpAdapter.*`、`UI/HardwareWindow.*` |
 
 ## 任务描述模板
 
@@ -63,7 +66,7 @@
 在 IMgui_Opencv 项目里添加新工具：XXXX
 
 要求：
-1. 分配新的 type，避免占用当前 0-13（新增工具从 14 开始）。
+1. 分配新的 type，避免占用当前 0-17（新增工具从 18 开始）。
 2. 优先实现 ITool 接口。
 3. 输出优先使用 ToolResult。
 4. UI 参数放入 ToolInstance。
@@ -97,18 +100,18 @@
 3. 在 `Algorithm/ITool.cpp` 注册：
 
 ```cpp
-ToolRegistry::Register(14, []() -> std::unique_ptr<ITool> {
+ToolRegistry::Register(18, []() -> std::unique_ptr<ITool> {
     return std::make_unique<XXXXTool>();
 });
 ToolRegistry::RegisterName(14, "XXXX");
 ```
 
-4. 在 `UI/ToolsWindow.h` 的 `ToolInstance` 中添加参数。
+4. 在 `Core/ToolInstance.h` 的 `ToolInstance` 中添加参数。
 5. 在 `UI/ToolsWindow.cpp` 的 `g_ToolRegistry` 添加工具名称和分类。
 6. 在 `UI/ToolsWindow.cpp` 添加参数面板。
 7. 在 `Core/ToolExecutor.cpp` 同步 `ToolInstance` 参数到工具对象。
 8. 在 `ToolExecutor::Execute()` 中把新 type 分发到 `RunViaITool()`。
-9. 在 `Core/RecipeManager.h/.cpp` 增加序列化和反序列化字段。
+9. 优先在 `ToolInstance::ToRecipeJson()` / `LoadRecipeJson()` 增加参数字段；模板、参考图等资产兼容信息再更新 `RecipeToolInstance`。
 10. 在 `Windows_imgui.vcxproj` 和 `Windows_imgui.vcxproj.filters` 加入新源码文件。
 11. 更新相关文档。
 
@@ -128,12 +131,12 @@ ToolRegistry::RegisterName(14, "XXXX");
 实际结果：
 
 优先检查：
-- 空图保护：gImage.empty()
-- ROI 越界：selectedROI 是否有效
+- 空图保护：`ImageState::HasImage()` 或 `ctx.image.empty()`
+- ROI 越界：`ROIState`/执行快照中的 `selectedROI` 是否有效
 - cv::Rect 是否越界
 - ImGui Begin/End 是否成对
-- GPU 上传：gPendingUpload / gNeedUpload
-- 工具结果：gContext.unifiedResults
+- GPU 上传：`ImageState::SetDebugImage()`、`ImageLoadController::ProcessPendingUpload()`
+- 工具结果：`ResultPublisher → gContext.unifiedResults → ResultOverlayState`
 ```
 
 ## 修改文档任务模板
@@ -146,11 +149,14 @@ ToolRegistry::RegisterName(14, "XXXX");
 - docs/ALGORITHMS.md
 - docs/CODE_STRUCTURE.md
 - docs/CODE_ANALYSIS.md
+- docs/MODULE_RELATIONSHIP.md
+- docs/TASK_GROUPS.md（任务、输入或执行方式变化时）
+- docs/README.md（新增、改名或废弃文档时）
 
 检查重点：
 1. 工具数量是否正确。
 2. ITool 接入数量是否正确。
-3. ToolResult 字段是否与 Algorithm/ToolResult.h 一致。
+3. ToolResult 的来源、状态、耗时和结果字段是否与 `Algorithm/ToolResult.h` 一致。
 4. Roadmap 中已完成/未完成状态是否与代码一致。
 5. 新增文件是否加入项目结构说明。
 ```
@@ -173,8 +179,12 @@ ToolRegistry::RegisterName(14, "XXXX");
 | 11 | YOLO OpenCV 5.0 | 已接入 ITool，OpenCV DNN 实验工具 |
 | 12 | 原图 | 特殊工具，由 ToolController 恢复本轮原图 |
 | 13 | OCR 文字识别 | 已接入 ITool，PP-OCRv6 tiny + NCNN |
+| 14 | 二维码/条码 | 已接入 ITool，支持 QR、Code128、EAN、Data Matrix、PDF417 |
+| 15 | 工业测量 | 已接入 ITool，支持距离、线宽、角度、圆直径、标定与公差 |
+| 16 | 图像差分 | 已接入 ITool，支持参考图、阈值、面积和形态学过滤 |
+| 17 | 几何绘制 | 已接入 ITool，支持结果几何标注 |
 
-新增工具从 `14` 开始分配。
+新增工具从 `18` 开始分配。
 
 ## 验收清单
 
@@ -192,7 +202,8 @@ ToolRegistry::RegisterName(14, "XXXX");
 ## 常用验证命令
 
 ```powershell
-rg -n "TODO|未完成|待实现|5 个工具|5 种已接入|传统执行|专用执行|OpenCV 4.12" README.md docs -g *.md
-rg -n "ToolRegistry::Register|g_ToolRegistry|case 12|case 13|case 14|RunViaITool" Algorithm UI Core
+rg -n "TODO|未完成|待实现|5 个工具|5 种已接入|传统执行|专用执行|OpenCV 4.12|type 0-16|13 个 ITool" README.md docs -g *.md
+rg -n "ToolRegistry::Register|g_ToolRegistry|case 12|case 13|case 14|case 15|case 16|case 17|RunViaITool" Algorithm UI Core
 rg -n "ClCompile Include=.*XXXX|ClInclude Include=.*XXXX" Windows_imgui.vcxproj
+git diff --check
 ```

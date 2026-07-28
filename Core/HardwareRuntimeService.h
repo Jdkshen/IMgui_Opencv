@@ -3,6 +3,7 @@
 #include "HardwareAdapters.h"
 #include "../Algorithm/ToolResult.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -35,6 +36,49 @@ enum class HardwareOutputAdapterType
     TcpText
 };
 
+enum class HardwareIoSignal
+{
+    Trigger,
+    Busy,
+    Done,
+    Ok,
+    Ng,
+    Error,
+    Heartbeat,
+    Acknowledge
+};
+
+enum class HardwareIoDirection
+{
+    Input,
+    Output
+};
+
+struct HardwareIoMapping
+{
+    bool enabled = true;
+    HardwareIoSignal signal = HardwareIoSignal::Trigger;
+    HardwareIoDirection direction = HardwareIoDirection::Input;
+    std::uint16_t address = 0;
+    bool invert = false;
+    int pulseMs = 0;
+    std::string taskGroupName;
+};
+
+struct HardwareHandshakeConfig
+{
+    bool enabled = false;
+    std::vector<HardwareIoMapping> mappings;
+    int pollIntervalMs = 50;
+    int acknowledgementTimeoutMs = 3000;
+    int inspectionTimeoutMs = 30000;
+    int heartbeatIntervalMs = 1000;
+    bool autoReconnect = true;
+    int reconnectFailureThreshold = 3;
+    int reconnectInitialDelayMs = 250;
+    int reconnectMaxDelayMs = 5000;
+};
+
 struct HardwareCameraConnectionConfig
 {
     DeviceEndpoint endpoint;
@@ -64,6 +108,7 @@ struct HardwareOutputConnectionConfig
     int retryCount = 2;
     int retryDelayMs = 150;
     bool reconnectBeforeRetry = true;
+    HardwareHandshakeConfig handshake;
 };
 
 struct HardwareRuntimeSnapshot
@@ -80,14 +125,28 @@ struct HardwareRuntimeSnapshot
     bool cameraReconnecting = false;
     bool outputAutoPublish = false;
     bool outputQueueBusy = false;
+    bool outputReconnecting = false;
+    bool outputCommunicationAlarm = false;
+    bool handshakeEnabled = false;
+    bool handshakeActive = false;
+    bool handshakeAwaitingAcknowledge = false;
+    bool handshakeTestActive = false;
+    bool handshakeAlarm = false;
     int cameraFrameIndex = 0;
     int cameraConsecutiveFailures = 0;
     int cameraReconnectAttempts = 0;
     int cameraReconnectDelayMs = 0;
+    int outputConsecutiveFailures = 0;
+    int outputReconnectAttempts = 0;
+    int outputReconnectDelayMs = 0;
     std::size_t outputQueueDepth = 0;
     std::uint64_t outputSentCount = 0;
     std::uint64_t outputFailedCount = 0;
     std::uint64_t outputDroppedCount = 0;
+    std::uint64_t handshakeIgnoredTriggerCount = 0;
+    double outputLastCommunicationTimestampMs = 0.0;
+    std::string handshakeTaskGroupName;
+    std::string handshakeAlarmMessage;
     DeviceOperationResult lastCameraOperation;
     DeviceOperationResult lastOutputOperation;
 };
@@ -109,6 +168,7 @@ namespace HardwareRuntimeService
     DeviceOperationResult ConnectOutput(const HardwareOutputConnectionConfig& config);
     void DisconnectOutput();
     void ConfigureOutputBinding(const HardwareOutputBinding& binding, bool autoPublish);
+    void ConfigureModbusHandshake(const HardwareHandshakeConfig& config);
     void SetOutputAutoPublish(bool enabled);
     bool OutputAutoPublishEnabled();
 
@@ -118,6 +178,10 @@ namespace HardwareRuntimeService
 
     DeviceOperationResult PublishInspectionStatus(ToolResultStatus status,
         const HardwareOutputBinding& binding);
+    DeviceOperationResult TestIoMapping(std::size_t mappingIndex, bool active);
+    DeviceOperationResult RequestHandshakeTest(ToolResultStatus status = ToolResultStatus::Pass);
+    DeviceOperationResult RequestTaskInspection(const std::string& taskGroupName,
+        bool preferCamera = true); // 相机在线时抓新帧，否则使用任务文件夹/单图
 
     ToolResultStatus AggregateInspectionStatus(const std::vector<ToolResult>& results);
     DeviceOperationResult EnqueueConfiguredStatus(ToolResultStatus status);

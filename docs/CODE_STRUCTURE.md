@@ -1,50 +1,21 @@
 # 项目代码结构梳理
 
-> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+> 文档同步日期：2026-07-27。本文已补充任务分组、独立输入、任务并行、PLC 单槽握手和 16 任务触发的代码边界。
 
+## 2026-07-27 任务与硬件执行代码边界
 
+| 层次 | 文件 | 职责 |
+| --- | --- | --- |
+| Core | `Core/ToolChainState.*` | 保存最多 16 个任务的顺序、启用状态、输入设置和工具归属 |
+| Core | `Core/ToolController.*` | 生成执行顺序、准备任务图片、推进文件夹、处理相机回退和任务并行 |
+| Core | `Core/HardwareRuntimeService.*` | 异步相机帧、PLC 轮询、单槽 Trigger/Busy/Done/ACK 握手、结果输出与重连 |
+| Core | `Core/HardwareSettingsService.*` | 硬件设置持久化、IO 映射校验、任务 Trigger 自动补齐与标准映射生成 |
+| Core | `Core/RecipeManager.*` | 保存和加载任务图片、文件夹进度及相机优先字段 |
+| UI | `UI/ToolsWindow.cpp` | 任务管理、输入配置、执行全部/当前任务/单步/并行入口 |
+| UI | `UI/RunResultWindow.cpp` | 任务结果总览、详情、结果图、缩放和本轮总耗时 |
+| Test | `Test/regression_tests.cpp` | 验证任务顺序、独立图片、文件夹、相机回退、并行、PLC 指定任务与连续触发丢弃 |
 
-
-## 2026-07-25 added code structure
-
-This section records the main code boundaries added or expanded by the `codex/p0-p4-release` merge.
-
-### Algorithm
-
-| File | Responsibility |
-| --- | --- |
-| `Algorithm/GeometryDrawTool.h/.cpp` | Geometry drawing tool for publishing visual geometry results. |
-| `Algorithm/MeasurementTool.cpp` | Expanded measurement execution and result output. |
-| `Algorithm/OCRTool.cpp`, `Algorithm/WindowsPPOCREngine.*` | OCR model, dictionary, execution, and result handling updates. |
-| `Algorithm/OpenCVYoloDetector.*`, `Algorithm/YOLOTool.cpp` | OpenCV DNN YOLO backend and YOLO tool execution updates. |
-| `Algorithm/ShapeMatcher.cpp`, `Algorithm/ShapeTools.cpp` | Shape matching and shape-tool adapter updates. |
-| `Algorithm/TemplateMatchingTool.cpp` | Template matching parameter, ROI, and result publication updates. |
-
-### Core
-
-| File | Responsibility |
-| --- | --- |
-| `Core/FrameArchiveService.h/.cpp` | Archive inspection frames for hardware-triggered traceability and review. |
-| `Core/GeometryPrimitive.h/.cpp` | Store and process line, circle, polygon, and related geometry primitives. |
-| `Core/HardwareSettingsService.h/.cpp` | Persist camera, communication, and hardware connection settings. |
-| `Core/RecipeAutosaveService.h/.cpp` | Autosave recipe and tool-parameter snapshots. |
-| `Core/RotatedROI.h/.cpp` | Restore rotated ROI coordinates and map results back to image space. |
-| `Core/SpcDatabase.h/.cpp` | Store SPC and inspection statistics data. |
-| `Core/ToolExecutionGraph.h/.cpp` | Describe tool dependencies, execution order, and input/output relationships. |
-| `Core/ToolSettings.h` | Shared tool-setting fields. |
-| `Core/HardwareRuntimeService.*`, `Core/OpenCvCameraAdapter.*` | Camera trigger, exposure, inspection loop, and hardware output flow. |
-| `Core/ToolController.*`, `Core/ToolExecutor.*`, `Core/ToolInstance.*`, `Core/ToolChainState.*` | Tool execution, parameter persistence, dependency handling, and UI workflow support. |
-
-### UI and Renderer
-
-| File | Responsibility |
-| --- | --- |
-| `UI/GeometryDrawEditor.h/.cpp` | Parameter editor for geometry drawing tools. |
-| `UI/RunResultWindow.h/.cpp` | Central run-result review window. |
-| `UI/Tools/BasicToolPanels.h/.cpp` | Shared basic tool panels and controls. |
-| `UI/HardwareWindow.cpp` | Camera/communication connection, exposure, trigger, and loop controls. |
-| `UI/ImageViewer.cpp`, `UI/ROIManager.cpp`, `UI/ToolsWindow.cpp` | Image preview, ROI interaction, and tool workflow updates. |
-| `Renderer/PreviewTextureCache.h/.cpp` | Preview texture caching for result and tool preview rendering. |
+算法、设备、统计和渲染模块的其余边界见下文；任务的用户操作规则见 `docs/TASK_GROUPS.md`。
 本文档根据当前源码整理项目结构、模块职责、主流程和主要数据流，方便后续维护、重构和新增算法工具。
 
 ## 项目定位
@@ -70,7 +41,7 @@ IMgui_Opencv/
 ├── Algorithm/              # 视觉算法和 ITool 工具实现
 ├── Core/                   # 应用核心、上下文、调度、资源与配方
 ├── UI/                     # Dear ImGui 窗口、交互和 ROI 管理
-├── Renderer/               # 渲染辅助，目前主要是字体管理
+├── Renderer/               # 字体、工具预览图和任务结果图纹理缓存
 ├── Log/                    # 日志系统
 ├── include/                # 第三方头文件和 ImGui 源码
 ├── assets/                 # 字体、测试图片等资源
@@ -94,7 +65,7 @@ flowchart TD
     A["Windows_imgui.cpp<br/>入口 / 主循环"] --> B["UI 层<br/>窗口、面板、ROI、用户交互"]
     B --> C["Core 层<br/>上下文、调度、资源、配方"]
     C --> D["Algorithm 层<br/>OpenCV / YOLO / ITool"]
-    C --> E["Renderer / Log<br/>字体、日志、DX12 辅助"]
+    C --> E["Renderer / Log<br/>字体、预览纹理缓存、日志"]
     D --> F["ToolResult<br/>统一算法输出"]
     F --> B
 ```
@@ -103,7 +74,7 @@ flowchart TD
 
 - UI 负责显示窗口、收集参数、编辑 ROI 和触发执行。
 - Core 负责保存运行上下文、调度工具、执行工具、加载资源和管理配方。
-- Algorithm 封装具体视觉算法；当前 type 0-11、13 已接入 `ITool`，type 12 原图由 `ToolController` 特殊处理。
+- Algorithm 封装具体视觉算法；当前 type 0-11、13-17 已接入 `ITool`，type 12 原图由 `ToolController` 特殊处理。
 - 渲染纹理上传、图片显示状态、部分工具链状态仍通过全局变量连接。
 
 ## 程序入口和主循环
@@ -135,12 +106,15 @@ UI::ShowStatsWindow()
 UI::ShowHardwareWindow()
 UI::ShowOpenCV()
 UI::ShowToolsWindow()
-ThresholdTool::ShowThresholdWindow()
-TemplateMatch::ShowWindow()
-TemplateMatch::ShowTemplateEditor()
-TemplateMatch::CheckAsyncResult()
+UI::ShowRunResultWindow()
 VideoCapture::Update()
+HardwareRuntimeService::Tick()
+LiveYoloRunner::Update()
+ImageLoadController::Update()
+FrameRenderer::RenderAndPresent()
 ```
+
+`UI::ShowToolsWindow()` 内部每帧调用 `ToolController::Tick()`，因此单步、批量、循环和并行任务的推进仍由 Core 调度器完成，不是 UI 直接执行算法。
 
 ## UI 模块
 
@@ -148,10 +122,11 @@ VideoCapture::Update()
 
 | 文件 | 职责 |
 | --- | --- |
-| `DockSpaceHost.*` | 主 DockSpace、菜单栏、全局窗口显示开关；同时定义 ROI 基础结构 |
+| `DockSpaceHost.*` | 主 DockSpace、菜单栏和全局窗口显示开关；通过 `Core/ROI.h` 使用 ROI 类型 |
 | `ImageViewer.*` | 图片窗口、缩放平移、文件夹图片列表、上一张/下一张、图片清理 |
 | `ROIManager.*` | ROI 创建、选择、拖动、缩放、绘制、坐标转换 |
-| `ToolsWindow.*` | 工具实例列表、参数 UI、批量执行/单步执行/循环执行入口 |
+| `ToolsWindow.*` | 工具实例、任务管理、任务输入，以及全部/当前任务/单步/循环/任务并行入口 |
+| `RunResultWindow.*` | 任务结果总览、任务详情、结果图和本轮总耗时 |
 | `Sidebar.*` | 左侧控制面板页签 |
 | `HardwareWindow.*` | 与控制面板位于同一左侧停靠区的设备连接页签 |
 | `LogWindow.*` | 日志窗口显示 |
@@ -159,7 +134,7 @@ VideoCapture::Update()
 
 ### ROI 数据结构
 
-ROI 定义在 `UI/DockSpaceHost.h`。
+ROI 定义在 `Core/ROI.h`，使用图像像素坐标存储。`runtimeId` 用于 UI 运行期关联，`type` 表示 ROI 类型，`start/end` 保存主要端点或包围范围，`angle` 保存矩形旋转角度，`points` 保存多边形顶点。
 
 支持类型：
 
@@ -177,7 +152,11 @@ ROI 定义在 `UI/DockSpaceHost.h`。
 - `CircleRadius()`：圆形 ROI 半径
 - `IsEmpty()`：判断 ROI 是否为空
 
-ROI 交互主要在 `UI/ROIManager.cpp` 中完成，包含控制点、拖动、缩放、绘制和不同 ROI 类型的处理。
+ROI 相关职责分为三层：
+
+- `Core/ROIState.*`：持有 ROI 集合和当前选择。
+- `Core/ROIEditorState.*`：持有绘制序列、拖动、控制点等编辑状态。
+- `UI/ROIManager.cpp`：负责坐标转换、命中检测、绘制，并调用 Core 状态接口完成交互。
 
 ## Core 模块
 
@@ -200,7 +179,8 @@ ROI 交互主要在 `UI/ROIManager.cpp` 中完成，包含控制点、拖动、�
 | `ImageLoadController.*` | 图片加载请求、异步加载回调和上传调度 |
 | `ImageImportService.*` | 单图/递归文件夹导入、导航与输入切换状态清理 |
 | `HardwareAdapters.*` | 工业相机、PLC、Modbus TCP、OPC UA 适配器接口与注册 |
-| `HardwareRuntimeService.*` | 设备连接、异步相机抓帧、结果聚合及 OK/NG 到 PLC/Modbus/OPC UA 的运行协调 |
+| `HardwareRuntimeService.*` | 设备连接、异步相机抓帧、PLC 输入轮询、单槽握手、结果聚合及 OK/NG/Error 输出协调 |
+| `HardwareSettingsService.*` | 硬件 JSON 设置、IO 表校验、旧配置兼容和任务 Trigger 地址同步 |
 | `OpenCvCameraAdapter.*` | UVC、摄像头索引和 OpenCV 视频流 URL 的通用相机实现 |
 | `ModbusTcpAdapter.*` | Winsock Modbus TCP 01/03/05/06 客户端与协议校验 |
 | `TcpTextAdapter.*` | 普通 TCP 文本结果输出，支持可配置 Pass/Fail 内容且不等待响应 |
@@ -212,11 +192,11 @@ ROI 交互主要在 `UI/ROIManager.cpp` 中完成，包含控制点、拖动、�
 | `VisionContext.*` | 统一视觉上下文，保存图片、ROI、模板和结果 |
 | `ImageViewState.*` | Core-owned image zoom, pan, canvas position, and grid settings |
 | `ToolInstance.h` / `ToolTypes.h` | 工具实例参数、类型常量和工具名称 |
-| `ToolChainState.*` | 工具链输入/输出图像状态 |
+| `ToolChainState.*` | 工具链状态、任务定义、任务顺序、任务图片和工具归属 |
 | `ToolROIService.*` | 工具搜索 ROI 与测量 ROI 的编辑、恢复、同步、回滚和删除 |
 | `ResultOverlayState.*` | 统一结果、实时检测和 Fixture 叠加层查询与显示策略 |
 | `ToolExecutor.*` | 统一工具执行入口，按工具类型分发 |
-| `ToolController.*` | 工具执行调度器，支持单个、全部、单步和循环执行 |
+| `ToolController.*` | 工具执行调度器，支持单个、全部、当前任务、任务单步、循环和任务并行 |
 | `ResultPublisher.h` | 结果发布相关声明 |
 | `ResultExporter.*` | JSON 结果、PNG 结果截图和 Markdown 运行报告导出 |
 | `ImageUtils.h` | 图像格式转换和安全上传辅助 |
@@ -265,14 +245,17 @@ extern VisionContext gContext;
 ```cpp
 ToolController::RequestRun(int toolIndex)
 ToolController::RequestRunAll(bool loop = false)
+ToolController::RequestRunTaskGroup(const std::string& groupName, bool loop = false)
 ToolController::RequestStepNext()
+ToolController::RequestStepNextTaskGroup(const std::string& groupName)
 ToolController::RequestStepReset()
 ToolController::Tick()
 ToolController::Reset()
 ```
 
-每帧由 `ToolsWindow` 调用 `Tick()`，调度器再调用 `ToolExecutor::Execute()`。
-批量执行的计时口径是“工具执行耗时累加”：`ExecuteToolAt()` 会记录当前工具的 `s_stepTimeMs`，批量模式把每个工具的 `s_stepTimeMs` 累加为 `s_batchTotalMs`。因此底部“总耗时”不包含逐帧调度等待、UI 刷新或 60FPS 帧间隔；“上步耗时”和工具行右侧耗时保持同一口径。
+每帧由 `ToolsWindow` 调用 `Tick()`，调度器再调用 `ToolExecutor::Execute()`。任务顺序由 `BuildBatchExecutionOrder()` 生成：跳过禁用任务，按正式任务顺序收集工具，最后加入未分组工具。
+
+工具行和“上步耗时”记录单工具执行成本；一轮完成时 `s_batchTotalMs` 使用开始到完成的墙钟时间。结果总览标题的“本轮总耗时”因此包含逐帧调度和并行等待，更接近用户实际等待时间。任务详情中的任务耗时仍由该任务各工具耗时汇总。
 
 ### ToolExecutor
 
@@ -284,7 +267,7 @@ ToolController::Reset()
 | --- | --- | --- |
 | 0 | 边缘检测 | `RunViaITool()`，`EdgeTool` |
 | 1 | 模板匹配 | `RunViaITool()`，`TemplateMatchITool` |
-| 2 | Blob 分析 | `RunViaITool()`，`BlobTool`，当前主要为占位/待增强 |
+| 2 | Blob 分析 | `RunViaITool()`，`BlobTool`，特征筛选、区域与统一测量判定 |
 | 3 | 阈值调试 | `RunViaITool()`，`ThresholdITool` |
 | 4 | YOLO 检测 | `RunViaITool()` |
 | 5 | 轮廓分析 | `RunViaITool()` |
@@ -296,6 +279,10 @@ ToolController::Reset()
 | 11 | YOLO OpenCV 5.0 | `RunViaITool()`，`OpenCVYoloITool`，OpenCV DNN 实验工具 |
 | 12 | 原图 | `ToolController` 中恢复本轮原图，作为工具链重置节点 |
 | 13 | OCR 文字识别 | `RunViaITool()`，`OCRTool`，PP-OCRv6 tiny + NCNN |
+| 14 | 二维码/条码识别 | `RunViaITool()`，`QRCodeTool`，ZXing-cpp/OpenCV |
+| 15 | 工业测量 | `RunViaITool()`，`MeasurementTool`，卡尺、拟合、标定和公差 |
+| 16 | 图像差分 | `RunViaITool()`，`DifferenceTool`，参考图差异区域 |
+| 17 | 几何绘制 | `RunViaITool()`，`GeometryDrawTool`，配方化几何图元 |
 
 `RunViaITool()` 会把 `ToolInstance` 中的 UI 参数同步到具体 `ITool` 实例，再把当前图像、ROI、模板写入 `gContext`，最后执行：
 
@@ -303,11 +290,7 @@ ToolController::Reset()
 ToolResult result = it.toolImpl->Execute(gContext);
 ```
 
-执行结果统一放到：
-
-```cpp
-gContext.unifiedResults
-```
+执行结果经 `ResultPublisher` 发布到 `gContext.unifiedResults`；并行任务产生的脱离主执行上下文结果由 `ToolExecutor::PublishDetached()` 发布。显示层再通过 `ResultOverlayState::Results()` 查询，最终由 `ImageViewer::DrawUnifiedResults()` 统一叠加。
 
 ## Algorithm 模块
 
@@ -388,6 +371,10 @@ ITool::Create(type)
 
 | 字段 | 用途 |
 | --- | --- |
+| `sourceToolIndex/sourceToolId` | 结果来源工具的兼容索引与稳定 ID |
+| `status/statusReason` | Pass/Fail/Error 与判定原因 |
+| `success/skipped/message` | 算法成功、跳过和运行消息 |
+| `timing` | prepare/execute/publish/wall 与后端分段耗时 |
 | `measurements` | 面积、长度、角度等通用测量值 |
 | `regions` | 轮廓、Blob、形状匹配区域 |
 | `detections` | YOLO/分类检测框 |
@@ -399,7 +386,7 @@ ITool::Create(type)
 
 ## 工具实例系统
 
-工具实例定义在 `UI/ToolsWindow.h` 的 `ToolInstance`。
+工具实例定义在 `Core/ToolInstance.h` 的 `ToolInstance`，UI 只编辑实例参数。
 
 每个 `ToolInstance` 保存一个工具的全部 UI 参数和运行状态，例如：
 
@@ -419,15 +406,18 @@ ITool::Create(type)
 
 ```mermaid
 flowchart LR
-    A["ToolsWindow<br/>用户点击执行"] --> B["ToolController<br/>排队 / 批量 / 单步"]
+    A["ToolsWindow<br/>用户点击执行"] --> B["ToolController<br/>请求 / 批量 / 单步"]
     B --> C["ToolExecutor::Execute(type, instance)"]
     C --> D{"工具类型"}
     D --> E["特殊工具<br/>type 12 原图"]
-    D --> F["ITool 工具<br/>type 0-11、13"]
+    D --> F["ITool 工具<br/>type 0-11、13-17"]
     F --> G["VisionContext"]
     G --> H["ToolResult"]
     E --> I["恢复本轮原图"]
-    H --> J["gContext.unifiedResults"]
+    H --> J["ResultPublisher / PublishDetached"]
+    J --> K["gContext.unifiedResults"]
+    K --> L["ResultOverlayState"]
+    L --> M["ImageViewer::DrawUnifiedResults"]
 ```
 
 ## 数据流
@@ -435,13 +425,39 @@ flowchart LR
 ### 图片数据流
 
 ```text
-文件选择 / 文件夹浏览
-    -> AsyncImageLoader / OpenCVTest
+文件选择 / 文件夹浏览 / 相机帧
+    -> ImageImportService / FrameNavigation / HardwareRuntimeService
+    -> AsyncImageLoader（文件异步解码）
     -> ImageState::Current() / ImageState::Original()
     -> SafeConvertToRGBA()
     -> DX12 纹理上传
     -> UI::ShowOpenCV() 显示
 ```
+
+任务执行还会在进入工具链前解析任务输入：
+
+```text
+已连接相机新帧（仅相机优先任务）
+    -> 任务文件夹或任务单图
+    -> 当前公共图片
+    -> 同一任务内按工具顺序传递
+    -> ToolController::GetTaskResultImage() 保存任务结果图
+```
+
+PLC 指定任务触发不复用“执行全部”的任务并发队列，而是使用独立单槽握手：
+
+```text
+Modbus FC01 轮询 Trigger / ACK
+    -> 空闲且出现目标 Trigger 上升沿
+    -> HardwareRuntimeService 记录唯一待执行任务并输出 Busy
+    -> UI 主线程 Tick 请求 ToolController 只执行该任务
+    -> 在线相机 / 任务文件夹 / 任务单图 / 公共图片
+    -> 聚合 Pass / Fail / Error
+    -> Busy OFF + Done + OK/NG/Error
+    -> 等待 ACK 上升沿并清除输出
+```
+
+从请求已接收直到 ACK 完成期间，额外 Trigger 只增加忽略计数，不进入队列、不在后续补跑。相机在线但本轮抓帧失败时输出 Error；只有相机未连接时才回退到任务文件夹或单图。
 
 ### 视频数据流
 
@@ -463,8 +479,10 @@ flowchart LR
     -> ToolExecutor::Execute()
     -> Algorithm / ITool
     -> ToolResult
+    -> ResultPublisher / ToolExecutor::PublishDetached()
     -> gContext.unifiedResults
-    -> UI 叠加显示 / 日志输出
+    -> ResultOverlayState::Results()
+    -> ImageViewer::DrawUnifiedResults() / 日志输出
 ```
 
 ### 配方数据流
@@ -564,26 +582,28 @@ flowchart LR
 
 ### Renderer
 
-`Renderer/FontManager.*` 负责中文字体加载。主入口在初始化 ImGui 后调用：
+`Renderer/FontManager.*` 负责中文字体和工具图标加载。主入口在初始化 ImGui 后调用：
 
 ```cpp
 FontManager::InitFonts(main_scale);
 ```
 
+`Renderer/PreviewTextureCache.*` 负责缓存工具预览图和任务结果图对应的 DX12 纹理，避免 UI 每帧重复创建资源，并在图像更新或缓存清理时释放失效纹理。
+
 ## 当前结构特点
 
 1. 项目已经形成比较清晰的 UI/Core/Algorithm 分层。
-2. `ITool + VisionContext + ToolResult` 已成为 type 0-11、13 的统一执行通路。
-3. `ToolExecutor` 当前主要负责把 type 0-11、13 分发到 `RunViaITool()`，type 12 原图由 `ToolController` 特殊处理。
-4. 批量执行总耗时按各工具执行耗时累加，不再把跨帧等待算入算法耗时。
+2. `ITool + VisionContext + ToolResult` 已成为 type 0-11、13-17 的统一执行通路。
+3. `ToolExecutor` 当前主要负责把 type 0-11、13-17 分发到 `RunViaITool()`，type 12 原图由 `ToolController` 特殊处理。
+4. 工具耗时和整轮墙钟耗时分别记录，结果总览显示用户实际等待的整轮时间。
 5. `ToolInstance` 保存了大量 UI 参数，是工具实例和配方系统的核心。
-6. ROI 数据结构放在 UI 头文件中，Core 和 Algorithm 会间接依赖 UI 类型。
+6. ROI 数据结构位于 `Core/ROI.h`，状态与编辑过程分别由 `ROIState`、`ROIEditorState` 管理，UI 只负责绘制和交互转发。
 7. 部分中文注释在当前查看环境下显示为乱码，说明文件编码或读取编码需要统一确认。
 8. `include/` 保留第三方头文件，`redist/` 保留本地运行时目录；体积较大的 DLL/lib 建议通过 Release 包或 Git LFS 管理。
 
 ## 新增工具的一般步骤
 
-如果新增一个视觉工具，建议继续走 `ITool` 路线，并从 type 14 开始分配编号：
+如果新增一个视觉工具，建议继续走 `ITool` 路线，并从 type 18 开始分配编号：
 
 1. 在 `Algorithm/` 下新增工具类，实现 `ITool`。
 2. 在 `ITool.cpp` 的自动注册逻辑里注册新的 `type` 和名称。

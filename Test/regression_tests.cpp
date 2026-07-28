@@ -69,9 +69,11 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <unordered_map>
 
 namespace
 {
@@ -220,6 +222,8 @@ struct TestInputCaptureTool final : ITool
             std::this_thread::sleep_for(std::chrono::milliseconds(delay));
         ToolResult result;
         result.toolName = GetName();
+        result.success = true;
+        result.status = ToolResultStatus::Pass;
         if (captured)
             *captured = context.image.empty() ? -1 : static_cast<int>(context.image.ptr<uchar>(0)[0]);
         if (output >= 0)
@@ -412,14 +416,24 @@ struct TestModbusAdapter final : IModbusTcpAdapter
     void Disconnect() override { state = DeviceConnectionState::Disconnected; }
     DeviceConnectionState ConnectionState() const override { return state; }
     std::string LastError() const override { return {}; }
-    DeviceOperationResult ReadCoils(std::uint16_t, std::uint16_t count,
+    DeviceOperationResult ReadCoils(std::uint16_t address, std::uint16_t count,
         std::vector<bool>& values) override
     {
-        values.assign(count, nextCoilValue);
+        std::lock_guard<std::mutex> lock(ioMutex);
+        values.clear();
+        values.reserve(count);
+        for (std::uint16_t offset = 0; offset < count; ++offset)
+        {
+            const auto found = coilValues.find(
+                static_cast<std::uint16_t>(address + offset));
+            values.push_back(found != coilValues.end()
+                ? found->second : nextCoilValue);
+        }
         return {true, {}};
     }
     DeviceOperationResult WriteCoil(std::uint16_t address, bool value) override
     {
+        std::lock_guard<std::mutex> lock(ioMutex);
         if (failWritesRemaining > 0)
         {
             --failWritesRemaining;
@@ -428,6 +442,8 @@ struct TestModbusAdapter final : IModbusTcpAdapter
         }
         lastAddress = address;
         lastValue = value;
+        coilValues[address] = value;
+        writeHistory.emplace_back(address, value);
         return {true, {}};
     }
     DeviceOperationResult ReadHoldingRegisters(std::uint16_t, std::uint16_t count,
@@ -452,6 +468,9 @@ struct TestModbusAdapter final : IModbusTcpAdapter
     std::uint16_t lastRegisterValue = 0;
     int failWritesRemaining = 0;
     int connectCount = 0;
+    std::unordered_map<std::uint16_t, bool> coilValues;
+    std::vector<std::pair<std::uint16_t, bool>> writeHistory;
+    std::mutex ioMutex;
 };
 
 struct ScriptedModbusTransport final : IModbusTcpTransport
@@ -1371,6 +1390,10 @@ void TestRecipeRoundTrip()
     data.rois.push_back({1.0f, 2.0f, 30.0f, 40.0f, 27.5f, 0});
     data.taskGroups.push_back({"检测组", true, "assets/images/task-a.jpg"});
     data.taskGroups.push_back({"空任务", false});
+    data.taskGroups[0].imageFolderPath = "assets/images/task-a";
+    data.taskGroups[0].imageFolderIndex = 3;
+    data.taskGroups[0].imageFolderCount = 8;
+    data.taskGroups[0].cameraPreferred = true;
 
     ToolInstance tool;
     tool.type = 4;
@@ -1529,6 +1552,10 @@ void TestRecipeRoundTrip()
     Require(loaded.taskGroups.size() == 2 && loaded.taskGroups[0].name == "检测组" &&
         loaded.taskGroups[0].enabled &&
         loaded.taskGroups[0].imagePath == "assets/images/task-a.jpg" &&
+        loaded.taskGroups[0].imageFolderPath == "assets/images/task-a" &&
+        loaded.taskGroups[0].imageFolderIndex == 3 &&
+        loaded.taskGroups[0].imageFolderCount == 8 &&
+        loaded.taskGroups[0].cameraPreferred &&
         loaded.taskGroups[1].name == "空任务" &&
         !loaded.taskGroups[1].enabled, "task-group order/state round-trip regressed");
     Require(loaded.tools.size() == 4, "tool count round-trip regressed");
@@ -2660,6 +2687,357 @@ void TestHardwareRuntimeAutomation()
     ImageState::Clear();
 }
 
+void TestModbusHandshakeTriggersIndependentTaskCameraRun()
+{
+    HardwareRuntimeService::Shutdown();
+    ToolController::Reset();
+    ToolChainState::ClearTools();
+    ToolChainState::ReplaceTaskGroups({});
+    ImageState::Clear();
+
+    Require(ToolChainState::CreateTaskGroup("任务A") >= 0 &&
+        ToolChainState::CreateTaskGroup("任务B") >= 0,
+        "PLC handshake task setup failed");
+
+    int capturedTaskA = -1;
+    int taskBExecutions = 0;
+    ToolInstance taskA;
+    taskA.type = 2;
+    taskA.groupName = "任务A";
+    taskA.toolImpl = std::make_unique<TestInputCaptureTool>(&capturedTaskA);
+    ToolChainState::Tools().push_back(std::move(taskA));
+    ToolInstance taskB;
+    taskB.type = 2;
+    taskB.groupName = "任务B";
+    taskB.toolImpl = std::make_unique<TestCountingTool>(&taskBExecutions);
+    ToolChainState::Tools().push_back(std::move(taskB));
+    ImageState::SetImage(cv::Mat(4, 6, CV_8UC1, cv::Scalar(3)));
+
+    auto camera = std::make_unique<TestCameraAdapter>(nullptr);
+    TestCameraAdapter* cameraView = camera.get();
+    HardwareAdapterService::SetCamera(std::move(camera));
+    Require(cameraView->Connect({"plc-camera", 0, {}}).success,
+        "PLC handshake camera connect failed");
+    HardwareCameraConnectionConfig cameraConfig;
+    cameraConfig.sourceName = "plc-camera";
+    cameraConfig.autoCapture = false;
+    cameraConfig.grabTimeoutMs = 100;
+    Require(HardwareRuntimeService::StartCameraCapture(cameraConfig).success,
+        "PLC handshake camera worker failed to start");
+
+    auto modbus = std::make_unique<TestModbusAdapter>();
+    TestModbusAdapter* modbusView = modbus.get();
+    Require(modbusView->Connect({"127.0.0.1", 502, "1"}).success &&
+        HardwareAdapterService::Register("plc-handshake", std::move(modbus)),
+        "PLC handshake Modbus adapter setup failed");
+
+    HardwareOutputBinding binding;
+    binding.kind = HardwareOutputKind::ModbusCoil;
+    binding.adapterKey = "plc-handshake";
+    binding.address = 13;
+    HardwareRuntimeService::ConfigureOutputBinding(binding, false);
+
+    HardwareHandshakeConfig handshake;
+    handshake.enabled = true;
+    handshake.pollIntervalMs = 10;
+    handshake.acknowledgementTimeoutMs = 5000;
+    handshake.inspectionTimeoutMs = 3000;
+    handshake.heartbeatIntervalMs = 1000;
+    handshake.mappings = {
+        {true, HardwareIoSignal::Trigger, HardwareIoDirection::Input,
+            10, false, 0, "任务A"},
+        {true, HardwareIoSignal::Busy, HardwareIoDirection::Output,
+            11, false, 0, {}},
+        {true, HardwareIoSignal::Done, HardwareIoDirection::Output,
+            12, false, 30, {}},
+        {true, HardwareIoSignal::Ok, HardwareIoDirection::Output,
+            13, false, 0, {}},
+        {true, HardwareIoSignal::Ng, HardwareIoDirection::Output,
+            14, false, 0, {}},
+        {true, HardwareIoSignal::Error, HardwareIoDirection::Output,
+            15, false, 0, {}},
+        {true, HardwareIoSignal::Heartbeat, HardwareIoDirection::Output,
+            16, false, 0, {}},
+        {true, HardwareIoSignal::Acknowledge, HardwareIoDirection::Input,
+            17, false, 0, {}}
+    };
+    HardwareRuntimeService::ConfigureModbusHandshake(handshake);
+
+    const std::uint64_t ignoredBeforeSingleSlot =
+        HardwareRuntimeService::Snapshot().handshakeIgnoredTriggerCount;
+    const DeviceOperationResult acceptedSingleSlot =
+        HardwareRuntimeService::RequestTaskInspection("任务A", false);
+    const DeviceOperationResult rejectedSecondTask =
+        HardwareRuntimeService::RequestTaskInspection("任务B", false);
+    const DeviceOperationResult rejectedHandshakeTest =
+        HardwareRuntimeService::RequestHandshakeTest(ToolResultStatus::Pass);
+    Require(acceptedSingleSlot.success && !rejectedSecondTask.success &&
+        !rejectedHandshakeTest.success &&
+        HardwareRuntimeService::Snapshot().handshakeIgnoredTriggerCount ==
+            ignoredBeforeSingleSlot + 1,
+        "PLC handshake accepted more than one pending request");
+    HardwareRuntimeService::ConfigureModbusHandshake(handshake);
+
+    auto setCoil = [modbusView](std::uint16_t address, bool value)
+    {
+        std::lock_guard<std::mutex> lock(modbusView->ioMutex);
+        modbusView->coilValues[address] = value;
+    };
+    auto hasWrite = [modbusView](std::uint16_t address, bool value)
+    {
+        std::lock_guard<std::mutex> lock(modbusView->ioMutex);
+        return std::find(modbusView->writeHistory.begin(),
+            modbusView->writeHistory.end(), std::make_pair(address, value)) !=
+            modbusView->writeHistory.end();
+    };
+
+    setCoil(10, false);
+    setCoil(17, false);
+    for (int tick = 0; tick < 20; ++tick)
+    {
+        HardwareRuntimeService::Tick();
+        ToolController::Tick();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    setCoil(10, true);
+
+    bool awaitingAcknowledge = false;
+    for (int tick = 0; tick < 1200; ++tick)
+    {
+        HardwareRuntimeService::Tick();
+        ToolController::Tick();
+        const HardwareRuntimeSnapshot snapshot = HardwareRuntimeService::Snapshot();
+        if (snapshot.handshakeAwaitingAcknowledge)
+        {
+            awaitingAcknowledge = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    Require(awaitingAcknowledge && capturedTaskA == 17 &&
+        taskBExecutions == 0 &&
+        ToolController::GetLastRunTaskGroupName() == "任务A",
+        "PLC Trigger did not capture a frame and run only its mapped task");
+    for (int tick = 0; tick < 300 &&
+        !(hasWrite(11, true) && hasWrite(11, false) &&
+            hasWrite(12, true) && hasWrite(13, true)); ++tick)
+    {
+        HardwareRuntimeService::Tick();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    Require(hasWrite(11, true) && hasWrite(11, false) &&
+        hasWrite(12, true) && hasWrite(13, true) &&
+        !hasWrite(14, true) && !hasWrite(15, true),
+        "PLC handshake did not publish Busy/Done/OK outputs");
+
+    setCoil(17, true);
+    bool acknowledged = false;
+    for (int tick = 0; tick < 300; ++tick)
+    {
+        HardwareRuntimeService::Tick();
+        ToolController::Tick();
+        if (!HardwareRuntimeService::Snapshot().handshakeActive)
+        {
+            acknowledged = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    Require(acknowledged && hasWrite(13, false),
+        "PLC ACK did not close the handshake and reset result outputs");
+
+    HardwareRuntimeService::DisconnectCamera();
+    const fs::path folder = fs::temp_directory_path() /
+        ("imgui_opencv_plc_folder_" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::error_code folderError;
+    fs::create_directories(folder, folderError);
+    const fs::path firstFolderImage = folder / "01.png";
+    const fs::path secondFolderImage = folder / "02.png";
+    Require(!folderError &&
+        cv::imwrite(firstFolderImage.string(),
+            cv::Mat(8, 8, CV_8UC1, cv::Scalar(41))) &&
+        cv::imwrite(secondFolderImage.string(),
+            cv::Mat(8, 8, CV_8UC1, cv::Scalar(93))) &&
+        ToolChainState::SetTaskGroupImageFolder(
+            0, folder.string(), firstFolderImage.string(), 2),
+        "PLC folder fallback setup failed");
+
+    auto runFolderTrigger = [&](int expectedPixel, int expectedFolderIndex,
+        int busyTriggerCount)
+    {
+        setCoil(10, false);
+        setCoil(17, false);
+        for (int tick = 0; tick < 30; ++tick)
+        {
+            HardwareRuntimeService::Tick();
+            ToolController::Tick();
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        {
+            std::lock_guard<std::mutex> lock(modbusView->ioMutex);
+            modbusView->writeHistory.clear();
+        }
+        capturedTaskA = -1;
+        const std::uint64_t ignoredBefore =
+            HardwareRuntimeService::Snapshot().handshakeIgnoredTriggerCount;
+        setCoil(10, true);
+
+        if (busyTriggerCount > 0)
+        {
+            for (int tick = 0; tick < 300; ++tick)
+            {
+                HardwareRuntimeService::Tick();
+                ToolController::Tick();
+                if (HardwareRuntimeService::Snapshot().handshakeActive)
+                    break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            for (int trigger = 0; trigger < busyTriggerCount; ++trigger)
+            {
+                setCoil(10, false);
+                for (int tick = 0; tick < 12; ++tick)
+                {
+                    HardwareRuntimeService::Tick();
+                    ToolController::Tick();
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                }
+                setCoil(10, true);
+                for (int tick = 0; tick < 12; ++tick)
+                {
+                    HardwareRuntimeService::Tick();
+                    ToolController::Tick();
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                }
+            }
+        }
+
+        bool folderRunAwaitingAck = false;
+        for (int tick = 0; tick < 1200; ++tick)
+        {
+            HardwareRuntimeService::Tick();
+            ToolController::Tick();
+            if (HardwareRuntimeService::Snapshot().handshakeAwaitingAcknowledge)
+            {
+                folderRunAwaitingAck = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        for (int tick = 0; tick < 300 &&
+            !(hasWrite(11, true) && hasWrite(11, false) &&
+                hasWrite(12, true) && hasWrite(13, true)); ++tick)
+        {
+            HardwareRuntimeService::Tick();
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        Require(folderRunAwaitingAck,
+            "PLC folder Trigger did not reach the ACK phase");
+        Require(capturedTaskA == expectedPixel && taskBExecutions == 0,
+            "PLC folder Trigger used the wrong image or executed another task");
+        Require(ToolChainState::ReadOnlyTaskGroups()[0].imageFolderIndex ==
+                expectedFolderIndex,
+            "PLC folder Trigger did not advance to the expected image index");
+        Require(hasWrite(11, true) && hasWrite(11, false) &&
+            hasWrite(12, true) && hasWrite(13, true) && !hasWrite(15, true),
+            "PLC folder Trigger did not publish Busy/Done/OK outputs");
+        Require(HardwareRuntimeService::Snapshot().handshakeIgnoredTriggerCount >=
+                ignoredBefore + static_cast<std::uint64_t>(busyTriggerCount),
+            "Busy-period PLC Trigger ignore count did not increase as expected");
+
+        setCoil(17, true);
+        bool folderRunAcknowledged = false;
+        for (int tick = 0; tick < 300; ++tick)
+        {
+            HardwareRuntimeService::Tick();
+            ToolController::Tick();
+            if (!HardwareRuntimeService::Snapshot().handshakeActive)
+            {
+                folderRunAcknowledged = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        Require(folderRunAcknowledged,
+            "PLC folder fallback result was not acknowledged");
+        const std::uint64_t completedSerial =
+            ToolController::GetCompletedBatchSerial();
+        for (int tick = 0; tick < 100; ++tick)
+        {
+            HardwareRuntimeService::Tick();
+            ToolController::Tick();
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        Require(ToolController::GetCompletedBatchSerial() == completedSerial &&
+            ToolChainState::ReadOnlyTaskGroups()[0].imageFolderIndex ==
+                expectedFolderIndex,
+            "Busy-period PLC Triggers were queued and replayed after ACK");
+    };
+
+    runFolderTrigger(41, 0, 5);
+    runFolderTrigger(93, 1, 0);
+
+    setCoil(10, false);
+    setCoil(17, false);
+    for (int tick = 0; tick < 20; ++tick)
+    {
+        HardwareRuntimeService::Tick();
+        ToolController::Tick();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    handshake.acknowledgementTimeoutMs = 100;
+    HardwareRuntimeService::ConfigureModbusHandshake(handshake);
+    Require(HardwareRuntimeService::RequestHandshakeTest(
+        ToolResultStatus::Fail).success,
+        "full PLC handshake self-test request failed");
+    bool selfTestAwaitingAck = false;
+    for (int tick = 0; tick < 500; ++tick)
+    {
+        HardwareRuntimeService::Tick();
+        if (HardwareRuntimeService::Snapshot().handshakeAwaitingAcknowledge)
+        {
+            selfTestAwaitingAck = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    for (int tick = 0; tick < 300 && !hasWrite(14, true); ++tick)
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    Require(selfTestAwaitingAck && hasWrite(14, true),
+        "full PLC handshake self-test did not publish the selected result");
+
+    bool acknowledgeTimeoutObserved = false;
+    for (int tick = 0; tick < 500; ++tick)
+    {
+        HardwareRuntimeService::Tick();
+        const HardwareRuntimeSnapshot snapshot = HardwareRuntimeService::Snapshot();
+        if (!snapshot.handshakeActive && snapshot.handshakeAlarm &&
+            snapshot.handshakeAlarmMessage.find("确认应答超时") != std::string::npos)
+        {
+            acknowledgeTimeoutObserved = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    Require(acknowledgeTimeoutObserved &&
+        HardwareRuntimeService::WaitForOutputIdle(1000),
+        "PLC ACK timeout did not terminate the handshake cleanly");
+    {
+        std::lock_guard<std::mutex> lock(modbusView->ioMutex);
+        Require(!modbusView->coilValues[11] && !modbusView->coilValues[12] &&
+            !modbusView->coilValues[13] && !modbusView->coilValues[14] &&
+            !modbusView->coilValues[15],
+            "PLC ACK timeout left Busy/Done/result outputs active");
+    }
+
+    HardwareRuntimeService::Shutdown();
+    ToolController::Reset();
+    ToolChainState::ClearTools();
+    ToolChainState::ReplaceTaskGroups({});
+    ImageState::Clear();
+    fs::remove_all(folder, folderError);
+}
+
 void TestFrameArchiveService()
 {
     FrameArchiveService::Shutdown();
@@ -2805,6 +3183,21 @@ void TestHardwareSettingsPersistence()
     source.tcpAppendCrLf = false;
     source.outputInvert = true;
     source.outputAutoPublish = true;
+    source.outputHandshakeEnabled = true;
+    source.outputPollIntervalMs = 35;
+    source.outputAcknowledgementTimeoutMs = 2400;
+    source.outputInspectionTimeoutMs = 18000;
+    source.outputHeartbeatIntervalMs = 750;
+    source.outputAutoReconnect = true;
+    source.outputReconnectFailureThreshold = 4;
+    source.outputReconnectInitialDelayMs = 180;
+    source.outputReconnectMaxDelayMs = 4200;
+    source.outputIoMappings = {
+        {true, HardwareIoSignal::Trigger, HardwareIoDirection::Input,
+            21, true, 0, "任务A"},
+        {true, HardwareIoSignal::Done, HardwareIoDirection::Output,
+            22, false, 350, {}}
+    };
 
     std::string error;
     Require(HardwareSettingsService::Save(source, settingsPath.string(), &error) &&
@@ -2838,10 +3231,111 @@ void TestHardwareSettingsPersistence()
         loaded.tcpAppendCrLf == source.tcpAppendCrLf &&
         loaded.outputInvert == source.outputInvert &&
         loaded.outputAutoPublish == source.outputAutoPublish &&
+        loaded.outputHandshakeEnabled == source.outputHandshakeEnabled &&
+        loaded.outputPollIntervalMs == source.outputPollIntervalMs &&
+        loaded.outputAcknowledgementTimeoutMs ==
+            source.outputAcknowledgementTimeoutMs &&
+        loaded.outputInspectionTimeoutMs == source.outputInspectionTimeoutMs &&
+        loaded.outputHeartbeatIntervalMs == source.outputHeartbeatIntervalMs &&
+        loaded.outputAutoReconnect == source.outputAutoReconnect &&
+        loaded.outputReconnectFailureThreshold ==
+            source.outputReconnectFailureThreshold &&
+        loaded.outputReconnectInitialDelayMs ==
+            source.outputReconnectInitialDelayMs &&
+        loaded.outputReconnectMaxDelayMs == source.outputReconnectMaxDelayMs &&
+        loaded.outputIoMappings.size() == 2 &&
+        loaded.outputIoMappings[0].signal == HardwareIoSignal::Trigger &&
+        loaded.outputIoMappings[0].direction == HardwareIoDirection::Input &&
+        loaded.outputIoMappings[0].address == 21 &&
+        loaded.outputIoMappings[0].invert &&
+        loaded.outputIoMappings[0].taskGroupName == "任务A" &&
+        loaded.outputIoMappings[1].pulseMs == 350 &&
         !HardwareSettingsService::SettingsPath().empty(),
         "hardware settings round trip lost camera or output fields");
 
     fs::remove(settingsPath);
+}
+
+void TestHardwareTaskTriggerMappingSynchronization()
+{
+    std::vector<std::string> taskNames;
+    for (int index = 1; index <= 16; ++index)
+    {
+        char name[16] = {};
+        std::snprintf(name, sizeof(name), "任务%02d", index);
+        taskNames.emplace_back(name);
+    }
+
+    std::vector<HardwareIoMapping> mappings = HardwarePanelSettings{}.outputIoMappings;
+    Require(HardwareSettingsService::EnsureTaskTriggerMappings(mappings, taskNames),
+        "task Trigger synchronization did not add missing mappings");
+    Require(mappings.size() == 23,
+        "task Trigger synchronization did not produce 16 triggers plus 7 handshake signals");
+
+    for (int index = 0; index < 16; ++index)
+    {
+        const auto found = std::find_if(mappings.begin(), mappings.end(),
+            [&](const HardwareIoMapping& mapping)
+            {
+                return mapping.signal == HardwareIoSignal::Trigger &&
+                    mapping.taskGroupName == taskNames[index];
+            });
+        const std::uint16_t expectedAddress = static_cast<std::uint16_t>(
+            index == 0 ? 0 : index + 7);
+        Require(found != mappings.end() &&
+            found->direction == HardwareIoDirection::Input &&
+            found->address == expectedAddress,
+            "task Trigger synchronization assigned an unexpected address");
+    }
+    Require(!HardwareSettingsService::EnsureTaskTriggerMappings(mappings, taskNames),
+        "task Trigger synchronization was not idempotent");
+
+    const std::vector<HardwareIoMapping> standard =
+        HardwareSettingsService::BuildStandardIoMappings(taskNames);
+    Require(standard.size() == 23 &&
+        standard[0].taskGroupName == "任务01" && standard[0].address == 0 &&
+        standard[1].taskGroupName == "任务02" && standard[1].address == 8 &&
+        standard[15].taskGroupName == "任务16" && standard[15].address == 22 &&
+        standard[16].signal == HardwareIoSignal::Busy,
+        "standard task Trigger mapping order or addresses regressed");
+
+    std::vector<HardwareIoMapping> reconciled =
+        HardwareSettingsService::BuildStandardIoMappings({"任务01", "任务02"});
+    reconciled[0].address = 42;
+    const std::vector<HardwareTaskIdentity> previous = {
+        {101, "任务01"}, {102, "任务02"}
+    };
+    const std::vector<HardwareTaskIdentity> current = {
+        {101, "工位A"}, {103, "任务03"}
+    };
+    Require(HardwareSettingsService::SynchronizeTaskTriggerMappings(
+            reconciled, previous, current),
+        "task Trigger synchronization did not reconcile rename/delete/add");
+    const auto renamed = std::find_if(reconciled.begin(), reconciled.end(),
+        [](const HardwareIoMapping& mapping)
+        {
+            return mapping.signal == HardwareIoSignal::Trigger &&
+                mapping.taskGroupName == "工位A";
+        });
+    const auto added = std::find_if(reconciled.begin(), reconciled.end(),
+        [](const HardwareIoMapping& mapping)
+        {
+            return mapping.signal == HardwareIoSignal::Trigger &&
+                mapping.taskGroupName == "任务03";
+        });
+    const bool removedStillPresent = std::any_of(reconciled.begin(), reconciled.end(),
+        [](const HardwareIoMapping& mapping)
+        {
+            return mapping.signal == HardwareIoSignal::Trigger &&
+                mapping.taskGroupName == "任务02";
+        });
+    Require(renamed != reconciled.end() && renamed->address == 42 &&
+        added != reconciled.end() && added->address == 8 &&
+        !removedStillPresent,
+        "task Trigger synchronization lost a custom address or kept a stale task");
+    Require(!HardwareSettingsService::SynchronizeTaskTriggerMappings(
+            reconciled, current, current),
+        "task Trigger rename/delete synchronization was not idempotent");
 }
 
 void TestConcreteTcpTextAdapter()
@@ -3949,6 +4443,21 @@ void TestToolControllerRunsOnlySelectedTaskGroupInOrder()
     Require(executionOrder == std::vector<int>({1, 2, 1, 2}) && taskBExecutions == 0,
         "rerun did not preserve the selected task scope");
 
+    Require(ToolChainState::SetTaskGroupEnabled(1, false),
+        "task-group execution test could not disable task B");
+    executionOrder.clear();
+    ToolController::RequestRunAll(false, false);
+    Require(ToolController::GetRunProgressTotal() == 2,
+        "run-all progress still counted a disabled task");
+    for (int tick = 0;
+        tick < 8 && ToolController::GetMode() != ToolController::Mode::Idle; ++tick)
+    {
+        ToolController::Tick();
+    }
+    Require(executionOrder == std::vector<int>({1, 2}) && taskBExecutions == 0 &&
+        !ToolChainState::ReadOnlyTools()[1].hasLastResult,
+        "run-all executed or published a disabled task");
+
     ToolController::Reset();
     ToolChainState::ClearTools();
     ToolChainState::ReplaceTaskGroups({});
@@ -3988,6 +4497,7 @@ void TestToolControllerStepsOnlySelectedTaskGroupInOrder()
         "task-group step did not start at the first matching tool");
     ToolController::Tick();
     Require(ToolController::GetStepCursor() == 1 &&
+        ToolController::GetStepToolIndex() == 0 &&
         executionOrder == std::vector<int>({1}) && taskBExecutions == 0,
         "first task-group step executed the wrong tool");
 
@@ -3996,6 +4506,7 @@ void TestToolControllerStepsOnlySelectedTaskGroupInOrder()
         "task-group step used the global tool index as its cursor");
     ToolController::Tick();
     Require(ToolController::GetStepCursor() == 2 &&
+        ToolController::GetStepToolIndex() == 2 &&
         executionOrder == std::vector<int>({1, 2}) && taskBExecutions == 0,
         "task-group step did not preserve filtered tool order");
 
@@ -4083,6 +4594,118 @@ void TestToolControllerUsesIndependentTaskImages()
     ToolController::Reset();
     ToolChainState::ClearTools();
     ToolChainState::ReplaceTaskGroups({});
+}
+
+void TestToolControllerAdvancesTaskFolderImages()
+{
+    ToolController::Reset();
+    ToolChainState::ClearTools();
+    ToolChainState::ReplaceTaskGroups({});
+    ImageState::SetImage(cv::Mat(8, 8, CV_8UC1, cv::Scalar(9)));
+
+    namespace fs = std::filesystem;
+    const fs::path folder = fs::temp_directory_path() /
+        ("imgui_opencv_task_folder_" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::error_code fileError;
+    fs::create_directories(folder, fileError);
+    Require(!fileError, "task folder image test could not create folder");
+
+    const fs::path firstPath = folder / "01.png";
+    const fs::path secondPath = folder / "02.png";
+    Require(cv::imwrite(firstPath.string(),
+                cv::Mat(8, 8, CV_8UC1, cv::Scalar(31))) &&
+            cv::imwrite(secondPath.string(),
+                cv::Mat(8, 8, CV_8UC1, cv::Scalar(141))),
+        "task folder image test could not create images");
+
+    Require(ToolChainState::CreateTaskGroup("任务A") >= 0 &&
+        ToolChainState::SetTaskGroupImageFolder(
+            0, folder.string(), firstPath.string(), 2),
+        "task folder image test setup failed");
+
+    int firstCaptured = -1;
+    int secondCaptured = -1;
+    ToolInstance firstTool;
+    firstTool.type = 2;
+    firstTool.groupName = "任务A";
+    firstTool.toolImpl = std::make_unique<TestInputCaptureTool>(&firstCaptured);
+    ToolChainState::Tools().push_back(std::move(firstTool));
+    ToolInstance secondTool;
+    secondTool.type = 2;
+    secondTool.groupName = "任务A";
+    secondTool.toolImpl = std::make_unique<TestInputCaptureTool>(&secondCaptured);
+    ToolChainState::Tools().push_back(std::move(secondTool));
+
+    auto runTask = []()
+    {
+        ToolController::RequestRunTaskGroup("任务A", false, false);
+        for (int tick = 0;
+            tick < 12 && ToolController::GetMode() != ToolController::Mode::Idle;
+            ++tick)
+        {
+            ToolController::Tick();
+        }
+    };
+
+    runTask();
+    Require(firstCaptured == 31 && secondCaptured == 31 &&
+        ToolChainState::ReadOnlyTaskGroups()[0].imageFolderIndex == 0,
+        "task folder did not start with the first image");
+    runTask();
+    Require(firstCaptured == 141 && secondCaptured == 141 &&
+        ToolChainState::ReadOnlyTaskGroups()[0].imageFolderIndex == 1,
+        "task folder did not advance independently to the second image");
+    runTask();
+    Require(firstCaptured == 31 && secondCaptured == 31 &&
+        ToolChainState::ReadOnlyTaskGroups()[0].imageFolderIndex == 0,
+        "task folder did not wrap back to the first image");
+
+    firstCaptured = -1;
+    secondCaptured = -1;
+    ToolController::RequestStepReset();
+    ToolController::RequestStepNextTaskGroup("任务A");
+    ToolController::Tick();
+    ToolController::RequestStepNextTaskGroup("任务A");
+    ToolController::Tick();
+    Require(firstCaptured == 141 && secondCaptured == 141 &&
+        ToolChainState::ReadOnlyTaskGroups()[0].imageFolderIndex == 1,
+        "task stepping changed images between tools in the same round");
+
+    Require(ToolChainState::SetTaskGroupCameraPreferred(0, true),
+        "task camera preference could not be enabled");
+    ImageState::SetImage(cv::Mat(8, 8, CV_8UC1, cv::Scalar(203)));
+    firstCaptured = -1;
+    secondCaptured = -1;
+    ToolController::ResumeRunAfterCamera(false, true);
+    for (int tick = 0;
+        tick < 12 && ToolController::GetMode() != ToolController::Mode::Idle;
+        ++tick)
+    {
+        ToolController::Tick();
+    }
+    Require(firstCaptured == 203 && secondCaptured == 203 &&
+        ToolChainState::ReadOnlyTaskGroups()[0].imageFolderIndex == 1,
+        "camera-preferred task did not use the captured camera frame first");
+
+    firstCaptured = -1;
+    secondCaptured = -1;
+    ImageState::SetImage(cv::Mat(8, 8, CV_8UC1, cv::Scalar(9)));
+    ToolController::ResumeRunAfterCamera(false, false);
+    for (int tick = 0;
+        tick < 12 && ToolController::GetMode() != ToolController::Mode::Idle;
+        ++tick)
+    {
+        ToolController::Tick();
+    }
+    Require(firstCaptured == 31 && secondCaptured == 31 &&
+        ToolChainState::ReadOnlyTaskGroups()[0].imageFolderIndex == 0,
+        "camera-preferred task did not fall back to its image folder");
+
+    ToolController::Reset();
+    ToolChainState::ClearTools();
+    ToolChainState::ReplaceTaskGroups({});
+    fs::remove_all(folder, fileError);
 }
 
 void TestToolControllerRunsTaskGroupsInParallel()
@@ -4831,8 +5454,21 @@ int main(int argc, char** argv)
         if (argc > 1 && std::string(argv[1]) == "--task-images-only") {
             TestRecipeRoundTrip();
             TestToolControllerUsesIndependentTaskImages();
+            TestToolControllerAdvancesTaskFolderImages();
             TestToolControllerRunsTaskGroupsInParallel();
             std::cout << "regression_tests: independent task image checks passed\n";
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--hardware-camera-only") {
+            TestHardwareRuntimeAutomation();
+            std::cout << "regression_tests: hardware camera automation checks passed\n";
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--plc-handshake-only") {
+            TestHardwareSettingsPersistence();
+            TestHardwareTaskTriggerMappingSynchronization();
+            TestModbusHandshakeTriggersIndependentTaskCameraRun();
+            std::cout << "regression_tests: PLC handshake checks passed\n";
             return 0;
         }
         TestTemplateMatch();
@@ -4880,9 +5516,11 @@ int main(int argc, char** argv)
         TestToolROIServiceOwnsBoundROIEditing();
         TestHardwareAdapterServiceLifecycle();
         TestHardwareRuntimeAutomation();
+        TestModbusHandshakeTriggersIndependentTaskCameraRun();
         TestFrameArchiveService();
         TestRecipeAutosaveService();
         TestHardwareSettingsPersistence();
+        TestHardwareTaskTriggerMappingSynchronization();
         TestConcreteTcpTextAdapter();
         TestConcreteModbusTcpAdapterProtocol();
         TestConcreteOpenCvCameraAdapter();
@@ -4908,6 +5546,7 @@ int main(int argc, char** argv)
         TestToolControllerRunsOnlySelectedTaskGroupInOrder();
         TestToolControllerStepsOnlySelectedTaskGroupInOrder();
         TestToolControllerUsesIndependentTaskImages();
+        TestToolControllerAdvancesTaskFolderImages();
         TestToolControllerRunsTaskGroupsInParallel();
         TestToolControllerPublishesHeavyToolAsync();
         TestToolControllerExecutesDagLevelInParallel();

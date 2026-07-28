@@ -1,6 +1,6 @@
 # IMgui_Opencv 构建基线
 
-> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+> 文档同步日期：2026-07-28。构建、完整回归、PLC 握手专项和本轮成品状态见 [STATUS_2026-07-28.md](STATUS_2026-07-28.md)。
 
 
 本项目是基于 Dear ImGui、DirectX 12、OpenCV 5.0 和 ONNX Runtime 的 Windows 桌面视觉工具。
@@ -10,8 +10,8 @@
 当前基线要求：
 
 - 能构建：`Windows_imgui.slnx` Release x64 构建通过。
-- 能启动：`x64\Release\Windows_imgui.exe` 能正常创建进程。
-- 能跑样例图：`RegressionTests.exe` 会加载 `assets\images\test.jpg`，设置 ROI，执行一个 `ITool` 工具，绘制结果 overlay，并验证配方保存/加载。
+- 能启动：正常发布和当前验证均使用 `x64\Release\Windows_imgui.exe`；该标准文件已于 2026-07-28 完成 Clean 后的 Release x64 全量重建。
+- 能跑完整回归：`RegressionTests.exe` 覆盖图像导入、ROI、全部工具基础路径、判定、配方兼容、任务独立输入、文件夹轮换、相机回退、任务并行、PLC 单槽握手和结果状态。
 
 ## 依赖规则
 
@@ -44,7 +44,11 @@ msbuild Windows_imgui.slnx /p:Configuration=Release /p:Platform=x64 /m
 | 产物 | 路径 |
 | --- | --- |
 | 主程序 | `x64\Release\Windows_imgui.exe` |
-| 回归测试 | `x64\Release\RegressionTests.exe` |
+| 回归测试 | `Test\x64\Release\RegressionTests.exe` |
+
+> 当前工作树说明：最新主程序是 `x64\Release\Windows_imgui.exe`，大小 4,406,784 字节，SHA256 为 `33A5F696EF4C628C5634F678B25D662EE20321158CF743A616A349B8F526FFA2`。2026-07-27 的 `Windows_imgui_updated.exe` 只是标准文件被旧进程占用时产生的历史临时成品，不再作为当前发布基线。
+
+若构建被中断后出现 `LNK1103: 调试信息损坏`，应先对对应工程执行 Clean，再完整 Build；不要继续复用可能损坏的 OBJ/PDB 增量链接。
 
 `Windows_imgui.slnx` 已包含：
 
@@ -58,7 +62,7 @@ msbuild Windows_imgui.slnx /p:Configuration=Release /p:Platform=x64 /m
 先构建 Release，再运行：
 
 ```bat
-x64\Release\RegressionTests.exe
+Test\x64\Release\RegressionTests.exe
 ```
 
 也可以运行：
@@ -67,13 +71,33 @@ x64\Release\RegressionTests.exe
 run_tasks.bat
 ```
 
-当前测试覆盖：
+当前完整测试覆盖：
 
-- 模板匹配基础定位。
-- ROI 坐标转换。
-- YOLO 无模型时的失败路径。
-- 配方保存/加载 round-trip。
-- 样例图核心链路：加载图片、设置 ROI、执行 `ITool`、生成 `ToolResult`、绘制 overlay。
+- 图像导入、导航、图像状态和纹理上传请求边界。
+- ROI、旋转 ROI、结果 ROI、Fixture、标定和卡尺测量。
+- type 0-17 的主要算法、空输入和缺失模型路径。
+- ToolResult 判定、失败停止、稳定工具 ID 和配方往返兼容。
+- 任务顺序、禁用过滤、独立单图、递归文件夹轮换、相机失败回退和最多 4 任务并行。
+- 结果导出、历史/SPC、设备协议适配和发布策略。
+
+专项运行参数包括：
+
+```bat
+Test\x64\Release\RegressionTests.exe --policy-only
+Test\x64\Release\RegressionTests.exe --caliper-only
+Test\x64\Release\RegressionTests.exe --qr-only
+Test\x64\Release\RegressionTests.exe --task-images-only
+Test\x64\Release\RegressionTests.exe --hardware-camera-only
+Test\x64\Release\RegressionTests.exe --plc-handshake-only
+```
+
+PLC 模拟器协议自测不需要启动主程序：
+
+```bat
+python tools\plc_simulator\plc_simulator.py --self-test
+```
+
+需要图形联调时双击 `tools\plc_simulator\run_plc_simulator.bat`，再按 [PLC 模拟器说明](../tools/plc_simulator/README.md) 配置主程序。
 
 ## PostBuild 规则
 

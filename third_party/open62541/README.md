@@ -3,6 +3,8 @@
 This directory contains the open62541 v1.4.17 amalgamation used by the native
 OPC UA adapter.
 
+> 项目复核日期：2026-07-27。此文件保留上游构建参数原文，中文接入与安全边界见 [硬件接入说明](../../docs/HARDWARE_INTEGRATION.md#opc-ua)。
+
 - Upstream: https://github.com/open62541/open62541
 - Commit: `17b65bc21791c1bcac4836443c37af12f8577882`
 - License: Mozilla Public License 2.0 (`LICENSE`)

@@ -12,6 +12,10 @@ struct TaskGroupDefinition
     std::string name;
     bool enabled = true;
     std::string imagePath;
+    std::string imageFolderPath;
+    int imageFolderIndex = -1;
+    int imageFolderCount = 0;
+    bool cameraPreferred = false;
 };
 
 // =====================================================
@@ -73,7 +77,12 @@ namespace ToolChainState
     bool MoveTaskGroup(int from, int to);
     bool RemoveTaskGroup(int index);
     bool SetTaskGroupEnabled(int index, bool enabled);
+    bool SetTaskGroupCameraPreferred(int index, bool preferred);
     bool SetTaskGroupImagePath(int index, const std::string& imagePath);
+    bool SetTaskGroupImageFolder(int index, const std::string& folderPath,
+        const std::string& previewImagePath, int imageCount);
+    bool SetTaskGroupFolderImagePosition(int index, const std::string& imagePath,
+        int imageIndex, int imageCount);
     bool AssignToolToTaskGroup(int toolIndex, int groupIndex);
     bool AssignToolToTaskGroupByName(int toolIndex, const std::string& groupName);
     std::string NextTaskGroupName();

@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <utility>
 
 namespace
@@ -71,12 +72,192 @@ HardwarePanelSettings Normalize(HardwarePanelSettings settings)
     settings.outputQueueSize = std::clamp(settings.outputQueueSize, 1, 1024);
     settings.outputRetryCount = std::clamp(settings.outputRetryCount, 0, 10);
     settings.outputRetryDelayMs = std::clamp(settings.outputRetryDelayMs, 1, 60000);
+    settings.outputPollIntervalMs = std::clamp(settings.outputPollIntervalMs, 10, 5000);
+    settings.outputAcknowledgementTimeoutMs = std::clamp(
+        settings.outputAcknowledgementTimeoutMs, 100, 60000);
+    settings.outputInspectionTimeoutMs = std::clamp(
+        settings.outputInspectionTimeoutMs, 1000, 600000);
+    settings.outputHeartbeatIntervalMs = std::clamp(
+        settings.outputHeartbeatIntervalMs, 100, 60000);
+    settings.outputReconnectFailureThreshold = std::clamp(
+        settings.outputReconnectFailureThreshold, 1, 100);
+    settings.outputReconnectInitialDelayMs = std::clamp(
+        settings.outputReconnectInitialDelayMs, 1, 60000);
+    settings.outputReconnectMaxDelayMs = std::clamp(
+        settings.outputReconnectMaxDelayMs,
+        settings.outputReconnectInitialDelayMs, 60000);
+    if (settings.outputIoMappings.size() > 64)
+        settings.outputIoMappings.resize(64);
+    for (HardwareIoMapping& mapping : settings.outputIoMappings)
+        mapping.pulseMs = std::clamp(mapping.pulseMs, 0, 60000);
     return settings;
+}
+
+std::vector<std::string> NormalizeTaskGroupNames(
+    const std::vector<std::string>& taskGroupNames)
+{
+    std::vector<std::string> normalized;
+    std::set<std::string> seen;
+    for (const std::string& name : taskGroupNames)
+    {
+        if (!name.empty() && seen.insert(name).second)
+            normalized.push_back(name);
+    }
+    return normalized;
+}
+
+std::uint16_t DefaultTriggerAddress(std::size_t taskIndex)
+{
+    // 地址 1-7 留给 Busy/Done/OK/NG/Error/Heartbeat/ACK。
+    return static_cast<std::uint16_t>(taskIndex == 0 ? 0 : taskIndex + 7);
+}
+
+std::uint16_t FindAvailableAddress(const std::set<std::uint16_t>& occupied,
+    std::uint16_t preferred)
+{
+    for (std::uint32_t address = preferred; address <= 65535; ++address)
+    {
+        const auto candidate = static_cast<std::uint16_t>(address);
+        if (!occupied.contains(candidate))
+            return candidate;
+    }
+    for (std::uint32_t address = 0; address < preferred; ++address)
+    {
+        const auto candidate = static_cast<std::uint16_t>(address);
+        if (!occupied.contains(candidate))
+            return candidate;
+    }
+    return preferred;
 }
 }
 
 namespace HardwareSettingsService
 {
+std::vector<HardwareIoMapping> BuildStandardIoMappings(
+    const std::vector<std::string>& taskGroupNames)
+{
+    std::vector<std::string> names = NormalizeTaskGroupNames(taskGroupNames);
+    if (names.empty())
+        names.push_back("任务01");
+
+    std::vector<HardwareIoMapping> mappings;
+    mappings.reserve(names.size() + 7);
+    for (std::size_t index = 0; index < names.size(); ++index)
+    {
+        mappings.push_back({true, HardwareIoSignal::Trigger,
+            HardwareIoDirection::Input, DefaultTriggerAddress(index),
+            false, 0, names[index]});
+    }
+
+    const HardwarePanelSettings defaults;
+    for (const HardwareIoMapping& mapping : defaults.outputIoMappings)
+    {
+        if (mapping.signal != HardwareIoSignal::Trigger)
+            mappings.push_back(mapping);
+    }
+    return mappings;
+}
+
+bool EnsureTaskTriggerMappings(std::vector<HardwareIoMapping>& mappings,
+    const std::vector<std::string>& taskGroupNames)
+{
+    const std::vector<std::string> names = NormalizeTaskGroupNames(taskGroupNames);
+    if (names.empty())
+        return false;
+
+    std::set<std::string> boundTasks;
+    std::set<std::uint16_t> occupiedAddresses;
+    for (const HardwareIoMapping& mapping : mappings)
+    {
+        occupiedAddresses.insert(mapping.address);
+        if (mapping.signal == HardwareIoSignal::Trigger &&
+            !mapping.taskGroupName.empty())
+        {
+            boundTasks.insert(mapping.taskGroupName);
+        }
+    }
+
+    std::vector<HardwareIoMapping> additions;
+    for (std::size_t index = 0; index < names.size(); ++index)
+    {
+        if (boundTasks.contains(names[index]))
+            continue;
+        const std::uint16_t address = FindAvailableAddress(
+            occupiedAddresses, DefaultTriggerAddress(index));
+        additions.push_back({true, HardwareIoSignal::Trigger,
+            HardwareIoDirection::Input, address, false, 0, names[index]});
+        occupiedAddresses.insert(address);
+        boundTasks.insert(names[index]);
+    }
+    if (additions.empty())
+        return false;
+
+    const auto firstOutput = std::find_if(mappings.begin(), mappings.end(),
+        [](const HardwareIoMapping& mapping)
+        {
+            return mapping.signal != HardwareIoSignal::Trigger;
+        });
+    mappings.insert(firstOutput, additions.begin(), additions.end());
+    return true;
+}
+
+bool SynchronizeTaskTriggerMappings(std::vector<HardwareIoMapping>& mappings,
+    const std::vector<HardwareTaskIdentity>& previousTaskGroups,
+    const std::vector<HardwareTaskIdentity>& currentTaskGroups)
+{
+    bool changed = false;
+    if (!previousTaskGroups.empty())
+    {
+        for (const HardwareTaskIdentity& previous : previousTaskGroups)
+        {
+            const auto current = std::find_if(currentTaskGroups.begin(),
+                currentTaskGroups.end(), [&previous](const HardwareTaskIdentity& group)
+                {
+                    return group.id == previous.id;
+                });
+            if (current != currentTaskGroups.end())
+            {
+                if (current->name.empty() || current->name == previous.name)
+                    continue;
+                for (HardwareIoMapping& mapping : mappings)
+                {
+                    if (mapping.signal == HardwareIoSignal::Trigger &&
+                        mapping.taskGroupName == previous.name)
+                    {
+                        mapping.taskGroupName = current->name;
+                        changed = true;
+                    }
+                }
+                continue;
+            }
+
+            const bool nameReused = std::any_of(currentTaskGroups.begin(),
+                currentTaskGroups.end(), [&previous](const HardwareTaskIdentity& group)
+                {
+                    return group.name == previous.name;
+                });
+            if (nameReused)
+                continue;
+            const std::size_t originalSize = mappings.size();
+            std::erase_if(mappings, [&previous](const HardwareIoMapping& mapping)
+            {
+                return mapping.signal == HardwareIoSignal::Trigger &&
+                    mapping.taskGroupName == previous.name;
+            });
+            changed |= mappings.size() != originalSize;
+        }
+    }
+
+    std::vector<std::string> currentNames;
+    currentNames.reserve(currentTaskGroups.size());
+    for (const HardwareTaskIdentity& group : currentTaskGroups)
+    {
+        if (!group.name.empty())
+            currentNames.push_back(group.name);
+    }
+    return EnsureTaskTriggerMappings(mappings, currentNames) || changed;
+}
+
 HardwarePanelSettings Load(const std::string& path)
 {
     HardwarePanelSettings settings;
@@ -129,6 +310,45 @@ HardwarePanelSettings Load(const std::string& path)
         settings.outputRetryDelayMs = output.value("retryDelayMs", settings.outputRetryDelayMs);
         settings.outputReconnectBeforeRetry = output.value(
             "reconnectBeforeRetry", settings.outputReconnectBeforeRetry);
+        settings.outputHandshakeEnabled = output.value(
+            "handshakeEnabled", settings.outputHandshakeEnabled);
+        settings.outputPollIntervalMs = output.value(
+            "pollIntervalMs", settings.outputPollIntervalMs);
+        settings.outputAcknowledgementTimeoutMs = output.value(
+            "acknowledgementTimeoutMs", settings.outputAcknowledgementTimeoutMs);
+        settings.outputInspectionTimeoutMs = output.value(
+            "inspectionTimeoutMs", settings.outputInspectionTimeoutMs);
+        settings.outputHeartbeatIntervalMs = output.value(
+            "heartbeatIntervalMs", settings.outputHeartbeatIntervalMs);
+        settings.outputAutoReconnect = output.value(
+            "autoReconnect", settings.outputAutoReconnect);
+        settings.outputReconnectFailureThreshold = output.value(
+            "reconnectFailureThreshold", settings.outputReconnectFailureThreshold);
+        settings.outputReconnectInitialDelayMs = output.value(
+            "reconnectInitialDelayMs", settings.outputReconnectInitialDelayMs);
+        settings.outputReconnectMaxDelayMs = output.value(
+            "reconnectMaxDelayMs", settings.outputReconnectMaxDelayMs);
+        const auto mappings = output.find("ioMappings");
+        if (mappings != output.end() && mappings->is_array())
+        {
+            settings.outputIoMappings.clear();
+            for (const nlohmann::json& item : *mappings)
+            {
+                HardwareIoMapping mapping;
+                mapping.enabled = item.value("enabled", mapping.enabled);
+                mapping.signal = static_cast<HardwareIoSignal>(std::clamp(
+                    item.value("signal", 0), 0, 7));
+                mapping.direction = static_cast<HardwareIoDirection>(std::clamp(
+                    item.value("direction", 0), 0, 1));
+                mapping.address = static_cast<std::uint16_t>(std::clamp(
+                    item.value("address", 0), 0, 65535));
+                mapping.invert = item.value("invert", mapping.invert);
+                mapping.pulseMs = item.value("pulseMs", mapping.pulseMs);
+                mapping.taskGroupName = item.value(
+                    "taskGroupName", mapping.taskGroupName);
+                settings.outputIoMappings.push_back(std::move(mapping));
+            }
+        }
     }
     catch (...)
     {
@@ -147,7 +367,7 @@ bool Save(const HardwarePanelSettings& source, const std::string& path, std::str
             fs::create_directories(settingsFile.parent_path());
 
         const nlohmann::json json = {
-            {"version", 1},
+            {"version", 2},
             {"camera", {
                 {"address", settings.cameraAddress},
                 {"sourceName", settings.cameraSourceName},
@@ -184,7 +404,33 @@ bool Save(const HardwarePanelSettings& source, const std::string& path, std::str
                 {"queueSize", settings.outputQueueSize},
                 {"retryCount", settings.outputRetryCount},
                 {"retryDelayMs", settings.outputRetryDelayMs},
-                {"reconnectBeforeRetry", settings.outputReconnectBeforeRetry}
+                {"reconnectBeforeRetry", settings.outputReconnectBeforeRetry},
+                {"handshakeEnabled", settings.outputHandshakeEnabled},
+                {"pollIntervalMs", settings.outputPollIntervalMs},
+                {"acknowledgementTimeoutMs", settings.outputAcknowledgementTimeoutMs},
+                {"inspectionTimeoutMs", settings.outputInspectionTimeoutMs},
+                {"heartbeatIntervalMs", settings.outputHeartbeatIntervalMs},
+                {"autoReconnect", settings.outputAutoReconnect},
+                {"reconnectFailureThreshold", settings.outputReconnectFailureThreshold},
+                {"reconnectInitialDelayMs", settings.outputReconnectInitialDelayMs},
+                {"reconnectMaxDelayMs", settings.outputReconnectMaxDelayMs},
+                {"ioMappings", [&settings]
+                {
+                    nlohmann::json mappings = nlohmann::json::array();
+                    for (const HardwareIoMapping& mapping : settings.outputIoMappings)
+                    {
+                        mappings.push_back({
+                            {"enabled", mapping.enabled},
+                            {"signal", static_cast<int>(mapping.signal)},
+                            {"direction", static_cast<int>(mapping.direction)},
+                            {"address", mapping.address},
+                            {"invert", mapping.invert},
+                            {"pulseMs", mapping.pulseMs},
+                            {"taskGroupName", mapping.taskGroupName}
+                        });
+                    }
+                    return mappings;
+                }()}
             }}
         };
 

@@ -1,6 +1,6 @@
 # Loop Result Dwell Numeric Input Design
 
-> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+> 历史设计：记录 2026-07-14 循环停留时间输入框决策，正文保留英文原始语义；当前循环执行规则见 `../../TASK_GROUPS.md`。
 
 
 ## Goal

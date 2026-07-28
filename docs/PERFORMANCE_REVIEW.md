@@ -1,9 +1,9 @@
 # 项目架构性能审查
 
-> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+> 文档性质：早期性能审查快照。2026-07-27 再次复核时保留其中旧代码片段作为历史对照；`gImage`、`gROIs` 等名称不代表当前架构。当前图像/ROI/执行状态以 `ImageState`、`ROIState`、`VisionContext` 和 `ToolController` 为准，硬件线程边界以 `HardwareRuntimeService` 为准。
 
 
-> 对照 `OPENCV_ALGORITHMS.md §21.4 性能建议` 逐条评估
+> 对照当时的 OpenCV 性能建议逐条评估；当前算法说明见 `ALGORITHMS.md`
 >
 > 审查范围: `Core/` `Algorithm/` `UI/` 全部 .cpp 文件
 

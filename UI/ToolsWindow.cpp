@@ -16,10 +16,12 @@
 #include "../Core/ToolExecutor.h"
 #include "../Core/ToolController.h"
 #include "../Core/ToolChainState.h"
+#include "../Core/ToolTypes.h"
 #include "../Core/ToolChainPreflight.h"
 #include "../Core/ToolChainValidator.h"
 #include "../Core/ToolAssetService.h"
 #include "../Core/ToolROIService.h"
+#include "../Core/HardwareRuntimeService.h"
 #include "../Core/ImageState.h"
 #include "../Core/ImageImportService.h"
 #include "../Core/ROIState.h"
@@ -471,7 +473,7 @@ namespace UI
         {11, "YOLO OpenCV 5.0", ToolCategory::Experimental, "✦"},
     };
 
-    std::unordered_map<int, ToolUIFn> g_ToolUIMap;
+    static std::unordered_map<int, ToolUIFn> g_ToolUIMap;
 
     void MoveOriginalToolToFront()
     {
@@ -748,18 +750,39 @@ namespace UI
                 s_requestTaskGroupToolsDock = true;
             }
 
+            const bool hasUngroupedTools = std::any_of(
+                ToolChainState::ReadOnlyTools().begin(),
+                ToolChainState::ReadOnlyTools().end(),
+                [](const ToolInstance& tool)
+                {
+                    return tool.groupName.empty();
+                });
+            const auto& availableGroups = ToolChainState::ReadOnlyTaskGroups();
+            if (!hasUngroupedTools && s_selectedTaskGroupId == 0 &&
+                !availableGroups.empty())
+            {
+                SelectTaskGroupInTools(
+                    availableGroups.front().id, availableGroups.front().name);
+            }
+
             int selectedGroupIndex = NormalizeSelectedTaskGroupIndex();
             ImGui::SeparatorText("任务列表");
-            const float settingsHeight = selectedGroupIndex >= 0 ? 232.0f : 58.0f;
+            const float settingsHeight = selectedGroupIndex >= 0 ? 342.0f : 58.0f;
             const float listHeight = (std::max)(160.0f,
                 ImGui::GetContentRegionAvail().y - settingsHeight);
             if (ImGui::BeginChild("##task_group_list", ImVec2(0.0f, listHeight),
                 ImGuiChildFlags_Borders))
             {
-                const bool ungroupedSelected = s_selectedTaskGroupId == 0;
-                if (ImGui::Selectable("未分组", ungroupedSelected, 0, ImVec2(0.0f, 34.0f)))
-                    SelectTaskGroupInTools(0, {});
-                DrawTaskGroupDropTarget(-1);
+                if (hasUngroupedTools)
+                {
+                    const bool ungroupedSelected = s_selectedTaskGroupId == 0;
+                    if (ImGui::Selectable("未分组", ungroupedSelected, 0,
+                        ImVec2(0.0f, 34.0f)))
+                    {
+                        SelectTaskGroupInTools(0, {});
+                    }
+                    DrawTaskGroupDropTarget(-1);
+                }
 
                 const auto& groups = ToolChainState::ReadOnlyTaskGroups();
                 for (int index = 0; index < static_cast<int>(groups.size()); ++index)
@@ -772,10 +795,16 @@ namespace UI
                         if (tool.groupName == group.name)
                             ++toolCount;
                     }
-                    char rowLabel[160]{};
+                    std::string sourceTags;
+                    if (group.cameraPreferred)
+                        sourceTags += "  [相机]";
+                    if (!group.imageFolderPath.empty())
+                        sourceTags += "  [文件夹]";
+                    else if (!group.imagePath.empty())
+                        sourceTags += "  [图]";
+                    char rowLabel[192]{};
                     std::snprintf(rowLabel, sizeof(rowLabel), "%s  (%d)%s",
-                        group.name.c_str(), toolCount,
-                        group.imagePath.empty() ? "" : "  [图]");
+                        group.name.c_str(), toolCount, sourceTags.c_str());
                     if (ImGui::Selectable(rowLabel, s_selectedTaskGroupId == group.id,
                         0, ImVec2(0.0f, 34.0f)))
                     {
@@ -832,15 +861,57 @@ namespace UI
                 {
                     CommitTaskGroupChange();
                 }
+                bool cameraPreferred = selectedGroup.cameraPreferred;
+                if (ImGui::Checkbox("使用工业相机（优先）", &cameraPreferred) &&
+                    ToolChainState::SetTaskGroupCameraPreferred(
+                        selectedGroupIndex, cameraPreferred))
+                {
+                    CommitTaskGroupChange();
+                }
+                if (selectedGroup.cameraPreferred)
+                {
+                    const HardwareRuntimeSnapshot hardware =
+                        HardwareRuntimeService::Snapshot();
+                    const bool cameraConnected = hardware.cameraState ==
+                        DeviceConnectionState::Connected;
+                    ImGui::TextColored(cameraConnected
+                        ? ImVec4(0.24f, 0.86f, 0.48f, 1.0f)
+                        : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
+                        cameraConnected
+                            ? "输入优先级：相机 → 任务图片 → 公共图片"
+                            : "相机未连接：使用任务图片或公共图片");
+                }
+                else
+                {
+                    ImGui::TextDisabled("输入优先级：任务图片 → 公共图片");
+                }
                 const std::size_t imageSlash = selectedGroup.imagePath.find_last_of("\\/");
                 const char* imageName = selectedGroup.imagePath.empty()
                     ? "未设置（使用当前公共图片）"
                     : selectedGroup.imagePath.c_str() +
                         (imageSlash == std::string::npos ? 0 : imageSlash + 1);
-                ImGui::TextDisabled("任务图片: %s", imageName);
-                if (!selectedGroup.imagePath.empty())
-                    ImGui::SetItemTooltip("%s", selectedGroup.imagePath.c_str());
-                if (ImGui::Button("选择任务图片"))
+                if (!selectedGroup.imageFolderPath.empty())
+                {
+                    const std::size_t folderSlash =
+                        selectedGroup.imageFolderPath.find_last_of("\\/");
+                    const char* folderName = selectedGroup.imageFolderPath.c_str() +
+                        (folderSlash == std::string::npos ? 0 : folderSlash + 1);
+                    ImGui::TextDisabled("图片文件夹: %s", folderName);
+                    ImGui::SetItemTooltip("%s", selectedGroup.imageFolderPath.c_str());
+                    const int displayIndex = selectedGroup.imageFolderCount > 0
+                        ? (std::max)(0, selectedGroup.imageFolderIndex) + 1 : 0;
+                    ImGui::TextDisabled("当前图片: %s  (%d/%d)", imageName,
+                        displayIndex, selectedGroup.imageFolderCount);
+                    if (!selectedGroup.imagePath.empty())
+                        ImGui::SetItemTooltip("%s", selectedGroup.imagePath.c_str());
+                }
+                else
+                {
+                    ImGui::TextDisabled("任务图片: %s", imageName);
+                    if (!selectedGroup.imagePath.empty())
+                        ImGui::SetItemTooltip("%s", selectedGroup.imagePath.c_str());
+                }
+                if (ImGui::Button("选择单张图片"))
                 {
                     const std::string imagePath = OpenFileDialog();
                     if (!imagePath.empty())
@@ -859,8 +930,39 @@ namespace UI
                     }
                 }
                 ImGui::SameLine();
-                ImGui::BeginDisabled(selectedGroup.imagePath.empty());
-                if (ImGui::Button("清除任务图片") &&
+                if (ImGui::Button("选择图片文件夹"))
+                {
+                    const std::string folderPath = OpenFolderDialog();
+                    if (!folderPath.empty())
+                    {
+                        const std::vector<std::string> images =
+                            ScanImageFiles(folderPath, true);
+                        if (images.empty())
+                        {
+                            LogSystem::Add(LOG_WARN,
+                                "所选文件夹中没有可用图片: %s", folderPath.c_str());
+                        }
+                        else
+                        {
+                            const ImageImportResult result =
+                                ImageImportService::ImportSingleImage(images.front());
+                            if (result.success && ToolChainState::SetTaskGroupImageFolder(
+                                selectedGroupIndex, folderPath, images.front(),
+                                static_cast<int>(images.size())))
+                            {
+                                CommitTaskGroupChange();
+                            }
+                            else if (!result.success)
+                            {
+                                LogSystem::Add(LOG_ERROR, "%s", result.message.c_str());
+                            }
+                        }
+                    }
+                }
+                ImGui::SameLine();
+                ImGui::BeginDisabled(selectedGroup.imagePath.empty() &&
+                    selectedGroup.imageFolderPath.empty());
+                if (ImGui::Button("清除图片") &&
                     ToolChainState::SetTaskGroupImagePath(selectedGroupIndex, {}))
                 {
                     CommitTaskGroupChange();
@@ -3664,12 +3766,12 @@ TemplateState::ClearResults();
             static int s_scrollOpenedToolToTop = -1;
             static int s_lastFollowedExecutionIndex = -1;
 
-            const int stepCursor = ToolController::GetStepCursor();
+            const int stepToolIndex = ToolController::GetStepToolIndex();
             const bool batchExecutionActive = !ToolController::IsRuntimeMode() &&
                 ToolController::GetMode() != ToolController::Mode::Idle;
             const int executionFollowIndex = batchExecutionActive
                 ? ToolController::GetCurrentIndex()
-                : (stepCursor > 0 ? stepCursor - 1 : -1);
+                : stepToolIndex;
             if (executionFollowIndex < 0)
                 s_lastFollowedExecutionIndex = -1;
             const bool executionTargetChanged = executionFollowIndex >= 0 &&
@@ -3696,8 +3798,7 @@ TemplateState::ClearResults();
                     s_scrollOpenedToolToTop = -1;
                 }
 
-                bool batchHl = (batchExecutionActive && inst == executionFollowIndex)
-                            || (stepCursor > 0 && inst == stepCursor - 1);
+                const bool batchHl = inst == executionFollowIndex;
 
                 // ---- 卡片头部（始终可见） ----
                 char cardId[32];
@@ -3780,6 +3881,24 @@ TemplateState::ClearResults();
                 ImVec2 typeSize = ImGui::CalcTextSize(typeLabel);
 
                 ImDrawList* headerDraw = ImGui::GetWindowDrawList();
+                if (batchHl)
+                {
+                    const ImU32 stepAccent = ImGui::ColorConvertFloat4ToU32(isDark
+                        ? ImVec4(0.22f, 0.92f, 0.48f, 1.0f)
+                        : ImVec4(0.04f, 0.58f, 0.24f, 1.0f));
+                    headerDraw->AddRectFilled(
+                        headerMin,
+                        ImVec2(headerMin.x + 3.0f, headerMin.y + childH),
+                        stepAccent,
+                        2.0f);
+                    headerDraw->AddRect(
+                        headerMin,
+                        ImVec2(headerMin.x + childW, headerMin.y + childH),
+                        stepAccent,
+                        4.0f,
+                        0,
+                        1.5f);
+                }
                 ImU32 controlBorder = ImGui::ColorConvertFloat4ToU32(isDark ? ImVec4(0.45f, 0.50f, 0.58f, 1.0f) : ImVec4(0.55f, 0.58f, 0.64f, 1.0f));
                 ImU32 controlText = ImGui::ColorConvertFloat4ToU32(isDark ? ImVec4(0.70f, 0.76f, 0.84f, 1.0f) : ImVec4(0.28f, 0.30f, 0.34f, 1.0f));
 
@@ -4151,8 +4270,14 @@ TemplateState::ClearResults();
             }
 
             bool taskParallel = ToolController::IsTaskParallelEnabled();
-            ImGui::BeginDisabled(running || loopEnabled ||
-                ToolChainState::ReadOnlyTaskGroups().size() < 2);
+            const int enabledTaskCount = static_cast<int>(std::count_if(
+                ToolChainState::ReadOnlyTaskGroups().begin(),
+                ToolChainState::ReadOnlyTaskGroups().end(),
+                [](const TaskGroupDefinition& group)
+                {
+                    return group.enabled;
+                }));
+            ImGui::BeginDisabled(running || loopEnabled || enabledTaskCount < 2);
             if (ImGui::Checkbox("任务并行", &taskParallel))
                 ToolController::SetTaskParallelEnabled(taskParallel);
             ImGui::EndDisabled();

@@ -1,6 +1,6 @@
 # 多点找色工具 UI 优化设计
 
-> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+> 历史设计：记录 2026-07-15 多点找色 UI 决策，保留当时范围与术语；当前工具契约见 `../../ALGORITHMS.md`。
 
 
 ## 改动范围

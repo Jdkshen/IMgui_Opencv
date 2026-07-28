@@ -3,7 +3,9 @@
 #include <functional>
 #include <unordered_map>
 
-#include "../ToolsWindow.h"
+#include "../../Core/ToolInstance.h"
+
+using ToolUIFn = std::function<void(ToolInstance& tool, int instanceIndex)>;
 
 struct ToolPanelContext
 {

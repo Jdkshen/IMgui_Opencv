@@ -1,6 +1,6 @@
 # Development Plan: P0-P4
 
-> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+> 历史计划：本文保留 2026-07-19 的 P0～P4 英文执行清单，不作为当前未完成任务列表；当前路线见 `ROADMAP.md`，当前架构见 `CODE_STRUCTURE.md`。
 
 
 This document is the execution checklist for the current architecture cleanup.

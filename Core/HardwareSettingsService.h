@@ -1,6 +1,17 @@
 #pragma once
 
+#include "HardwareRuntimeService.h"
+
+#include <cstdint>
 #include <string>
+#include <vector>
+
+struct HardwareTaskIdentity
+{
+    std::uint64_t id = 0;
+    std::string name;
+    bool operator==(const HardwareTaskIdentity&) const = default;
+};
 
 struct HardwarePanelSettings
 {
@@ -39,10 +50,36 @@ struct HardwarePanelSettings
     int outputRetryCount = 2;
     int outputRetryDelayMs = 150;
     bool outputReconnectBeforeRetry = true;
+    bool outputHandshakeEnabled = false;
+    int outputPollIntervalMs = 50;
+    int outputAcknowledgementTimeoutMs = 3000;
+    int outputInspectionTimeoutMs = 30000;
+    int outputHeartbeatIntervalMs = 1000;
+    bool outputAutoReconnect = true;
+    int outputReconnectFailureThreshold = 3;
+    int outputReconnectInitialDelayMs = 250;
+    int outputReconnectMaxDelayMs = 5000;
+    std::vector<HardwareIoMapping> outputIoMappings = {
+        {true, HardwareIoSignal::Trigger, HardwareIoDirection::Input, 0, false, 0, "任务01"},
+        {true, HardwareIoSignal::Busy, HardwareIoDirection::Output, 1, false, 0, {}},
+        {true, HardwareIoSignal::Done, HardwareIoDirection::Output, 2, false, 200, {}},
+        {true, HardwareIoSignal::Ok, HardwareIoDirection::Output, 3, false, 0, {}},
+        {true, HardwareIoSignal::Ng, HardwareIoDirection::Output, 4, false, 0, {}},
+        {true, HardwareIoSignal::Error, HardwareIoDirection::Output, 5, false, 0, {}},
+        {true, HardwareIoSignal::Heartbeat, HardwareIoDirection::Output, 6, false, 0, {}},
+        {true, HardwareIoSignal::Acknowledge, HardwareIoDirection::Input, 7, false, 0, {}}
+    };
 };
 
 namespace HardwareSettingsService
 {
+    std::vector<HardwareIoMapping> BuildStandardIoMappings(
+        const std::vector<std::string>& taskGroupNames);
+    bool EnsureTaskTriggerMappings(std::vector<HardwareIoMapping>& mappings,
+        const std::vector<std::string>& taskGroupNames);
+    bool SynchronizeTaskTriggerMappings(std::vector<HardwareIoMapping>& mappings,
+        const std::vector<HardwareTaskIdentity>& previousTaskGroups,
+        const std::vector<HardwareTaskIdentity>& currentTaskGroups);
     HardwarePanelSettings Load(const std::string& path = {});
     bool Save(const HardwarePanelSettings& settings, const std::string& path = {},
         std::string* error = nullptr);

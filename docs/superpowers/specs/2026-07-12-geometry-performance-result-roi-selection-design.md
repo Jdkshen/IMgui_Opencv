@@ -1,6 +1,6 @@
 # 几何绘制性能与结果 ROI 序号选择设计
 
-> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+> 历史设计：记录 2026-07-12 几何绘制、性能与结果 ROI 选择方案；当前实现边界见 `../../INSPECTION_PIPELINE_2026.md`。
 
 
 ## 目标

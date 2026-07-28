@@ -16,8 +16,8 @@ int s_width = 0;           // 图像宽度
 int s_height = 0;          // 图像高度
 int s_version = 0;         // 图像版本号（每次 SetImage 递增，用于缓存失效）
 
-// 同步内部状态到全局 VisionContext（兼容旧代码的全局变量访问）
-void SyncLegacyAndContext()
+// ImageState 是所有权入口；VisionContext 保留当前帧的执行视图。
+void SyncVisionContext()
 {
     gContext.image = s_current;
     gContext.originalImage = s_original;
@@ -44,16 +44,6 @@ namespace ImageState
         return s_current;
     }
 
-    cv::Mat& OriginalRef()
-    {
-        if (!s_original.empty())
-        {
-            s_original = s_original.clone();
-            gContext.originalImage = s_original;
-        }
-        return s_original;
-    }
-
     cv::Mat& PendingUploadRef()
     {
         return s_pendingUpload;
@@ -62,21 +52,6 @@ namespace ImageState
     bool& NeedUploadRef()
     {
         return s_needUpload;
-    }
-
-    int& WidthRef()
-    {
-        return s_width;
-    }
-
-    int& HeightRef()
-    {
-        return s_height;
-    }
-
-    int& VersionRef()
-    {
-        return s_version;
     }
 
     const cv::Mat& Current()
@@ -125,7 +100,7 @@ namespace ImageState
         s_width = image.cols;
         s_height = image.rows;
         ++s_version;
-        SyncLegacyAndContext();
+        SyncVisionContext();
     }
 
     void SetDebugImage(const cv::Mat& image)

@@ -1,705 +1,271 @@
-# OpenCV 算法文档
+# 视觉算法与工具说明
 
-> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+> 文档同步日期：2026-07-27。本文以当前 type 0-17、`VisionContext`、`ITool`、`ToolResult` 和任务执行链为准；硬件触发只改变任务选择与输入来源，不改变算法契约。
 
+## 1. 统一执行契约
 
-> 本文档列出项目中所有 OpenCV 算法，包含用途、函数签名、处理流程、参数说明和扩展指南。
-
----
-
-## 目录
-
-- [1. 图像处理管线 (ThresholdTool)](#1-图像处理管线-thresholdtool)
-- [2. 模板匹配 (TemplateMatch)](#2-模板匹配-templatematch)
-- [3. YOLO 目标检测 (YOLODetector)](#3-yolo-目标检测-yolodetector)
-- [4. 全局图像变量](#4-全局图像变量)
-- [5. 添加新算法的步骤](#5-添加新算法的步骤)
-- [6. 常见崩溃模式与防护](#6-常见崩溃模式与防护)
-- [7. 多点找色 (MultiColorFinder)](#7-多点找色-multicolorfinder)
-
----
-
-## 1. 图像处理管线 (ThresholdTool)
-
-**文件**: `Algorithm/ThresholdTool.h` / `Algorithm/ThresholdTool.cpp`
-
-### 功能
-对 `gImage` 执行可配置的图像处理管线，结果通过 DX12 纹理渲染到 ImGui 窗口。
-
-### 核心 API
-
-```cpp
-namespace ThresholdTool {
-    void ShowThresholdWindow();  // 显示阈值调试窗口（UI）
-    void ApplyProcess();         // 执行处理管线
-}
-```
-
-### 处理管线流程
-
-```
-gImage (BGR/BGRA)
-  │
-  ├─[灰度转换]──→ cv::cvtColor(BGR/BGRA → GRAY)  (可选, gUseGray=on)
-  │
-  ├─[高斯模糊]──→ cv::GaussianBlur()              (可选, gPipe.enableBlur=on)
-  │
-  ├─[二值化]────→ cv::threshold()                 (可选, gPipe.enableThreshold=on)
-  │  └─[Canny]──→ cv::Canny()                    (可选, gPipe.enableCanny=on)
-  │
-  └─[RGBA转换]──→ cv::cvtColor(GRAY/BGR/BGRA → RGBA)
-                   └─ 输出到 gPendingUpload, 标记 gNeedUpload=true
-```
-
-### PipelineState 参数
-
-```cpp
-struct PipelineState {
-    bool enableBlur       = false;  // 是否高斯模糊
-    bool enableThreshold  = false;  // 是否二值化
-    bool enableCanny      = false;  // 是否 Canny 边缘
-    int  blurSize         = 5;      // 模糊核大小 (奇数, ≥3)
-    int  threshold        = 128;    // 二值化阈值 (0-255)
-    int  cannyLow         = 50;     // Canny 低阈值
-    int  cannyHigh        = 150;    // Canny 高阈值
-};
-```
-
-### OpenCV 函数使用
-
-| 步骤 | 函数 | 说明 |
-|------|------|------|
-| 灰度 | `cv::cvtColor(src, dst, COLOR_BGR2GRAY)` | 3→1通道 |
-| 灰度 | `cv::cvtColor(src, dst, COLOR_BGRA2GRAY)` | 4→1通道 |
-| 模糊 | `cv::GaussianBlur(src, dst, Size(k,k), 0)` | k=blurSize*2+1 |
-| 二值化 | `cv::threshold(src, dst, t, 255, THRESH_BINARY)` | t=阈值 |
-| Canny | `cv::Canny(src, dst, low, high)` | 双阈值 |
-| 输出 | `cv::cvtColor(result, rgba, COLOR_GRAY2RGBA)` | 灰度回RGBA |
-| 输出 | `cv::cvtColor(result, rgba, COLOR_BGR2RGBA)` | BGR转RGBA |
-
----
-
-## 2. 模板匹配 (TemplateMatch)
-
-**文件**: `Algorithm/TemplateMatch.h` / `Algorithm/TemplateMatch.cpp`
-
-### 功能
-在 `gImage` 中搜索模板图像，支持旋转、预处理（灰度/二值化/边缘），结果用 NMS 去重后绘制蓝色矩形。
-
-### 核心 API
-
-```cpp
-namespace TemplateMatch {
-    void Run();                       // 同步执行匹配
-    void RunAsync();                  // 异步执行（后台线程）
-    void CheckAsyncResult();          // 每帧检查异步结果
-    void ShowWindow();                // 调试窗口
-    void ShowTemplateEditor();        // 模板编辑弹窗
-    void DrawMatches(ImDrawList* dl); // 绘制匹配结果
-    void Clear();                     // 清空结果
-}
-```
-
-### 处理流程
-
-```
-1. 模板预处理 (cv::cvtColor + cv::threshold + cv::Canny)
-2. 源图预处理 (同模板)
-3. 循环旋转角度 [start, end, step]:
-     cv::getRotationMatrix2D()  →  cv::warpAffine()
-     cv::matchTemplate()        →  cv::minMaxLoc()
-4. NMS去重: cv::dnn::NMSBoxes()
-5. 绘制结果 → gMatchROIs
-```
-
-### 关键参数 (extern)
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `g_TMMatchThreshold` | float | 0.6f | 匹配分数阈值 |
-| `g_TMMaxResults` | int | 10 | 最大结果数 |
-| `g_TMEnableRotation` | bool | false | 启用旋转搜索 |
-| `g_TMRotationStart` | int | -30 | 旋转起始角度 |
-| `g_TMRotationEnd` | int | 30 | 旋转结束角度 |
-| `g_TMRotationStep` | int | 5 | 旋转步长 |
-| `g_NmsThreshold` | float | 0.4f | NMS 阈值 |
-| `g_TplGray` | bool | false | 模板灰度化 |
-| `g_TplBinary` | bool | false | 模板二值化 |
-| `g_TplEdge` | bool | false | 模板边缘检测 |
-
-### OpenCV 函数使用
-
-| 步骤 | 函数 | 说明 |
-|------|------|------|
-| 灰度 | `cv::cvtColor(src, dst, COLOR_BGR2GRAY)` | 颜色→灰度 |
-| 二值化 | `cv::threshold(src, dst, t, 255, THRESH_BINARY)` | |
-| 边缘 | `cv::Canny(src, dst, low, high)` | |
-| 旋转 | `cv::getRotationMatrix2D(center, angle, 1.0)` | 生成旋转矩阵 |
-| 旋转 | `cv::warpAffine(src, dst, M, size)` | 应用旋转 |
-| 匹配 | `cv::matchTemplate(img, tpl, result, TM_CCOEFF_NORMED)` | 模板匹配 |
-| 极值 | `cv::minMaxLoc(result, &minV, &maxV, &minP, &maxP)` | 找最佳匹配 |
-| NMS | `cv::dnn::NMSBoxes(boxes, scores, thresh, nmsThresh, indices)` | 去重 |
-
----
-
-## 3. YOLO 目标检测 (YOLODetector)
-
-**文件**: `Algorithm/YOLODetector.h` / `Algorithm/YOLODetector.cpp`
-
-### 功能
-使用 ONNX Runtime 加载 YOLO 模型，对 `gImage` 执行目标检测，支持 ROI 限定区域。
-
-### 核心 API
-
-```cpp
-namespace YOLODetector {
-    bool LoadModel(const std::string& onnxPath, const std::string& classesPath);
-    bool IsLoaded();
-    std::vector<DetectedObject> Detect(
-        const cv::Mat& image,
-        float confThreshold = 0.5f,
-        float nmsThreshold  = 0.4f,
-        cv::Rect roi        = cv::Rect()
-    );
-    void DrawDetections(cv::Mat& image, const std::vector<DetectedObject>& objects, bool drawLabel = true);
-    void Unload();
-}
-```
-
-### 结果结构体
-
-```cpp
-struct DetectedObject {
-    cv::Rect box;           // 检测框 (x, y, w, h)
-    int   classId;          // 类别ID
-    float confidence;       // 置信度 [0,1]
-    std::string className;  // 类别名称
-};
-```
-
-### 处理流程
-
-```
-图像 → cv::dnn::blobFromImage() → ONNX Runtime 推理
-  → 解析输出张量 [1, C, N] 或 [C, N]
-  → 逐候选框计算置信度 → 过滤低于阈值的
-  → cv::dnn::NMSBoxes() 去重
-  → 返回 DetectedObject 列表
-```
-
-### 关键参数
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `confThreshold` | float | 0.5f | 置信度阈值 (0-1) |
-| `nmsThreshold` | float | 0.4f | NMS 去重阈值 (0-1) |
-| `roi` | cv::Rect | 全图 | 限定检测区域 |
-
-### OpenCV / ORT 函数使用
-
-| 步骤 | 函数 | 说明 |
-|------|------|------|
-| 预处理 | `cv::dnn::blobFromImage(img, 1/255, Size(640,640), Scalar(), true, false)` | 缩放+归一化+RGB |
-| 推理 | `Ort::Session::Run()` | ONNX Runtime 前向推理 |
-| 后处理 | 手动解析 float* 张量 | 提取 cx,cy,w,h,confidences |
-| NMS | `cv::dnn::NMSBoxes(boxes, scores, thresh, nmsThresh, indices)` | 去重 |
-| 绘制 | `cv::rectangle(img, box, color, thickness)` | 画框 |
-| 绘制 | `cv::getTextSize(label, FONT_HERSHEY_SIMPLEX, ...)` | 文字尺寸 |
-| 绘制 | `cv::putText(img, label, pos, FONT, scale, color, thick, LINE_AA)` | 画标签 |
-
----
-
-## 4. VisionContext — 统一视觉上下文
-
-所有算法通过 `VisionContext` 获取输入和共享状态（定义在 `Core/VisionContext.h/.cpp`）：
-
-```cpp
-struct VisionContext {
-    cv::Mat image;                  // 当前处理图像 (BGR，曾为 gImage)
-    cv::Mat originalImage;          // 原始图像备份
-    cv::Mat frozenTemplate;         // 冻结模板（形状匹配等）
-
-    std::vector<ROI> rois;          // ROI 列表
-    int selectedROI = -1;           // 当前选中 ROI
-
-    std::vector<ToolResult> unifiedResults; // 统一工具输出
-
-    int imageVersion = 0;           // 图像版本号
-    float zoom = 1.0f;              // 视图缩放
-    ImVec2 pan, canvasSize, imageScreenPos; // 视图变换
-
-    // 便捷方法
-    bool HasROI() const;
-    cv::Rect GetActiveROIRect() const;
-    float GetActiveROIRadius() const;
-    const std::vector<ImVec2>& GetActiveROIPolygon() const;
-};
-
-// 全局单例
-extern VisionContext gContext;
-```
-
-### 图像数据流
-
-```
-文件/摄像头
-  │
-  ├─ cv::imread() / cv::VideoCapture::read()
-  │
-  └─→ gImage (BGR/BGRA) ──同步──→ gContext.image
-        │
-        ├─ 算法处理 → gPendingUpload (RGBA) → GPU 纹理
-        │
-        └─ ITool::Execute(gContext) → ToolResult
-              └─ gContext.unifiedResults → DrawUnifiedResults()
-```
-
-### 向后兼容
-
-当前 type 0-11、13 工具统一通过 `ITool + VisionContext + ToolResult` 执行，并通过 `gContext.unifiedResults` 发布结果；旧的 `g_UnifiedResults` 影子状态已删除。部分工具仍会在图像处理链路中更新 `gImage`、`gPendingUpload`、`gNeedUpload` 等状态，后续新增工具仍应优先走统一接口。
-
----
-
-## 5. ITool 接口 + ToolResult 统一输出
-
-### ToolResult 结构（`Algorithm/ToolResult.h`）
-
-```cpp
-struct ToolResult {
-    std::string toolName;
-    bool success = true;
-    std::string message;
-
-    struct Measurement { std::string name; double value = 0; std::string unit; };
-    std::vector<Measurement> measurements;
-
-    struct Region {
-        std::vector<cv::Point> contour;
-        cv::Rect bbox;
-        float area = 0;
-        float score = 0;
-        std::string label;
-    };
-    std::vector<Region> regions;        // 轮廓/Blob/形状匹配区域
-
-    struct Detection {
-        cv::Rect box;
-        int classId = -1;
-        float score = 0;
-        std::string label;
-    };
-    std::vector<Detection> detections;  // YOLO/分类检测框
-
-    struct Line { cv::Point p1, p2; float length = 0; float angle = 0; };
-    std::vector<Line> lines;            // 直线检测
-
-    struct TextItem { std::string text; cv::Rect box; float confidence = 0; };
-    std::vector<TextItem> texts;        // OCR 文本框、文本内容和置信度
-
-    cv::Mat debugImage;                 // 可选调试图像
-};
-```
-
-### ITool 接口（`Algorithm/ITool.h`）
+除 type 12“原图”外，当前 17 个视觉工具都实现 `ITool`：
 
 ```cpp
 class ITool {
 public:
+    virtual ~ITool() = default;
     virtual const char* GetName() const = 0;
     virtual int GetType() const = 0;
-    virtual ToolResult Execute(VisionContext& ctx) = 0;  // 核心
+    virtual ToolResult Execute(VisionContext& ctx) = 0;
     virtual void DrawUI() = 0;
     virtual nlohmann::json Save() const = 0;
-    virtual void Load(const nlohmann::json& j) = 0;
-
-    static std::unique_ptr<ITool> Create(int type); // 工厂
+    virtual void Load(const nlohmann::json& json) = 0;
 };
 ```
 
-### 已接入工具
+实际调用链：
 
-| type | 类名 | 文件 |
-|------|------|------|
-| 4 | `YOLOTool` | `Algorithm/YOLOTool.h/.cpp` |
-| 5 | `ContourTool` | `Algorithm/ShapeTools.h/.cpp` |
-| 6 | `ShapeTool` | `Algorithm/ShapeTools.h/.cpp` |
-| 7 | `LineTool` | `Algorithm/ShapeTools.h/.cpp` |
-| 10 | `MultiColorFinder` | `Algorithm/MultiColorFinder.h/.cpp` |
-
-### 工具注册
-
-```cpp
-// Algorithm/ITool.cpp — 静态初始化自动注册
-ToolRegistry::Register(0, []() -> std::unique_ptr<ITool> { return std::make_unique<EdgeTool>(); });
-ToolRegistry::Register(2, []() -> std::unique_ptr<ITool> { return std::make_unique<BlobTool>(); });
-ToolRegistry::Register(3, []() -> std::unique_ptr<ITool> { return std::make_unique<ThresholdITool>(); });
-ToolRegistry::Register(4, []() -> std::unique_ptr<ITool> { return std::make_unique<YOLOTool>(); });
-ToolRegistry::Register(5, []() -> std::unique_ptr<ITool> { return std::make_unique<ContourTool>(); });
-ToolRegistry::Register(6, []() -> std::unique_ptr<ITool> { return std::make_unique<ShapeTool>(); });
-ToolRegistry::Register(7, []() -> std::unique_ptr<ITool> { return std::make_unique<LineTool>(); });
-ToolRegistry::Register(8, []() -> std::unique_ptr<ITool> { return std::make_unique<MorphologyITool>(); });
-ToolRegistry::Register(9, []() -> std::unique_ptr<ITool> { return std::make_unique<ColorAnalyzerITool>(); });
-ToolRegistry::Register(10, []() -> std::unique_ptr<ITool> { return std::make_unique<MultiColorFinder>(); });
-
-// Core/ToolExecutor.cpp — 运行期补充注册
-ToolRegistry::Register(1, []() -> std::unique_ptr<ITool> { return std::make_unique<TemplateMatchITool>(); });
-ToolRegistry::Register(11, []() -> std::unique_ptr<ITool> { return std::make_unique<OpenCVYoloITool>(); });
+```text
+任务输入 / 当前公共图片
+    → ToolController 选择执行范围与顺序
+    → ToolExecutor 准备图像快照、ROI、Fixture 和工具参数
+    → ITool::Execute(VisionContext&)
+    → ToolJudgement 计算 Pass / Fail / Error
+    → ResultPublisher 或 ToolExecutor::PublishDetached
+    → gContext.unifiedResults
+    → ResultOverlayState
+    → ImageViewer::DrawUnifiedResults
 ```
 
----
+任务并行时，每个任务使用独立的 `ToolInstance` 和 `VisionContext` 快照；任务线程不直接修改 ImGui、公共图像或公共结果容器。
 
-## 6. 添加新算法的步骤
+## 2. VisionContext
 
-建议新增工具优先实现 `ITool`，再通过 `ToolExecutor::RunViaITool()` 走统一执行和 `ToolResult` 输出。下面以添加一个新的检测工具为例。
+`Core/VisionContext.h` 是算法执行的输入边界：
 
-### Step 1: 创建算法文件
+| 字段 | 用途 |
+| --- | --- |
+| `image` / `originalImage` | 当前工具输入与本轮原图快照 |
+| `immutableImageOwner` / `immutableOriginalOwner` | 并行任务共享的只读图像所有权 |
+| `frame` | 单图、序列、视频或相机的统一帧包 |
+| `imageVersion` / `width` / `height` | 图像版本和尺寸 |
+| `stopToken` | 后台执行取消 |
+| `rois` / `selectedROI` | 本次工具执行的 ROI 快照 |
+| `frozenTemplate` | 兼容模板输入 |
+| `unifiedResults` | 当前统一叠加结果 |
 
-```cpp
-// Algorithm/MyDetectorTool.h
-#pragma once
-#include "ITool.h"
+算法只读取 `ctx.image` 和 `ctx.rois`，不读取 UI 状态。视图缩放和平移由 `ImageViewState` 管理，不属于算法上下文。
 
-class MyDetectorTool : public ITool {
-public:
-    const char* GetName() const override { return "我的检测"; }
-    int GetType() const override { return 13; }
-    ToolResult Execute(VisionContext& ctx) override;
-    void DrawUI() override {}
-    nlohmann::json Save() const override { return {}; }
-    void Load(const nlohmann::json&) override {}
-};
+## 3. ToolResult
+
+`Algorithm/ToolResult.h` 同时承载执行状态、性能数据和可视化结果：
+
+| 分组 | 字段 |
+| --- | --- |
+| 来源 | `toolName`、`sourceToolIndex`、`sourceToolId` |
+| 状态 | `success`、`skipped`、`message`、`status`、`statusReason` |
+| 耗时 | `prepareMs`、`executeMs`、`publishMs`、`wallMs`、后端预处理/推理/后处理耗时 |
+| 测量 | `measurements` |
+| 区域 | `regions`：轮廓、bbox、中心、面积、分数、角度、宽高、圆度和长宽比 |
+| 检测 | `detections`：框、类别、分数和标签 |
+| 线段 | `lines`：端点、长度和角度 |
+| 文本 | `texts`：文字、矩形框和置信度 |
+| 图像 | `debugImage`：可选处理结果图 |
+
+`ToolResultStatus` 的含义：
+
+- `Pass`：执行成功且满足判定条件。
+- `Fail`：算法执行完成，但数量、分数、面积、文字、公差或质量门限不合格。
+- `Error`：输入、模型、ROI、依赖或算法执行无效。
+
+## 4. 工具 type 分配
+
+| type | 工具 | 实现 | 主要输出 |
+| ---: | --- | --- | --- |
+| 0 | 边缘检测 | `EdgeTool` | `debugImage`、测量项 |
+| 1 | 模板匹配 | `TemplateMatchITool` | `regions` |
+| 2 | Blob 分析 | `BlobTool` | `regions`、`measurements` |
+| 3 | 阈值调试 | `ThresholdITool` | `debugImage` |
+| 4 | YOLO 检测 | `YOLOTool` / ONNX Runtime | `detections` |
+| 5 | 轮廓分析 | `ContourTool` | `regions` |
+| 6 | 形状匹配 | `ShapeTool` | `regions` |
+| 7 | 直线检测 | `LineTool` | `lines` |
+| 8 | 形态学 | `MorphologyITool` | `debugImage` |
+| 9 | 颜色分析 | `ColorAnalyzerITool` | `measurements`、`debugImage` |
+| 10 | 多点找色 | `MultiColorFinder` | `regions` |
+| 11 | YOLO OpenCV 5.0 | `OpenCVYoloITool` | `detections`、后端耗时 |
+| 12 | 原图 | `ToolController` 特殊节点 | 恢复本轮原图 |
+| 13 | 文字识别 | `OCRTool` / PP-OCRv6 tiny + NCNN | `texts`、`measurements` |
+| 14 | 二维码/条码识别 | `QRCodeTool` | `texts`、`regions` |
+| 15 | 工业测量 | `MeasurementTool` / `CaliperOperators` | `measurements`、`lines`、`regions` |
+| 16 | 图像差分 | `DifferenceTool` | `regions`、`measurements`、`debugImage` |
+| 17 | 几何绘制 | `GeometryDrawTool` | 几何图元结果 |
+
+新增工具从 type 18 开始。
+
+## 5. 基础处理工具
+
+### 5.1 边缘检测（type 0）
+
+处理流程：按需转灰度，然后使用 `cv::Canny`。主要参数为低阈值、高阈值和灰度开关。输出图可作为后续工具的“上一步处理图”。
+
+### 5.2 阈值调试（type 3）
+
+```text
+ctx.image
+    → 可选灰度
+    → 可选 GaussianBlur
+    → 可选 threshold
+    → 可选 Canny
+    → ToolResult.debugImage
 ```
 
-### Step 2: 实现算法
+参数保存在 `ToolInstance::threshold`，不再由散落的全局参数控制。
+
+### 5.3 形态学（type 8）
+
+支持腐蚀、膨胀、开、闭、梯度、顶帽和黑帽；可配置核大小、核形状、迭代次数和灰度处理。核心 API 是 `cv::getStructuringElement` 与 `cv::morphologyEx`。
+
+### 5.4 原图（type 12）
+
+原图不是 `ITool`。`ToolController` 在执行到该节点时恢复本轮任务输入，用于阻断前面处理图继续向后累积。
+
+## 6. 检测与识别工具
+
+### 6.1 模板匹配（type 1）
+
+`TemplateMatchingTool` 保存每实例模板、搜索 ROI、源图/模板预处理、旋转范围、阈值、最大结果数和 NMS 参数。
+
+```text
+模板与源图预处理
+    → 按角度旋转模板
+    → cv::matchTemplate
+    → 候选分数过滤
+    → NMS 去重
+    → ToolResult.regions（含中心、分数和角度）
+```
+
+`Algorithm/TemplateMatch.*` 只保留无 UI 的兼容辅助；工具链主入口是 `TemplateMatchITool`。
+
+### 6.2 YOLO（type 4 / type 11）
+
+- type 4 使用 ONNX Runtime，支持类别文件、置信度、NMS、ROI 和 DirectML。
+- type 11 使用 OpenCV 5 DNN，作为实验对比后端，并记录后端预处理、推理和后处理耗时。
+- 两者都将最终框转换为 `ToolResult::Detection`，显示层不直接依赖后端结构。
+
+### 6.3 Blob 与轮廓（type 2 / type 5）
+
+- Blob：二值化、连通域/轮廓提取、面积、中心、圆度、长宽比和方向筛选。
+- 轮廓：灰度、模糊、固定/OTSU/自适应阈值、轮廓层级、凸性和多边形近似。
+- 两者都使用 `regions` 输出几何区域，并可通过统一判定规则约束数量、面积和分数。
+
+### 6.4 形状匹配（type 6）
+
+先用模板相关性定位候选，再提取轮廓进行 Hu 矩、ShapeContext 或 Hausdorff 比对。定位角度和区域中心可作为后续 Fixture 来源。
+
+### 6.5 多点找色（type 10）
+
+参考图保存锚点和多个颜色点。执行时逐候选位置检查颜色容差，完整匹配优先，找不到完整匹配时可保留最佳部分匹配反馈；结果经过距离去重后写入 `regions`。
+
+### 6.6 OCR（type 13）
+
+PP-OCRv6 tiny NCNN 流程包括文本检测、候选框过滤、文本识别和结果缓存。支持 ROI 扩边、最小置信度、候选上限、仅检测和快速模式。模型或字典缺失时按工具配置阻止执行或跳过。
+
+### 6.7 二维码/条码（type 14）
+
+支持 QR、Code128、EAN-13/EAN-8、Data Matrix 和 PDF417。自动模式优先使用 ZXing-cpp，必要时回退 OpenCV QR；支持多码、图像增强、码制过滤和按“码制 + 内容”去重。
+
+### 6.8 图像差分（type 16）
+
+对当前图与实例参考图执行模糊、`absdiff`、阈值和形态学过滤，按最小面积筛选差异区域。参考图属于工具实例资产，随配方旁路文件保存。
+
+## 7. 几何与分析工具
+
+### 7.1 直线检测（type 7）
+
+`Canny → HoughLinesP → 长度/角度过滤`，支持 ROI 和最大结果数。输出端点、长度与角度。
+
+### 7.2 工业测量（type 15）
+
+支持点点距离、宽度卡尺、线线角度、圆拟合、边缘点、直线拟合、点线距离和线线距离。卡尺流程包含双线性采样、投影平均、Gaussian 平滑、梯度峰值、亚像素插值和 RANSAC/最小二乘拟合。
+
+标定支持 X/Y 比例、单应矩阵、相机内参与畸变参数；公差、有效卡尺数和可信度可直接影响 Pass/Fail。详见 `INSPECTION_PIPELINE_2026.md`。
+
+### 7.3 几何绘制（type 17）
+
+把线、矩形、圆等几何图元作为工具实例数据保存，用于结果标注和配方复现，不替代检测算法。
+
+### 7.4 颜色分析（type 9）
+
+支持 BGR、HSV、Lab 和 YCbCr 色域、直方图分箱、ROI 统计和可选直方图预览；统计值写入 `measurements`。
+
+## 8. ROI、上游结果与 Fixture
+
+每个工具可以使用：
+
+- 自身保存的搜索 ROI；
+- 上游工具的第 N 个结果或全部结果转成运行 ROI；
+- 上游模板/形状定位结果建立 Fixture 坐标系；
+- 上游结果缺失时跳过或判定失败。
+
+工具依赖优先使用稳定的 `toolId/sourceToolId`，旧配方中的索引仍可兼容解析。检测到跨任务结果 ROI 或 Fixture 依赖时，“执行全部”的任务并行会自动回退顺序执行。
+
+## 9. 工具链图像传递
+
+每个实例的 `inputSourceMode` 决定输入：
+
+| 值 | 界面含义 | 行为 |
+| ---: | --- | --- |
+| 0 | 上一步原图 | 使用上一个工具执行前的图 |
+| 1 | 上一步处理图 | 使用上一个工具产生的处理图 |
+| 2 | 原图工具输出 | 使用最近一次原图节点恢复的图；没有节点时回退本轮输入 |
+
+处理类工具的 `debugImage` 可成为后续链路图像。主线程显示图由 `ImageState` 管理，DX12 上传状态也封装在 `ImageState` 内，不允许算法直接写 GPU 全局状态。
+
+## 10. 添加新工具
+
+1. 从 type 18 开始分配唯一编号。
+2. 在 `Algorithm/` 新增实现并注册到 `ToolRegistry`。
+3. 在 `ToolInstance` 或拆分的 `ToolSettings` 中增加实例参数。
+4. 在 `UI/ToolsWindow.cpp` 的 `g_ToolRegistry` 添加名称、分类和参数面板。
+5. 在 `ToolExecutor::RunViaITool()` 同步实例参数。
+6. 在 `ToolInstance::ToRecipeJson()` / `LoadRecipeJson()` 保存和加载参数；资源资产再补 `RecipeToolInstance`。
+7. 更新 `.vcxproj` 与 `.vcxproj.filters`。
+8. 添加空图、ROI、配方往返、判定和执行结果回归。
+9. 更新 `README.md`、本文、`CODE_STRUCTURE.md`、`ROADMAP.md` 和 type 表。
+
+最小实现：
 
 ```cpp
-// Algorithm/MyDetectorTool.cpp
-#include "MyDetectorTool.h"
-#include "../Core/VisionContext.h"
-#include <opencv2/imgproc.hpp>
-
-ToolResult MyDetectorTool::Execute(VisionContext& ctx) {
+ToolResult MyTool::Execute(VisionContext& ctx) {
     ToolResult result;
     result.toolName = GetName();
     if (ctx.image.empty()) {
         result.success = false;
+        result.status = ToolResultStatus::Error;
         result.message = "请先加载图片";
         return result;
     }
 
-    cv::Mat gray, binary;
-    if (ctx.image.channels() > 1)
-        cv::cvtColor(ctx.image, gray, cv::COLOR_BGR2GRAY);
-    else
-        gray = ctx.image;
-
-    cv::threshold(gray, binary, 128, 255, cv::THRESH_BINARY);
-
-    std::vector<std::vector<cv::Point>> contours;
-    cv::findContours(binary, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-
-    for (auto& c : contours) {
-        ToolResult::Region region;
-        region.contour = c;
-        region.bbox = cv::boundingRect(c);
-        region.area = (float)cv::contourArea(c);
-        result.regions.push_back(std::move(region));
-    }
-
+    // OpenCV 算法；周期性检查 ctx.IsCancellationRequested()
     return result;
 }
 ```
 
-### Step 3: 注册工具和 UI
+## 11. 稳定性规则
 
-```cpp
-// UI/ToolsWindow.cpp
-{13, "我的检测", ToolCategory::Detection, ""},
+- 调用 `cvtColor`、`resize`、`threshold`、模型推理前检查 `cv::Mat::empty()`。
+- ROI 必须与图像边界求交，并确认宽高大于 0。
+- 后台循环和耗时推理应检查 `ctx.IsCancellationRequested()`。
+- ImGui 的 `Begin/End`、`BeginChild/EndChild` 必须成对，OpenCV 异常不能跳过结束调用。
+- 算法返回 `ToolResult`，不要新增独立的全局结果容器。
+- 模型、模板或参考图缺失时返回明确状态，不允许静默使用无效内存。
+- 并行任务只使用快照，不从工作线程写 `ImageState`、ImGui 或 DX12 资源。
 
-// Algorithm/ITool.cpp
-ToolRegistry::Register(13, []() -> std::unique_ptr<ITool> {
-    return std::make_unique<MyDetectorTool>();
-});
+## 12. 验证
+
+```powershell
+MSBuild Windows_imgui.slnx /m /p:Configuration=Release /p:Platform=x64
+Test\x64\Debug\RegressionTests.exe
+Test\x64\Debug\RegressionTests.exe --policy-only
+Test\x64\Debug\RegressionTests.exe --caliper-only
+Test\x64\Debug\RegressionTests.exe --qr-only
 ```
 
-### Step 4: 接入执行和配方
-
-1. 在 `ToolInstance` 添加新工具参数。
-2. 在 `ToolExecutor::RunViaITool()` 中把 `ToolInstance` 参数同步到工具对象。
-3. 在 `ToolExecutor::Execute()` 中把新 type 分发到 `RunViaITool()`；当前 0-11、13 已走统一 ITool，新增工具建议从 type 14 开始。
-4. 在 `RecipeManager.h/.cpp` 增加保存和加载字段。
-5. 在 `Windows_imgui.vcxproj` 和 `.vcxproj.filters` 中添加新文件。
-
-### 结果输出模板
-
-```cpp
-ToolResult result;
-result.regions.push_back(region);     // 轮廓/Blob/形状区域
-result.detections.push_back(det);     // YOLO/分类检测框
-result.lines.push_back(line);         // 直线结果
-result.measurements.push_back(meas);  // 面积/长度/角度等测量值
-result.debugImage = debug.clone();    // 可选调试图
-return result;
-```
-
----
-
-## 7. 常见崩溃模式与防护
-
-### ❌ 模式1：空图像 cvtColor
-
-```cpp
-// 崩溃！空 Mat 的 channels()==0，掉入 else → 崩溃
-cv::Mat rgba;
-if (img.channels() == 1)      cv::cvtColor(img, rgba, cv::COLOR_GRAY2RGBA);
-else if (img.channels() == 3) cv::cvtColor(img, rgba, cv::COLOR_BGR2RGBA);
-else                           cv::cvtColor(img, rgba, cv::COLOR_BGRA2RGBA);
-```
-
-```cpp
-// ✅ 正确：先检查空图
-if (img.empty()) return;
-cv::Mat rgba;
-if (img.channels() == 1)      cv::cvtColor(img, rgba, cv::COLOR_GRAY2RGBA);
-else if (img.channels() == 3) cv::cvtColor(img, rgba, cv::COLOR_BGR2RGBA);
-else                           cv::cvtColor(img, rgba, cv::COLOR_BGRA2RGBA);
-```
-
-### ❌ 模式2：ImGui Begin/End 之间的 try/catch
-
-```cpp
-// 崩溃！异常跳过 End()，ImGui 栈损坏 → MissingEndChild
-try {
-    ImGui::Begin("窗口");
-    cv::cvtColor(emptyMat, ...);  // 抛出 cv::Exception
-    ImGui::End();
-} catch (...) {}
-```
-
-```cpp
-// ✅ 正确：在 Begin 之前检查
-if (gImage.empty()) { ShowWarning(); return; }
-ImGui::Begin("窗口");
-// ... OpenCV 操作
-ImGui::End();
-```
-
-### ❌ 模式3：未检查 gImage.empty() 的执行按钮
-
-```cpp
-// ✅ 所有执行按钮必须加守卫
-if (ImGui::Button("执行")) {
-    if (gImage.empty()) {
-        LogSystem::Add(LOG_WARN, "请先加载图片");
-    } else {
-        DoOpenCVWork();
-    }
-}
-```
-
----
-
-> 最后更新: 2026-06-28 | 编译: MSVC + OpenCV 5.0 + ONNX Runtime + NCNN | 13 个 ITool 工具 + type 12 原图特殊工具
-
----
-
-## 7. 轮廓分析 (ContourDetector)
-
-**文件**: `Algorithm/ContourDetector.h` / `Algorithm/ContourDetector.cpp`
-
-### 功能
-对图像进行二值化后查找所有轮廓，支持面积/周长/凸包/圆度/多边形近似等分析，可选 ROI 内的 matchShapes 轮廓比对。
-
-### 核心 API
-
-```cpp
-namespace ContourDetector {
-    struct ContourResult {
-        std::vector<cv::Point> points;  // 轮廓点集
-        cv::Rect bbox;                   // 边界框
-        double area, perimeter;          // 面积、周长
-        int vertices;                     // 多边形近似顶点数
-        bool isConvex;                    // 是否凸包
-        double circularity;              // 圆度 = 4π·A/P²
-        double matchScore;                // matchShapes 得分
-        int srcIdx;                       // 来源模板编号
-        bool isTemplate;                  // 是否模板轮廓
-    };
-
----
-
-## 7. 多点找色 (MultiColorFinder)
-
-**文件**: `Algorithm/MultiColorFinder.h/cpp` | **类型**: ITool type=10 | **UI**: ToolsWindow.cpp
-
-### 功能
-
-从主图截取参考图（对齐模板匹配的ROI捕获流程），在参考图上点击取色，在大图中搜索所有颜色点同时匹配的位置。支持容差调节、部分匹配回退（绿/红点反馈）。
-
-### 核心结构
-
-```cpp
-struct ColorPoint { int x,y; int b,g,r; int tolerance; };
-class MultiColorFinder : public ITool {
-    cv::Mat refImage; int refAnchorX, refAnchorY;
-    std::vector<ColorPoint> points;
-    bool useROI; int maxResults; float minDist;
-};
-```
-
-### 匹配算法
-
-```
-逐像素扫描: 快速路径 (遇不匹配立即break)
-  ├─ 全部匹配 → 记录位置
-  └─ 部分匹配 → 更新最佳(无vec分配)
-无完全匹配 → 回退最佳部分匹配 (绿●+红●)
-NMS去重 → regions[] = {bbox=参考图ROI, contour=色点坐标}
-```
-
-### 绘制反馈
-
-| 场景 | 矩形框 | 圆点 |
-|------|:------:|:----:|
-| 完全匹配 | 绿色 | 绿● |
-| 部分匹配 | 无 | 绿●+红● |
-
-### UI 工作流
-
-```
-[添加ROI获取参考图] → 拖拽调整 → [确认捕获]
-→ 参考图点击取色 → [统一容差] → [执行多点找色]
-
-    struct Params {
-        bool useGray=true; int blurSize=5;
-        int threshMode=0;  // 0=OTSU 1=固定 2=自适应
-        int threshValue=128, adaptiveBlock=11;
-        bool invertBinary=false;
-        int retrMode=0;    // RETR_EXTERNAL/LIST/TREE
-        int approxMethod=1; // CHAIN_APPROX_NONE/SIMPLE/TC89_*
-        double minArea=100, maxArea=1e9;
-        bool filterConvex=false;
-        float approxEpsilon=0.02f;
-        int lineThickness=2, maxContours=500;
-        bool showLabels=true, fillContours=false;
-        bool matchROI=false;          // 启用ROI轮廓匹配
-        double matchThreshold=0.1;     // matchShapes阈值
-    };
-
-    std::vector<ContourResult> Detect(const cv::Mat&, const Params&);
-    cv::Mat DrawContours(cv::Mat&, const std::vector<ContourResult>&, const Params&);
-}
-```
-
-### OpenCV 函数
-
-| 步骤 | 函数 | 说明 |
-|------|------|------|
-| 灰度 | `cv::cvtColor(BGR→GRAY)` | 可选 |
-| 模糊 | `cv::GaussianBlur()` | 可选 |
-| 二值化 | `cv::threshold()` | OTSU/固定/自适应 |
-| 找轮廓 | `cv::findContours()` | RETR + CHAIN_APPROX |
-| 凸包 | `cv::convexHull()` | 可选过滤 |
-| 多边形近似 | `cv::approxPolyDP()` | 顶点数 |
-| 轮廓比对 | `cv::matchShapes()` | CONTOURS_MATCH_I1 |
-
----
-
-## 8. 形状匹配 (ShapeMatcher)
-
-**文件**: `Algorithm/ShapeMatcher.h` / `Algorithm/ShapeMatcher.cpp`
-
-### 功能
-两步匹配：① matchTemplate 灰度相关定位候选区 ② 在候选区内提取轮廓，用轮廓比对算法验证形状。支持模板预处理（灰度/二值化/模糊/反色），三种轮廓比对算法可选。
-
-### 算法流程
-
-```
-模板ROI → [预处理] → 提取模板轮廓
-目标图 → [matchTemplate] → NMS去重 → 候选区
-候选区 → [阈值二值化] → 提取轮廓 → [轮廓比对模板] → 红绿着色
-```
-
-### 核心 API
-
-```cpp
-struct ShapeMatch {
-    cv::Rect bbox;
-    double score;       // matchTemplate 相关分 (0~1, 越高越好)
-    double shapeScore;  // 轮廓比对分 (越低越像, 0=完美)
-    std::vector<cv::Point> points;  // 匹配轮廓
-    double area;
-    bool isGreen;       // true=通过 false=不通过
-};
-
-namespace ShapeMatcher {
-    struct Params {
-        int blurSize=5, tplRetrMode=0;
-        double tplMinArea=30, minScore=0.5, minShapeScore=0.3;
-        int lineThickness=2, maxResults=50;
-        bool showLabels=true;
-        int shapeMethod=0;  // 0=Hu矩 1=ShapeContext 2=Hausdorff
-        // 模板预处理
-        bool tplGray=false, tplBinary=false;
-        int tplBinThresh=128;
-        bool tplBlur=false; int tplBlurK=5;
-        bool tplInvert=false;
-    };
-}
-```
-
-### 轮廓比对算法
-
-| 算法 | 原理 | 特点 |
-|------|------|------|
-| **Hu矩** (method=0) | 7个不变矩 | 旋转/缩放/平移不变，快速 |
-| **ShapeContext** (method=1) | 极坐标直方图 + Chi-Square | 抗局部变形，对形状敏感 |
-| **Hausdorff** (method=2) | 点集最大最小距离 | 严格边缘匹配 |
-
-### OpenCV 函数
-
-| 步骤 | 函数 |
-|------|------|
-| 模板定位 | `cv::matchTemplate(TM_CCOEFF_NORMED)` |
-| 去重 | 自定义 NMS |
-| 轮廓提取 | `cv::findContours(RETR_EXTERNAL)` |
-| 轮廓比对 | `cv::matchShapes(CONTOURS_MATCH_I2)` |
-| 绘图 | `cv::rectangle` + `cv::drawContours` |
-
----
-
-## 9. 直线检测 (LineDetector)
-
-**文件**: `Algorithm/LineDetector.h` / `Algorithm/LineDetector.cpp`
-
-### 功能
-Canny 边缘 + 概率 Hough 直线检测，支持角度/长度过滤和 ROI 限定。
-
-### 核心 API
-
-```cpp
-struct LineResult {
-    cv::Point2f pt1, pt2;  // 线段两端点
-    float length, angle;   // 长度和角度(°)
-};
-
-namespace LineDetector {
-    struct Params {
-        int cannyLow=50, cannyHigh=150;
-        float minLineLength=100, maxLineGap=20;
-        float minAngle=0, maxAngle=180;
-        int lineThickness=2, maxLines=1;
-        bool showLabels=true;
-        cv::Rect roi;  // 可选ROI
-    };
-}
-```
-
-### OpenCV 函数
-
-| 步骤 | 函数 | 说明 |
-|------|------|------|
-| Canny | `cv::Canny()` | 边缘提取 |
-| Hough | `cv::HoughLinesP()` | 概率Hough |
-| 角度过滤 | 自定义 atan2 | 只保留角度范围内的线 |
-| 绘图 | `cv::line()` | 彩色线段 |
+完整回归还覆盖任务独立图片、文件夹轮换、相机回退、任务并行、配方兼容和结果判定。

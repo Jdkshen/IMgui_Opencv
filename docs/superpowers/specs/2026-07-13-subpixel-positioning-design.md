@@ -1,6 +1,6 @@
 # 统一亚像素定位设计
 
-> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+> 历史设计：记录 2026-07-13 统一亚像素定位的方案与迁移边界，不作为当前 API 清单；当前算法契约见 `../../ALGORITHMS.md`。
 
 
 ## 状态

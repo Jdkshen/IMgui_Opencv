@@ -52,7 +52,9 @@ models/
 models/*
 !models/ppocrv6/
 !models/ppocrv6/*
-Test/__pycache__/
+# Python helper caches
+__pycache__/
+*.py[cod]
 
 # Third-party runtime binaries should come from repository redist packages,
 # Git LFS, or download scripts. Headers under include/ are intentionally kept.

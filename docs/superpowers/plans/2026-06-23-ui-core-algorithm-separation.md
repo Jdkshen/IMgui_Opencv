@@ -1,6 +1,6 @@
 # UI/Core/Algorithm Separation Implementation Plan
 
-> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+> 历史实施计划：记录 2026-06-23 UI/Core/Algorithm 分层迁移步骤；当前分层与残留边界见 `../../CODE_STRUCTURE.md`。
 
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

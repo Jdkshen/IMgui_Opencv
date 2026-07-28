@@ -1,8 +1,8 @@
-> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+> 文档同步日期：2026-07-27。此目录用于 OCR 工具的 PP-OCRv6 NCNN 默认模型；算法入口和缺失模型行为见 [视觉算法说明](../../docs/ALGORITHMS.md)。
 
-PP-OCRv6 ncnn models from Avafly/PaddleOCR-ncnn-CPP v0.3.0.
+模型来源为 Avafly/PaddleOCR-ncnn-CPP v0.3.0 的 PP-OCRv6 NCNN 资产。
 
-Default tiny model filenames:
+默认 tiny 模型文件名：
 
 - PP_OCRv6_tiny_det.ncnn.param
 - PP_OCRv6_tiny_det.ncnn.bin
@@ -10,4 +10,4 @@ Default tiny model filenames:
 - PP_OCRv6_tiny_rec.ncnn.bin
 - ppocr_keys_v6_tiny.txt
 
-Use `version: "v6", type: "tiny"` in JS config.
+JS 配置使用 `version: "v6", type: "tiny"`。`.param`、`.bin` 和字典必须成套部署；缺任一文件时 OCR 工具应报告模型资源错误，而不是把空识别当成 Pass。

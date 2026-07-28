@@ -4,17 +4,20 @@
 #include "../Core/FrameArchiveService.h"
 #include "../Core/HardwareRuntimeService.h"
 #include "../Core/HardwareSettingsService.h"
+#include "../Core/ToolChainState.h"
 #include "../Core/OpenFileDialog.h"
 #include "../Core/ThemeManager.h"
 #include "../Log/LogSystem.h"
 #include "../include/imgui/imgui.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <iterator>
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -121,6 +124,23 @@ bool IsNarrowPanel()
 {
     return ImGui::GetContentRegionAvail().x < 260.0f;
 }
+
+const char* IoSignalName(HardwareIoSignal signal)
+{
+    switch (signal)
+    {
+    case HardwareIoSignal::Trigger: return "触发 Trigger";
+    case HardwareIoSignal::Busy: return "运行 Busy";
+    case HardwareIoSignal::Done: return "完成 Done";
+    case HardwareIoSignal::Ok: return "合格 OK";
+    case HardwareIoSignal::Ng: return "不合格 NG";
+    case HardwareIoSignal::Error: return "异常 Error";
+    case HardwareIoSignal::Heartbeat: return "心跳 Heartbeat";
+    case HardwareIoSignal::Acknowledge: return "确认 ACK";
+    default: return "未知";
+    }
+}
+
 }
 
 namespace UI
@@ -187,6 +207,21 @@ void DrawHardwarePanel()
     static int outputRetryCount = 2;
     static int outputRetryDelayMs = 150;
     static bool outputReconnectBeforeRetry = true;
+    static bool outputHandshakeEnabled = false;
+    static int outputPollIntervalMs = 50;
+    static int outputAcknowledgementTimeoutMs = 3000;
+    static int outputInspectionTimeoutMs = 30000;
+    static int outputHeartbeatIntervalMs = 1000;
+    static bool outputAutoReconnect = true;
+    static int outputReconnectFailureThreshold = 3;
+    static int outputReconnectInitialDelayMs = 250;
+    static int outputReconnectMaxDelayMs = 5000;
+    static std::vector<HardwareIoMapping> outputIoMappings;
+    static std::string manualTriggerTask;
+    static std::string scrollToTriggerTask;
+    static std::string triggerSyncMessage;
+    static std::vector<HardwareTaskIdentity> synchronizedTaskGroups;
+    static bool outputConfigurationDirty = false;
 
     if (!hardwareUiInitialized)
     {
@@ -226,6 +261,16 @@ void DrawHardwarePanel()
         outputRetryCount = settings.outputRetryCount;
         outputRetryDelayMs = settings.outputRetryDelayMs;
         outputReconnectBeforeRetry = settings.outputReconnectBeforeRetry;
+        outputHandshakeEnabled = settings.outputHandshakeEnabled;
+        outputPollIntervalMs = settings.outputPollIntervalMs;
+        outputAcknowledgementTimeoutMs = settings.outputAcknowledgementTimeoutMs;
+        outputInspectionTimeoutMs = settings.outputInspectionTimeoutMs;
+        outputHeartbeatIntervalMs = settings.outputHeartbeatIntervalMs;
+        outputAutoReconnect = settings.outputAutoReconnect;
+        outputReconnectFailureThreshold = settings.outputReconnectFailureThreshold;
+        outputReconnectInitialDelayMs = settings.outputReconnectInitialDelayMs;
+        outputReconnectMaxDelayMs = settings.outputReconnectMaxDelayMs;
+        outputIoMappings = settings.outputIoMappings;
         hardwareUiInitialized = true;
     }
 
@@ -239,6 +284,28 @@ void DrawHardwarePanel()
 
     HardwareRuntimeSnapshot snapshot = HardwareRuntimeService::Snapshot();
     bool hardwareSettingsChanged = false;
+
+    std::vector<HardwareTaskIdentity> currentTaskGroups;
+    std::vector<std::string> currentTaskGroupNames;
+    currentTaskGroups.reserve(ToolChainState::ReadOnlyTaskGroups().size());
+    currentTaskGroupNames.reserve(ToolChainState::ReadOnlyTaskGroups().size());
+    for (const TaskGroupDefinition& group : ToolChainState::ReadOnlyTaskGroups())
+    {
+        currentTaskGroups.push_back({group.id, group.name});
+        currentTaskGroupNames.push_back(group.name);
+    }
+    if (currentTaskGroups != synchronizedTaskGroups)
+    {
+        if (HardwareSettingsService::SynchronizeTaskTriggerMappings(
+            outputIoMappings, synchronizedTaskGroups, currentTaskGroups))
+        {
+            hardwareSettingsChanged = true;
+            outputConfigurationDirty = true;
+            triggerSyncMessage =
+                "已同步任务 Trigger：保留地址并处理新增、重命名或删除";
+        }
+        synchronizedTaskGroups = std::move(currentTaskGroups);
+    }
 
     DrawSectionTitle("工业相机");
     ImGui::TextColored(ConnectionStateColor(snapshot.cameraState), "%s%s%s",
@@ -477,6 +544,53 @@ void DrawHardwarePanel()
         static_cast<unsigned long long>(snapshot.outputSentCount),
         static_cast<unsigned long long>(snapshot.outputFailedCount),
         static_cast<unsigned long long>(snapshot.outputDroppedCount));
+    if (snapshot.handshakeEnabled)
+    {
+        const double nowMs = std::chrono::duration<double, std::milli>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        const double communicationAgeSeconds = snapshot.outputLastCommunicationTimestampMs > 0.0
+            ? (std::max)(0.0,
+                (nowMs - snapshot.outputLastCommunicationTimestampMs) / 1000.0)
+            : -1.0;
+        ImGui::TextColored(snapshot.outputCommunicationAlarm
+            ? ImVec4(0.95f, 0.30f, 0.28f, 1.0f)
+            : ImVec4(0.25f, 0.80f, 0.42f, 1.0f),
+            "%s · 最后通讯 %s · 连续失败 %d",
+            snapshot.outputCommunicationAlarm ? "通讯报警" : "通讯正常",
+            communicationAgeSeconds < 0.0 ? "暂无"
+                : (communicationAgeSeconds < 1.0 ? "刚刚" : "见悬停详情"),
+            snapshot.outputConsecutiveFailures);
+        if (communicationAgeSeconds >= 1.0)
+            ImGui::SetItemTooltip("最后一次成功通讯距今 %.1f 秒", communicationAgeSeconds);
+        if (snapshot.outputReconnecting)
+        {
+            ImGui::TextColored(ImVec4(0.95f, 0.72f, 0.22f, 1.0f),
+                "自动重连中 · 第 %d 次 · 等待 %d ms",
+                snapshot.outputReconnectAttempts,
+                snapshot.outputReconnectDelayMs);
+        }
+        if (snapshot.handshakeActive)
+        {
+            ImGui::TextColored(ImVec4(0.32f, 0.72f, 0.95f, 1.0f),
+                "握手进行中 · %s%s",
+                snapshot.handshakeTaskGroupName.empty()
+                    ? "未指定任务" : snapshot.handshakeTaskGroupName.c_str(),
+                snapshot.handshakeAwaitingAcknowledge
+                    ? " · 等待 PLC ACK" : "");
+        }
+        if (snapshot.handshakeIgnoredTriggerCount > 0)
+        {
+            ImGui::TextColored(ImVec4(0.95f, 0.72f, 0.22f, 1.0f),
+                "Busy 期间已忽略 %llu 次 Trigger · 不会排队补跑",
+                static_cast<unsigned long long>(
+                    snapshot.handshakeIgnoredTriggerCount));
+        }
+        if (snapshot.handshakeAlarm)
+        {
+            ImGui::TextColored(ImVec4(0.95f, 0.30f, 0.28f, 1.0f),
+                "握手报警 · %s", snapshot.handshakeAlarmMessage.c_str());
+        }
+    }
 
     const char* outputTypes[] = {
         "Modbus TCP 线圈", "Modbus PLC 标签", "OPC UA NodeId", "TCP 文本"};
@@ -554,12 +668,16 @@ void DrawHardwarePanel()
         hardwareSettingsChanged |= ImGui::Checkbox("反相##output_invert", &outputInvert);
 
         PropertyRow("自动发布");
+        ImGui::BeginDisabled(outputHandshakeEnabled);
         if (ImGui::Checkbox("批次完成后发布##output_auto_publish", &outputAutoPublish))
         {
             hardwareSettingsChanged = true;
             if (snapshot.outputState == DeviceConnectionState::Connected)
                 HardwareRuntimeService::SetOutputAutoPublish(outputAutoPublish);
         }
+        ImGui::EndDisabled();
+        if (outputHandshakeEnabled)
+            ImGui::SetItemTooltip("启用 PLC IO 握手后由 OK/NG/Error/Done 信号发布结果");
 
         PropertyRow("发送队列");
         hardwareSettingsChanged |= ImGui::DragInt(
@@ -580,6 +698,324 @@ void DrawHardwarePanel()
     }
 
     const bool outputConnected = snapshot.outputState == DeviceConnectionState::Connected;
+    if (outputType == 0)
+    {
+        DrawSectionTitle("PLC IO 映射与握手");
+        bool handshakeSettingsChanged = false;
+        if (ImGui::Checkbox("启用工业握手##plc_handshake_enabled",
+            &outputHandshakeEnabled))
+        {
+            handshakeSettingsChanged = true;
+            if (outputHandshakeEnabled)
+                outputAutoPublish = false;
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("Trigger → Busy → Done/OK/NG/Error → ACK");
+
+        if (BeginPropertyTable("##plc_handshake_properties"))
+        {
+            PropertyRow("轮询周期");
+            handshakeSettingsChanged |= ImGui::DragInt(
+                "##plc_poll_interval", &outputPollIntervalMs,
+                1.0f, 10, 5000, "%d ms");
+
+            PropertyRow("ACK 超时");
+            handshakeSettingsChanged |= ImGui::DragInt(
+                "##plc_ack_timeout", &outputAcknowledgementTimeoutMs,
+                10.0f, 100, 60000, "%d ms");
+
+            PropertyRow("检测超时");
+            handshakeSettingsChanged |= ImGui::DragInt(
+                "##plc_inspection_timeout", &outputInspectionTimeoutMs,
+                100.0f, 1000, 600000, "%d ms");
+
+            PropertyRow("心跳周期");
+            handshakeSettingsChanged |= ImGui::DragInt(
+                "##plc_heartbeat_interval", &outputHeartbeatIntervalMs,
+                10.0f, 100, 60000, "%d ms");
+
+            PropertyRow("断线恢复");
+            handshakeSettingsChanged |= ImGui::Checkbox(
+                "自动重连##plc_auto_reconnect", &outputAutoReconnect);
+
+            PropertyRow("失败阈值");
+            handshakeSettingsChanged |= ImGui::DragInt(
+                "##plc_reconnect_threshold", &outputReconnectFailureThreshold,
+                1.0f, 1, 100, "%d 次");
+
+            PropertyRow("重连退避");
+            ImGui::SetNextItemWidth((ImGui::GetContentRegionAvail().x -
+                ImGui::GetStyle().ItemSpacing.x) * 0.5f);
+            handshakeSettingsChanged |= ImGui::DragInt(
+                "##plc_reconnect_initial", &outputReconnectInitialDelayMs,
+                10.0f, 1, 60000, "%d ms");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(-1.0f);
+            handshakeSettingsChanged |= ImGui::DragInt(
+                "##plc_reconnect_max", &outputReconnectMaxDelayMs,
+                10.0f, 1, 60000, "%d ms");
+            ImGui::EndTable();
+        }
+
+        ImGui::TextDisabled("IO 映射（每个 Trigger 可绑定一个独立任务）");
+        if (currentTaskGroupNames.empty())
+        {
+            manualTriggerTask.clear();
+        }
+        else if (ToolChainState::TaskGroupIndexByName(manualTriggerTask) < 0)
+        {
+            manualTriggerTask = currentTaskGroupNames.front();
+        }
+        int removeMapping = -1;
+        if (ImGui::BeginTable("##plc_io_mapping", 9,
+            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+            ImGuiTableFlags_ScrollX | ImGuiTableFlags_SizingFixedFit,
+            ImVec2(0.0f, (std::min)(280.0f,
+                58.0f + outputIoMappings.size() * 30.0f))))
+        {
+            ImGui::TableSetupColumn("启用", ImGuiTableColumnFlags_WidthFixed, 44.0f);
+            ImGui::TableSetupColumn("信号", ImGuiTableColumnFlags_WidthFixed, 118.0f);
+            ImGui::TableSetupColumn("方向", ImGuiTableColumnFlags_WidthFixed, 98.0f);
+            ImGui::TableSetupColumn("地址", ImGuiTableColumnFlags_WidthFixed, 72.0f);
+            ImGui::TableSetupColumn("反相", ImGuiTableColumnFlags_WidthFixed, 44.0f);
+            ImGui::TableSetupColumn("脉冲", ImGuiTableColumnFlags_WidthFixed, 82.0f);
+            ImGui::TableSetupColumn("任务", ImGuiTableColumnFlags_WidthFixed, 120.0f);
+            ImGui::TableSetupColumn("单点测试", ImGuiTableColumnFlags_WidthFixed, 104.0f);
+            ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 34.0f);
+            ImGui::TableHeadersRow();
+
+            const char* signalItems[] = {
+                "触发 Trigger", "运行 Busy", "完成 Done", "合格 OK",
+                "不合格 NG", "异常 Error", "心跳 Heartbeat", "确认 ACK"};
+            const char* directionItems[] = {"PLC → 视觉", "视觉 → PLC"};
+            for (std::size_t index = 0; index < outputIoMappings.size(); ++index)
+            {
+                HardwareIoMapping& mapping = outputIoMappings[index];
+                ImGui::PushID(static_cast<int>(index));
+                ImGui::TableNextRow();
+
+                ImGui::TableSetColumnIndex(0);
+                handshakeSettingsChanged |= ImGui::Checkbox("##enabled", &mapping.enabled);
+
+                ImGui::TableSetColumnIndex(1);
+                int signal = static_cast<int>(mapping.signal);
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::Combo("##signal", &signal, signalItems,
+                    static_cast<int>(std::size(signalItems))))
+                {
+                    mapping.signal = static_cast<HardwareIoSignal>(signal);
+                    if (mapping.signal == HardwareIoSignal::Trigger ||
+                        mapping.signal == HardwareIoSignal::Acknowledge)
+                    {
+                        mapping.direction = HardwareIoDirection::Input;
+                    }
+                    else
+                    {
+                        mapping.direction = HardwareIoDirection::Output;
+                    }
+                    handshakeSettingsChanged = true;
+                }
+
+                ImGui::TableSetColumnIndex(2);
+                int direction = static_cast<int>(mapping.direction);
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::Combo("##direction", &direction, directionItems,
+                    static_cast<int>(std::size(directionItems))))
+                {
+                    mapping.direction = static_cast<HardwareIoDirection>(direction);
+                    handshakeSettingsChanged = true;
+                }
+
+                ImGui::TableSetColumnIndex(3);
+                int address = mapping.address;
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::DragInt("##address", &address, 1.0f, 0, 65535))
+                {
+                    mapping.address = ClampAddress(address);
+                    handshakeSettingsChanged = true;
+                }
+
+                ImGui::TableSetColumnIndex(4);
+                handshakeSettingsChanged |= ImGui::Checkbox("##invert", &mapping.invert);
+
+                ImGui::TableSetColumnIndex(5);
+                ImGui::BeginDisabled(mapping.direction == HardwareIoDirection::Input);
+                ImGui::SetNextItemWidth(-1.0f);
+                handshakeSettingsChanged |= ImGui::DragInt(
+                    "##pulse", &mapping.pulseMs, 10.0f, 0, 60000, "%d ms");
+                ImGui::EndDisabled();
+
+                ImGui::TableSetColumnIndex(6);
+                if (mapping.signal == HardwareIoSignal::Trigger)
+                {
+                    ImGui::SetNextItemWidth(-1.0f);
+                    if (ImGui::BeginCombo("##task", mapping.taskGroupName.empty()
+                        ? "选择任务" : mapping.taskGroupName.c_str()))
+                    {
+                        for (const TaskGroupDefinition& group :
+                            ToolChainState::ReadOnlyTaskGroups())
+                        {
+                            if (ImGui::Selectable(group.name.c_str(),
+                                mapping.taskGroupName == group.name))
+                            {
+                                mapping.taskGroupName = group.name;
+                                handshakeSettingsChanged = true;
+                            }
+                        }
+                        ImGui::EndCombo();
+                    }
+                }
+                else
+                {
+                    ImGui::TextDisabled("—");
+                }
+
+                ImGui::TableSetColumnIndex(7);
+                ImGui::BeginDisabled(!outputConnected || outputConfigurationDirty ||
+                    handshakeSettingsChanged);
+                if (mapping.direction == HardwareIoDirection::Input)
+                {
+                    if (ImGui::SmallButton("读取"))
+                        LogOperation(IoSignalName(mapping.signal),
+                            HardwareRuntimeService::TestIoMapping(index, false));
+                }
+                else
+                {
+                    if (ImGui::SmallButton("ON"))
+                        LogOperation(IoSignalName(mapping.signal),
+                            HardwareRuntimeService::TestIoMapping(index, true));
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("OFF"))
+                        LogOperation(IoSignalName(mapping.signal),
+                            HardwareRuntimeService::TestIoMapping(index, false));
+                }
+                ImGui::EndDisabled();
+
+                ImGui::TableSetColumnIndex(8);
+                if (ImGui::SmallButton("×"))
+                    removeMapping = static_cast<int>(index);
+                if (mapping.signal == HardwareIoSignal::Trigger &&
+                    mapping.taskGroupName == manualTriggerTask)
+                {
+                    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
+                        ImGui::GetColorU32(ImVec4(0.10f, 0.38f, 0.42f, 0.42f)));
+                }
+                if (!scrollToTriggerTask.empty() &&
+                    mapping.signal == HardwareIoSignal::Trigger &&
+                    mapping.taskGroupName == scrollToTriggerTask)
+                {
+                    ImGui::SetScrollHereY(0.25f);
+                    scrollToTriggerTask.clear();
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+        if (removeMapping >= 0)
+        {
+            outputIoMappings.erase(outputIoMappings.begin() + removeMapping);
+            handshakeSettingsChanged = true;
+        }
+
+        if (ImGui::Button("添加 IO"))
+        {
+            std::uint16_t nextAddress = 0;
+            for (const HardwareIoMapping& mapping : outputIoMappings)
+                nextAddress = (std::max)(nextAddress,
+                    static_cast<std::uint16_t>(mapping.address +
+                        (mapping.address < 65535 ? 1 : 0)));
+            HardwareIoMapping mapping;
+            mapping.address = nextAddress;
+            if (!ToolChainState::ReadOnlyTaskGroups().empty())
+                mapping.taskGroupName = ToolChainState::ReadOnlyTaskGroups().front().name;
+            outputIoMappings.push_back(std::move(mapping));
+            handshakeSettingsChanged = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("补齐任务 Trigger"))
+        {
+            const std::size_t before = outputIoMappings.size();
+            if (HardwareSettingsService::EnsureTaskTriggerMappings(
+                outputIoMappings, currentTaskGroupNames))
+            {
+                const std::size_t added = outputIoMappings.size() - before;
+                triggerSyncMessage = "已新增 " + std::to_string(added) +
+                    " 个任务 Trigger";
+                handshakeSettingsChanged = true;
+            }
+            else
+            {
+                triggerSyncMessage = currentTaskGroupNames.empty()
+                    ? "当前没有任务可同步" : "当前任务 Trigger 已完整";
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("恢复标准映射"))
+        {
+            outputIoMappings = HardwareSettingsService::BuildStandardIoMappings(
+                currentTaskGroupNames);
+            triggerSyncMessage = "已按任务顺序恢复标准地址：任务01=0，任务02起=8...";
+            handshakeSettingsChanged = true;
+        }
+        if (!triggerSyncMessage.empty())
+            ImGui::TextDisabled("%s", triggerSyncMessage.c_str());
+        ImGui::SetNextItemWidth(180.0f);
+        if (ImGui::BeginCombo("##manual_plc_task", manualTriggerTask.empty()
+            ? "选择测试任务" : manualTriggerTask.c_str()))
+        {
+            for (const TaskGroupDefinition& group : ToolChainState::ReadOnlyTaskGroups())
+            {
+                if (ImGui::Selectable(group.name.c_str(),
+                    manualTriggerTask == group.name))
+                {
+                    manualTriggerTask = group.name;
+                    scrollToTriggerTask = group.name;
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!outputConnected || !outputHandshakeEnabled ||
+            manualTriggerTask.empty() || outputConfigurationDirty ||
+            handshakeSettingsChanged);
+        if (ImGui::Button("模拟触发：执行当前任务"))
+        {
+            LogOperation("PLC 单任务触发",
+                HardwareRuntimeService::RequestTaskInspection(
+                    manualTriggerTask, true));
+        }
+        ImGui::EndDisabled();
+
+        ImGui::BeginDisabled(!outputConnected || !outputHandshakeEnabled ||
+            outputConfigurationDirty || handshakeSettingsChanged ||
+            snapshot.handshakeActive);
+        if (ImGui::Button("握手测试 Pass"))
+            LogOperation("整套握手测试",
+                HardwareRuntimeService::RequestHandshakeTest(ToolResultStatus::Pass));
+        ImGui::SameLine();
+        if (ImGui::Button("Fail"))
+            LogOperation("整套握手测试",
+                HardwareRuntimeService::RequestHandshakeTest(ToolResultStatus::Fail));
+        ImGui::SameLine();
+        if (ImGui::Button("Error"))
+            LogOperation("整套握手测试",
+                HardwareRuntimeService::RequestHandshakeTest(ToolResultStatus::Error));
+        ImGui::EndDisabled();
+
+        if (handshakeSettingsChanged)
+        {
+            hardwareSettingsChanged = true;
+            outputConfigurationDirty = true;
+        }
+        if (outputConfigurationDirty)
+        {
+            ImGui::TextColored(ImVec4(0.95f, 0.72f, 0.22f, 1.0f),
+                "IO 或握手参数已修改，请点击“重新连接输出”后生效");
+        }
+        ImGui::TextDisabled(
+            "单任务触发：仅空闲时接受；Busy/等待 ACK 期间忽略新 Trigger，不排队补跑。无相机时文件夹每轮推进一张。");
+    }
+
     if (ImGui::Button(outputConnected ? "重新连接输出" : "连接输出",
         ImVec2(narrowPanel ? -1.0f : twoButtonWidth, kActionButtonHeight)))
     {
@@ -602,7 +1038,24 @@ void DrawHardwarePanel()
         config.retryCount = outputRetryCount;
         config.retryDelayMs = outputRetryDelayMs;
         config.reconnectBeforeRetry = outputReconnectBeforeRetry;
-        LogOperation("硬件输出连接", HardwareRuntimeService::ConnectOutput(config));
+        config.handshake.enabled = outputHandshakeEnabled;
+        config.handshake.mappings = outputIoMappings;
+        config.handshake.pollIntervalMs = outputPollIntervalMs;
+        config.handshake.acknowledgementTimeoutMs =
+            outputAcknowledgementTimeoutMs;
+        config.handshake.inspectionTimeoutMs = outputInspectionTimeoutMs;
+        config.handshake.heartbeatIntervalMs = outputHeartbeatIntervalMs;
+        config.handshake.autoReconnect = outputAutoReconnect;
+        config.handshake.reconnectFailureThreshold =
+            outputReconnectFailureThreshold;
+        config.handshake.reconnectInitialDelayMs =
+            outputReconnectInitialDelayMs;
+        config.handshake.reconnectMaxDelayMs = outputReconnectMaxDelayMs;
+        const DeviceOperationResult result =
+            HardwareRuntimeService::ConnectOutput(config);
+        if (result.success)
+            outputConfigurationDirty = false;
+        LogOperation("硬件输出连接", result);
     }
     if (!narrowPanel)
         ImGui::SameLine();
@@ -658,6 +1111,19 @@ void DrawHardwarePanel()
         settings.outputRetryCount = outputRetryCount;
         settings.outputRetryDelayMs = outputRetryDelayMs;
         settings.outputReconnectBeforeRetry = outputReconnectBeforeRetry;
+        settings.outputHandshakeEnabled = outputHandshakeEnabled;
+        settings.outputPollIntervalMs = outputPollIntervalMs;
+        settings.outputAcknowledgementTimeoutMs =
+            outputAcknowledgementTimeoutMs;
+        settings.outputInspectionTimeoutMs = outputInspectionTimeoutMs;
+        settings.outputHeartbeatIntervalMs = outputHeartbeatIntervalMs;
+        settings.outputAutoReconnect = outputAutoReconnect;
+        settings.outputReconnectFailureThreshold =
+            outputReconnectFailureThreshold;
+        settings.outputReconnectInitialDelayMs =
+            outputReconnectInitialDelayMs;
+        settings.outputReconnectMaxDelayMs = outputReconnectMaxDelayMs;
+        settings.outputIoMappings = outputIoMappings;
         HardwareSettingsService::Save(settings, {}, &hardwareSettingsError);
     }
 

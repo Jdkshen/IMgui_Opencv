@@ -283,18 +283,16 @@ namespace
     {
         std::vector<std::string> groups;
         for (const TaskGroupDefinition& group : ToolChainState::ReadOnlyTaskGroups())
-            groups.push_back(group.name);
+        {
+            if (group.enabled)
+                groups.push_back(group.name);
+        }
 
         bool hasUngroupedTools = false;
         for (const ToolInstance& tool : ToolChainState::ReadOnlyTools())
         {
-            if (tool.groupName.empty())
-            {
+            if (tool.enabled && tool.groupName.empty())
                 hasUngroupedTools = true;
-                continue;
-            }
-            if (std::find(groups.begin(), groups.end(), tool.groupName) == groups.end())
-                groups.push_back(tool.groupName);
         }
         if (hasUngroupedTools)
             groups.push_back({});
@@ -506,7 +504,8 @@ namespace
     }
 
     bool DrawWindowHeader(const char* title, RunResultViewState& view,
-        bool allowGroupWindows, bool& requestOpenGroups)
+        bool allowGroupWindows, bool& requestOpenGroups,
+        float completedTotalTimeMs = -1.0f)
     {
         bool toggleMaximized = false;
         constexpr float buttonWidth = 72.0f;
@@ -533,6 +532,53 @@ namespace
                 ImVec2(titleMin.x + (titleWidth - titleSize.x) * 0.5f,
                     titleMin.y + (headerHeight - titleSize.y) * 0.5f),
                 ImGui::GetColorU32(ImGuiCol_Text), title);
+            if (completedTotalTimeMs >= 0.0f)
+            {
+                char totalTimeText[64]{};
+                if (completedTotalTimeMs >= 1000.0f)
+                {
+                    std::snprintf(totalTimeText, sizeof(totalTimeText),
+                        "本轮总耗时  %.3f s", completedTotalTimeMs / 1000.0f);
+                }
+                else
+                {
+                    std::snprintf(totalTimeText, sizeof(totalTimeText),
+                        "本轮总耗时  %.1f ms", completedTotalTimeMs);
+                }
+
+                const ImVec2 timeTextSize = ImGui::CalcTextSize(totalTimeText);
+                const float horizontalPadding = 12.0f;
+                const float badgeWidth = timeTextSize.x + horizontalPadding * 2.0f;
+                const float badgeHeight = headerHeight - 2.0f;
+                const float badgeX = titleMin.x + titleWidth - badgeWidth - 8.0f;
+                const float centeredTitleRight = titleMin.x +
+                    (titleWidth + titleSize.x) * 0.5f;
+                if (badgeX > centeredTitleRight + 18.0f)
+                {
+                    const ImVec2 badgeMin(badgeX, titleMin.y + 1.0f);
+                    const ImVec2 badgeMax(badgeX + badgeWidth,
+                        badgeMin.y + badgeHeight);
+                    ImDrawList* drawList = ImGui::GetWindowDrawList();
+                    const bool isDark = g_CurrentTheme == 0;
+                    drawList->AddRectFilled(badgeMin, badgeMax,
+                        ImGui::ColorConvertFloat4ToU32(isDark
+                            ? ImVec4(0.08f, 0.24f, 0.20f, 1.0f)
+                            : ImVec4(0.82f, 0.94f, 0.87f, 1.0f)),
+                        badgeHeight * 0.5f);
+                    drawList->AddRect(badgeMin, badgeMax,
+                        ImGui::ColorConvertFloat4ToU32(isDark
+                            ? ImVec4(0.18f, 0.68f, 0.42f, 1.0f)
+                            : ImVec4(0.12f, 0.56f, 0.30f, 1.0f)),
+                        badgeHeight * 0.5f, 0, 1.0f);
+                    drawList->AddText(
+                        ImVec2(badgeMin.x + horizontalPadding,
+                            badgeMin.y + (badgeHeight - timeTextSize.y) * 0.5f),
+                        ImGui::ColorConvertFloat4ToU32(isDark
+                            ? ImVec4(0.46f, 0.96f, 0.66f, 1.0f)
+                            : ImVec4(0.05f, 0.42f, 0.20f, 1.0f)),
+                        totalTimeText);
+                }
+            }
             if (ImGui::IsItemHovered())
             {
                 ImGui::SetTooltip("双击最大化/还原");
@@ -1225,8 +1271,11 @@ namespace
         }
 
         bool unusedOpenGroups = false;
+        const float dashboardTotalTimeMs = !expandedGroup && g_snapshot.valid &&
+            !ToolController::WasLastRunTaskGroup()
+            ? g_snapshot.totalTimeMs : -1.0f;
         if (DrawWindowHeader(dashboardTitle.c_str(), g_groupDashboardView,
-            false, unusedOpenGroups))
+            false, unusedOpenGroups, dashboardTotalTimeMs))
         {
             if (g_groupDashboardView.maximized)
             {

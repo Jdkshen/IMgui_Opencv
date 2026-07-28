@@ -4,6 +4,7 @@
 #include "HardwareRuntimeService.h"
 #include "ImageState.h"
 #include "ImageUtils.h"
+#include "OpenFileDialog.h"
 #include "ROIState.h"
 #include "TemplateState.h"
 #include "ToolChainState.h"
@@ -61,6 +62,8 @@ namespace ToolController
     static std::unordered_map<std::string, cv::Mat> s_taskResultImages;
     static std::string s_activeInputTaskGroup;
     static bool s_activeInputTaskGroupValid = false;
+    static bool s_cameraFrameAvailableForRun = false;
+    static bool s_forceCameraFrameForRun = false;
     static bool s_imageDirty = false;
     static bool s_batchTimerStarted = false;
     static bool s_runtimeMode = false;
@@ -147,6 +150,38 @@ namespace ToolController
         return !s_runTaskGroup || tool.groupName == s_runTaskGroupName;
     }
 
+    static bool TaskGroupPrefersCamera(const std::string& groupName)
+    {
+        if (groupName.empty())
+            return false;
+        const int groupIndex = ToolChainState::TaskGroupIndexByName(groupName);
+        return groupIndex >= 0 &&
+            ToolChainState::ReadOnlyTaskGroups()[groupIndex].enabled &&
+            ToolChainState::ReadOnlyTaskGroups()[groupIndex].cameraPreferred;
+    }
+
+    static int EnabledTaskGroupCount()
+    {
+        return static_cast<int>(std::count_if(
+            ToolChainState::ReadOnlyTaskGroups().begin(),
+            ToolChainState::ReadOnlyTaskGroups().end(),
+            [](const TaskGroupDefinition& group)
+            {
+                return group.enabled;
+            }));
+    }
+
+    static bool RunScopePrefersCamera()
+    {
+        return std::any_of(ToolChainState::ReadOnlyTools().begin(),
+            ToolChainState::ReadOnlyTools().end(),
+            [](const ToolInstance& tool)
+            {
+                return tool.enabled && MatchesRunScope(tool) &&
+                    TaskGroupPrefersCamera(tool.groupName);
+            });
+    }
+
     static void BuildBatchExecutionOrder()
     {
         s_batchExecutionOrder.clear();
@@ -164,6 +199,8 @@ namespace ToolController
             // 全部执行按任务列表顺序运行，并保持每个任务内部的工具顺序。
             for (const TaskGroupDefinition& group : ToolChainState::ReadOnlyTaskGroups())
             {
+                if (!group.enabled)
+                    continue;
                 for (int index = 0; index < static_cast<int>(tools.size()); ++index)
                 {
                     if (tools[index].groupName == group.name)
@@ -419,19 +456,50 @@ namespace ToolController
         return bytes.empty() ? cv::Mat() : cv::imdecode(bytes, cv::IMREAD_COLOR);
     }
 
-    static const TaskGroupDefinition* FindTaskGroup(const std::string& groupName)
+    static bool ResolveTaskImagePathForRun(const std::string& groupName,
+        std::string& imagePath)
     {
         const int index = ToolChainState::TaskGroupIndexByName(groupName);
-        return index >= 0 ? &ToolChainState::ReadOnlyTaskGroups()[index] : nullptr;
+        if (index < 0)
+            return false;
+
+        const TaskGroupDefinition group =
+            ToolChainState::ReadOnlyTaskGroups()[index];
+        if (group.imageFolderPath.empty())
+        {
+            imagePath = group.imagePath;
+            return !imagePath.empty();
+        }
+
+        const std::vector<std::string> images =
+            ScanImageFiles(group.imageFolderPath, true);
+        if (images.empty())
+        {
+            LogSystem::Add(LOG_ERROR,
+                "任务图片文件夹中没有可用图片 [%s]: %s",
+                groupName.c_str(), group.imageFolderPath.c_str());
+            return false;
+        }
+
+        const int imageCount = static_cast<int>(images.size());
+        const int nextIndex = group.imageFolderIndex < 0 ||
+            group.imageFolderIndex >= imageCount
+            ? 0 : (group.imageFolderIndex + 1) % imageCount;
+        imagePath = images[static_cast<std::size_t>(nextIndex)];
+        return ToolChainState::SetTaskGroupFolderImagePosition(
+            index, imagePath, nextIndex, imageCount);
     }
 
-    static bool PrepareTaskImagesForRun()
+    static bool PrepareTaskImagesForRun(bool preserveFallback = false)
     {
         s_taskRunImages.clear();
         s_activeInputTaskGroup.clear();
         s_activeInputTaskGroupValid = false;
-        s_runFallbackImage = !ImageState::Original().empty()
-            ? ImageState::Original().clone() : ImageState::Current().clone();
+        if (!preserveFallback)
+        {
+            s_runFallbackImage = !ImageState::Original().empty()
+                ? ImageState::Original().clone() : ImageState::Current().clone();
+        }
 
         const auto& tools = ToolChainState::ReadOnlyTools();
         for (int toolIndex : s_batchExecutionOrder)
@@ -441,14 +509,32 @@ namespace ToolController
             const std::string& groupName = tools[toolIndex].groupName;
             if (groupName.empty() || s_taskRunImages.find(groupName) != s_taskRunImages.end())
                 continue;
-            const TaskGroupDefinition* group = FindTaskGroup(groupName);
-            if (!group || group->imagePath.empty())
+            if (s_cameraFrameAvailableForRun &&
+                (TaskGroupPrefersCamera(groupName) ||
+                    (s_forceCameraFrameForRun && s_runTaskGroup &&
+                        groupName == s_runTaskGroupName)) &&
+                !s_runFallbackImage.empty())
+            {
+                s_taskRunImages.emplace(groupName, s_runFallbackImage.clone());
                 continue;
-            cv::Mat taskImage = ReadTaskImageFile(group->imagePath);
+            }
+            std::string imagePath;
+            if (!ResolveTaskImagePathForRun(groupName, imagePath))
+            {
+                const int groupIndex = ToolChainState::TaskGroupIndexByName(groupName);
+                if (groupIndex >= 0 &&
+                    ToolChainState::ReadOnlyTaskGroups()[groupIndex].imageFolderPath.empty() &&
+                    ToolChainState::ReadOnlyTaskGroups()[groupIndex].imagePath.empty())
+                {
+                    continue;
+                }
+                return false;
+            }
+            cv::Mat taskImage = ReadTaskImageFile(imagePath);
             if (taskImage.empty())
             {
                 LogSystem::Add(LOG_ERROR, "任务图片无法读取 [%s]: %s",
-                    groupName.c_str(), group->imagePath.c_str());
+                    groupName.c_str(), imagePath.c_str());
                 return false;
             }
             s_taskRunImages.emplace(groupName, std::move(taskImage));
@@ -511,7 +597,8 @@ namespace ToolController
     {
         for (const TaskGroupDefinition& group : ToolChainState::ReadOnlyTaskGroups())
         {
-            if (!group.imagePath.empty() &&
+            if (group.enabled &&
+                (!group.imagePath.empty() || !group.imageFolderPath.empty()) &&
                 (!s_runTaskGroup || group.name == s_runTaskGroupName))
                 return true;
         }
@@ -647,8 +734,11 @@ namespace ToolController
             return sourceIndex >= 0 && tools[sourceIndex].groupName != targetGroup;
         };
 
-        for (const ToolInstance& tool : tools)
+        for (int toolIndex = 0; toolIndex < static_cast<int>(tools.size()); ++toolIndex)
         {
+            const ToolInstance& tool = tools[toolIndex];
+            if (!tool.enabled || BatchExecutionOrdinal(toolIndex) < 0)
+                continue;
             if (tool.resultRoiMode != 0 &&
                 sourceGroup(tool.resultRoiSourceTool, tool.resultRoiSourceToolId,
                     tool.groupName))
@@ -831,7 +921,7 @@ namespace ToolController
     static bool StartTaskParallelRun()
     {
         if (!s_taskParallelEnabled || s_runTaskGroup || s_loop || s_isStep ||
-            ToolChainState::ReadOnlyTaskGroups().size() < 2 ||
+            EnabledTaskGroupCount() < 2 ||
             ToolChainState::YoloLiveDetect())
         {
             return false;
@@ -845,7 +935,10 @@ namespace ToolController
 
         std::vector<std::string> groupOrder;
         for (const TaskGroupDefinition& group : ToolChainState::ReadOnlyTaskGroups())
-            groupOrder.push_back(group.name);
+        {
+            if (group.enabled)
+                groupOrder.push_back(group.name);
+        }
         if (std::any_of(ToolChainState::ReadOnlyTools().begin(),
             ToolChainState::ReadOnlyTools().end(),
             [](const ToolInstance& tool) { return tool.groupName.empty(); }))
@@ -1285,14 +1378,26 @@ namespace ToolController
         RequestRun(toolIndex);
     }
 
-    static void BeginRunAll(bool loop, bool triggerCamera) {
+    static void BeginRunAll(bool loop, bool triggerCamera,
+        bool forceTaskCameraCapture = false) {
         const bool force = s_forceNextRunAll;
         s_forceNextRunAll = false;
         s_activeRunForce = force;
         const HardwareRuntimeSnapshot hardware = HardwareRuntimeService::Snapshot();
-        if (triggerCamera && !RunScopeHasTaskImages() &&
+        const bool taskCameraPreferred = RunScopePrefersCamera();
+        if (triggerCamera)
+        {
+            s_cameraFrameAvailableForRun = false;
+            s_forceCameraFrameForRun = forceTaskCameraCapture;
+        }
+        const bool requestTaskCamera = triggerCamera &&
+            (taskCameraPreferred || (forceTaskCameraCapture && s_runTaskGroup)) &&
+            hardware.cameraState == DeviceConnectionState::Connected;
+        const bool requestLegacyCamera = triggerCamera && !taskCameraPreferred &&
+            !RunScopeHasTaskImages() &&
             hardware.cameraState == DeviceConnectionState::Connected &&
-            HardwareRuntimeService::CameraTriggerOnInspectionEnabled())
+            HardwareRuntimeService::CameraTriggerOnInspectionEnabled();
+        if (requestTaskCamera || requestLegacyCamera)
         {
             if (force)
                 s_forceNextRunAll = true;
@@ -1312,6 +1417,7 @@ namespace ToolController
                     ? "未分组" : s_runTaskGroupName.c_str()) : "");
             s_mode = Mode::Idle;
             s_batchRunActive = false;
+            s_forceCameraFrameForRun = false;
             return;
         }
         if (!PrepareTaskImagesForRun() ||
@@ -1319,10 +1425,13 @@ namespace ToolController
                 ToolChainState::ReadOnlyTools()[s_batchExecutionOrder.front()]))
         {
             LogSystem::Add(LOG_ERROR, "执行中止：任务输入图片准备失败");
+            PublishConfiguredHardwareStatus(ToolResultStatus::Error);
             s_mode = Mode::Idle;
             s_batchRunActive = false;
+            s_forceCameraFrameForRun = false;
             return;
         }
+        s_forceCameraFrameForRun = false;
         if (s_runTaskGroup)
             s_taskResultImages.erase(s_runTaskGroupName);
         else
@@ -1332,6 +1441,7 @@ namespace ToolController
         {
             LogSystem::Add(LOG_ERROR, "工具链 DAG 构建失败: %s",
                 s_executionPlan.error.c_str());
+            PublishConfiguredHardwareStatus(ToolResultStatus::Error);
             s_mode = Mode::Idle;
             return;
         }
@@ -1390,12 +1500,15 @@ namespace ToolController
 
     void RequestRunAll(bool loop, bool triggerCamera)
     {
+        s_cameraFrameAvailableForRun = false;
+        s_forceCameraFrameForRun = false;
         s_runTaskGroup = false;
         s_runTaskGroupName.clear();
         BeginRunAll(loop, triggerCamera);
     }
 
-    void RequestRunTaskGroup(const std::string& groupName, bool loop, bool triggerCamera)
+    void RequestRunTaskGroup(const std::string& groupName, bool loop,
+        bool triggerCamera, bool forceCameraCapture)
     {
         if (!groupName.empty())
         {
@@ -1411,13 +1524,16 @@ namespace ToolController
                 return;
             }
         }
+        s_cameraFrameAvailableForRun = false;
+        s_forceCameraFrameForRun = forceCameraCapture;
         s_runTaskGroup = true;
         s_runTaskGroupName = groupName;
-        BeginRunAll(loop, triggerCamera);
+        BeginRunAll(loop, triggerCamera, forceCameraCapture);
     }
 
-    void ResumeRunAfterCamera(bool loop)
+    void ResumeRunAfterCamera(bool loop, bool cameraFrameAvailable)
     {
+        s_cameraFrameAvailableForRun = cameraFrameAvailable;
         BeginRunAll(loop, false);
     }
 
@@ -1467,6 +1583,8 @@ namespace ToolController
 
     void RequestStepNext()
     {
+        s_cameraFrameAvailableForRun = false;
+        s_forceCameraFrameForRun = false;
         if (s_runTaskGroup)
             s_stepCursor = 0;
         s_runTaskGroup = false;
@@ -1476,6 +1594,7 @@ namespace ToolController
 
     void RequestStepNextTaskGroup(const std::string& groupName)
     {
+        s_cameraFrameAvailableForRun = false;
         const int groupIndex = ToolChainState::TaskGroupIndexByName(groupName);
         if (groupIndex < 0)
         {
@@ -1588,7 +1707,23 @@ namespace ToolController
             LogSystem::Add(LOG_INFO, ImVec4(0, 1, 0.5f, 1), "[全部执行%s] 完成 %.1fms",
                 s_runtimeMode ? "/运行模式" : "", s_batchTotalMs);
         }
-        if (s_loop && s_taskRunImages.empty() && FrameNavigation::HasNextImage())
+        const bool requestNextTaskCameraFrame = s_loop &&
+            RunScopePrefersCamera() &&
+            HardwareRuntimeService::Snapshot().cameraState ==
+                DeviceConnectionState::Connected;
+        if (requestNextTaskCameraFrame)
+        {
+            s_cameraFrameAvailableForRun = false;
+            s_batchExecutionCursor = 0;
+            s_currentIndex = s_batchExecutionOrder.front();
+            s_imageDirty = false;
+            s_batchTimerStarted = false;
+            HardwareRuntimeService::RequestCameraFrame(true, true);
+            s_mode = Mode::Idle;
+            LogSystem::Add(LOG_INFO, ImVec4(0, 1, 0.5f, 1),
+                "[循环] 相机优先任务等待下一帧");
+        }
+        else if (s_loop && s_taskRunImages.empty() && FrameNavigation::HasNextImage())
         {
             FrameNavigation::NavigateNextImage();
             FrameNavigation::FitImageToWindow();
@@ -1609,6 +1744,15 @@ namespace ToolController
         }
         else if (s_loop)
         {
+            if (!PrepareTaskImagesForRun(true))
+            {
+                LogSystem::Add(LOG_ERROR,
+                    "循环已停止：下一轮任务图片准备失败");
+                s_mode = Mode::Idle;
+                s_batchRunActive = false;
+                s_loop = false;
+                return;
+            }
             s_batchExecutionCursor = 0;
             s_currentIndex = s_batchExecutionOrder.front();
             s_imageDirty = false;
@@ -1758,6 +1902,13 @@ namespace ToolController
     bool WasLastRunTaskGroup() { return s_lastRunTaskGroup; }
     const std::string& GetLastRunTaskGroupName() { return s_lastRunTaskGroupName; }
     int  GetStepCursor() { return s_stepCursor; }
+    int  GetStepToolIndex()
+    {
+        if (!s_isStep || s_stepCursor <= 0 ||
+            s_stepCursor > static_cast<int>(s_batchExecutionOrder.size()))
+            return -1;
+        return s_batchExecutionOrder[static_cast<std::size_t>(s_stepCursor - 1)];
+    }
     int  GetStepTotal()
     {
         return s_isStep
@@ -1934,6 +2085,8 @@ namespace ToolController
         s_taskRunImages.clear();
         s_activeInputTaskGroup.clear();
         s_activeInputTaskGroupValid = false;
+        s_cameraFrameAvailableForRun = false;
+        s_forceCameraFrameForRun = false;
     }
 
     void Shutdown()

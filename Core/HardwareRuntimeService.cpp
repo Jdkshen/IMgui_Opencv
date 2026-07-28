@@ -10,6 +10,7 @@
 #include "OpenCvCameraAdapter.h"
 #include "TcpTextAdapter.h"
 #include "ToolController.h"
+#include "ToolChainState.h"
 #include "VideoCapture.h"
 
 #include <opencv2/core/mat.hpp>
@@ -22,6 +23,8 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <set>
 #include <thread>
 #include <utility>
 
@@ -54,6 +57,7 @@ bool s_cameraTriggerOnInspection = true;
 int s_runToolChainAfterFrameIndex = -1;
 bool s_cameraToolRunPending = false;
 bool s_cameraToolRunLoop = false;
+bool s_cameraToolRunFrameAvailable = false;
 bool s_outputAutoPublish = false;
 int s_cameraFrameIndex = 0;
 int s_cameraScheduledFrameIndex = 0;
@@ -82,6 +86,70 @@ std::uint64_t s_outputSequence = 0;
 std::uint64_t s_outputSentCount = 0;
 std::uint64_t s_outputFailedCount = 0;
 std::uint64_t s_outputDroppedCount = 0;
+
+struct PendingIoWrite
+{
+    HardwareIoMapping mapping;
+    bool active = false;
+    bool usePulse = true;
+};
+
+struct ActiveIoPulse
+{
+    HardwareIoMapping mapping;
+    std::chrono::steady_clock::time_point resetAt;
+};
+
+struct PendingTaskInspection
+{
+    std::string taskGroupName;
+    bool preferCamera = true;
+};
+
+std::deque<PendingIoWrite> s_ioWriteQueue;
+std::vector<ActiveIoPulse> s_activeIoPulses;
+std::vector<bool> s_inputStates;
+std::vector<bool> s_inputStateInitialized;
+std::optional<PendingTaskInspection> s_pendingTaskInspection;
+std::uint64_t s_handshakeIgnoredTriggerCount = 0;
+bool s_handshakeActive = false;
+bool s_handshakeAwaitingAcknowledge = false;
+bool s_handshakeTestActive = false;
+bool s_handshakeTestRequested = false;
+bool s_handshakeAcknowledgeReceived = false;
+std::string s_handshakeTaskGroupName;
+ToolResultStatus s_handshakeTestStatus = ToolResultStatus::Pass;
+std::uint64_t s_handshakeStartBatchSerial = 0;
+std::chrono::steady_clock::time_point s_handshakeStartedAt;
+std::chrono::steady_clock::time_point s_handshakeCompletedAt;
+std::chrono::steady_clock::time_point s_handshakeTestCompleteAt;
+std::chrono::steady_clock::time_point s_nextIoPollAt;
+std::chrono::steady_clock::time_point s_nextHeartbeatAt;
+std::chrono::steady_clock::time_point s_nextOutputReconnectAt;
+bool s_heartbeatState = false;
+int s_outputConsecutiveFailures = 0;
+int s_outputReconnectAttempts = 0;
+int s_outputReconnectDelayMs = 0;
+bool s_outputReconnecting = false;
+bool s_outputCommunicationAlarm = false;
+double s_outputLastCommunicationTimestampMs = 0.0;
+bool s_handshakeAlarm = false;
+std::string s_handshakeAlarmMessage;
+
+void ResetHandshakeStateLocked(bool resetIgnoredTriggerCount)
+{
+    s_pendingTaskInspection.reset();
+    s_handshakeActive = false;
+    s_handshakeAwaitingAcknowledge = false;
+    s_handshakeTestActive = false;
+    s_handshakeTestRequested = false;
+    s_handshakeAcknowledgeReceived = false;
+    s_handshakeTaskGroupName.clear();
+    s_handshakeAlarm = false;
+    s_handshakeAlarmMessage.clear();
+    if (resetIgnoredTriggerCount)
+        s_handshakeIgnoredTriggerCount = 0;
+}
 
 DeviceOperationResult NotConnected(const char* name)
 {
@@ -282,6 +350,7 @@ void StopCameraWorker()
         s_runToolChainAfterFrameIndex = -1;
         s_cameraToolRunPending = false;
         s_cameraToolRunLoop = false;
+        s_cameraToolRunFrameAvailable = false;
     }
     s_cameraWorkerCondition.notify_all();
     if (s_cameraWorker.joinable())
@@ -313,14 +382,244 @@ DeviceOperationResult InvalidConfiguration(std::string message)
     return {false, std::move(message)};
 }
 
-DeviceOperationResult ReconnectOutputAdapter(const PendingOutput& pending)
+DeviceOperationResult ValidateHandshakeConfig(const HardwareHandshakeConfig& config)
+{
+    if (!config.enabled)
+        return {true, {}};
+    bool hasTrigger = false;
+    bool hasBusy = false;
+    bool hasDone = false;
+    bool hasResult = false;
+    std::set<std::uint16_t> addresses;
+    for (const HardwareIoMapping& mapping : config.mappings)
+    {
+        if (!mapping.enabled)
+            continue;
+        if (!addresses.insert(mapping.address).second)
+            return InvalidConfiguration("PLC IO 地址重复: " +
+                std::to_string(mapping.address));
+        const bool inputSignal = mapping.signal == HardwareIoSignal::Trigger ||
+            mapping.signal == HardwareIoSignal::Acknowledge;
+        const HardwareIoDirection expectedDirection = inputSignal
+            ? HardwareIoDirection::Input : HardwareIoDirection::Output;
+        if (mapping.direction != expectedDirection)
+            return InvalidConfiguration("PLC IO 信号方向不正确，地址: " +
+                std::to_string(mapping.address));
+        if (mapping.signal == HardwareIoSignal::Trigger)
+        {
+            if (mapping.taskGroupName.empty())
+                return InvalidConfiguration("Trigger 必须绑定任务");
+            hasTrigger = true;
+        }
+        hasBusy |= mapping.signal == HardwareIoSignal::Busy;
+        hasDone |= mapping.signal == HardwareIoSignal::Done;
+        hasResult |= mapping.signal == HardwareIoSignal::Ok ||
+            mapping.signal == HardwareIoSignal::Ng ||
+            mapping.signal == HardwareIoSignal::Error;
+    }
+    if (!hasTrigger || !hasBusy || !hasDone || !hasResult)
+    {
+        return InvalidConfiguration(
+            "PLC 握手至少需要 Trigger、Busy、Done 和一个结果输出");
+    }
+    return {true, {}};
+}
+
+DeviceOperationResult ReconnectOutputAdapter()
 {
     std::lock_guard<std::mutex> adapterLock(s_outputAdapterMutex);
-    IDeviceAdapter* adapter = HardwareAdapterService::Find(pending.binding.adapterKey);
+    IDeviceAdapter* adapter = HardwareAdapterService::Find(s_outputAdapterKey);
     if (!adapter)
-        return {false, "未找到设备适配器: " + pending.binding.adapterKey};
+        return {false, "未找到设备适配器: " + s_outputAdapterKey};
     adapter->Disconnect();
     return adapter->Connect(s_outputConfig.endpoint);
+}
+
+void QueueSignalLocked(HardwareIoSignal signal, bool active, bool usePulse = true)
+{
+    for (const HardwareIoMapping& mapping : s_outputConfig.handshake.mappings)
+    {
+        if (!mapping.enabled || mapping.direction != HardwareIoDirection::Output ||
+            mapping.signal != signal)
+        {
+            continue;
+        }
+        s_ioWriteQueue.push_back({mapping, active, usePulse});
+    }
+    s_outputWorkerCondition.notify_one();
+}
+
+void QueueHandshakeStartLocked()
+{
+    s_handshakeAlarm = false;
+    s_handshakeAlarmMessage.clear();
+    QueueSignalLocked(HardwareIoSignal::Done, false, false);
+    QueueSignalLocked(HardwareIoSignal::Ok, false, false);
+    QueueSignalLocked(HardwareIoSignal::Ng, false, false);
+    QueueSignalLocked(HardwareIoSignal::Error, false, false);
+    QueueSignalLocked(HardwareIoSignal::Busy, true, false);
+}
+
+void QueueHandshakeCompleteLocked(ToolResultStatus status)
+{
+    QueueSignalLocked(HardwareIoSignal::Busy, false, false);
+    QueueSignalLocked(HardwareIoSignal::Ok,
+        status == ToolResultStatus::Pass, false);
+    QueueSignalLocked(HardwareIoSignal::Ng,
+        status == ToolResultStatus::Fail, false);
+    QueueSignalLocked(HardwareIoSignal::Error,
+        status == ToolResultStatus::Error, false);
+    QueueSignalLocked(HardwareIoSignal::Done, true, true);
+}
+
+void QueueHandshakeResetLocked()
+{
+    QueueSignalLocked(HardwareIoSignal::Busy, false, false);
+    QueueSignalLocked(HardwareIoSignal::Done, false, false);
+    QueueSignalLocked(HardwareIoSignal::Ok, false, false);
+    QueueSignalLocked(HardwareIoSignal::Ng, false, false);
+    QueueSignalLocked(HardwareIoSignal::Error, false, false);
+}
+
+DeviceOperationResult WriteIoMapping(const HardwareIoMapping& mapping, bool active)
+{
+    std::lock_guard<std::mutex> adapterLock(s_outputAdapterMutex);
+    IDeviceAdapter* adapter = HardwareAdapterService::Find(s_outputAdapterKey);
+    if (!adapter)
+        return {false, "未找到 Modbus TCP 适配器: " + s_outputAdapterKey};
+    if (adapter->ConnectionState() != DeviceConnectionState::Connected)
+        return NotConnected(adapter->AdapterName());
+    auto* modbus = dynamic_cast<IModbusTcpAdapter*>(adapter);
+    if (!modbus)
+        return {false, "当前适配器不支持 Modbus TCP IO"};
+    return modbus->WriteCoil(mapping.address, mapping.invert ? !active : active);
+}
+
+void RecordCommunicationResultLocked(const DeviceOperationResult& result)
+{
+    s_lastOutputOperation = result;
+    if (result.success)
+    {
+        s_outputLastCommunicationTimestampMs = CurrentTimestampMs();
+        s_outputConsecutiveFailures = 0;
+        s_outputReconnectDelayMs = 0;
+        s_outputReconnecting = false;
+        s_outputCommunicationAlarm = false;
+        return;
+    }
+
+    ++s_outputConsecutiveFailures;
+    const int threshold = (std::max)(1,
+        s_outputConfig.handshake.reconnectFailureThreshold);
+    if (s_outputConsecutiveFailures >= threshold)
+    {
+        s_outputCommunicationAlarm = true;
+        if (s_outputConfig.handshake.autoReconnect)
+        {
+            const int initialDelay = (std::max)(1,
+                s_outputConfig.handshake.reconnectInitialDelayMs);
+            const int maximumDelay = (std::max)(initialDelay,
+                s_outputConfig.handshake.reconnectMaxDelayMs);
+            s_outputReconnectDelayMs = s_outputReconnectDelayMs <= 0
+                ? initialDelay
+                : (std::min)(maximumDelay, s_outputReconnectDelayMs * 2);
+            s_nextOutputReconnectAt = std::chrono::steady_clock::now() +
+                std::chrono::milliseconds(s_outputReconnectDelayMs);
+            s_outputReconnecting = true;
+        }
+    }
+}
+
+DeviceOperationResult PollHandshakeInputs(
+    const std::vector<std::pair<std::size_t, HardwareIoMapping>>& inputs,
+    std::vector<bool>& logicalValues)
+{
+    logicalValues.clear();
+    logicalValues.reserve(inputs.size());
+    std::lock_guard<std::mutex> adapterLock(s_outputAdapterMutex);
+    IDeviceAdapter* adapter = HardwareAdapterService::Find(s_outputAdapterKey);
+    if (!adapter)
+        return {false, "未找到 Modbus TCP 适配器: " + s_outputAdapterKey};
+    if (adapter->ConnectionState() != DeviceConnectionState::Connected)
+        return NotConnected(adapter->AdapterName());
+    auto* modbus = dynamic_cast<IModbusTcpAdapter*>(adapter);
+    if (!modbus)
+        return {false, "当前适配器不支持 Modbus TCP IO 轮询"};
+
+    const auto addressRange = std::minmax_element(inputs.begin(), inputs.end(),
+        [](const auto& left, const auto& right)
+        {
+            return left.second.address < right.second.address;
+        });
+    const std::uint16_t firstAddress = addressRange.first->second.address;
+    const std::uint16_t lastAddress = addressRange.second->second.address;
+    const std::uint32_t span = static_cast<std::uint32_t>(lastAddress) -
+        firstAddress + 1u;
+    if (span <= 2000u)
+    {
+        std::vector<bool> values;
+        DeviceOperationResult result = modbus->ReadCoils(firstAddress,
+            static_cast<std::uint16_t>(span), values);
+        if (!result.success || values.size() != span)
+            return result.success
+                ? DeviceOperationResult{false, "Modbus 输入线圈批量读取长度不匹配"}
+                : result;
+        for (const auto& input : inputs)
+        {
+            const bool physical = values[static_cast<std::size_t>(
+                input.second.address - firstAddress)];
+            logicalValues.push_back(input.second.invert ? !physical : physical);
+        }
+        return {true, "Modbus IO 批量轮询正常"};
+    }
+
+    for (const auto& input : inputs)
+    {
+        std::vector<bool> values;
+        DeviceOperationResult result = modbus->ReadCoils(input.second.address, 1, values);
+        if (!result.success || values.size() != 1)
+            return result.success
+                ? DeviceOperationResult{false, "Modbus 输入线圈返回为空"}
+                : result;
+        logicalValues.push_back(input.second.invert ? !values.front() : values.front());
+    }
+    return {true, "Modbus IO 轮询正常"};
+}
+
+bool HasAcknowledgeInputLocked()
+{
+    return std::any_of(s_outputConfig.handshake.mappings.begin(),
+        s_outputConfig.handshake.mappings.end(),
+        [](const HardwareIoMapping& mapping)
+        {
+            return mapping.enabled &&
+                mapping.direction == HardwareIoDirection::Input &&
+                mapping.signal == HardwareIoSignal::Acknowledge;
+        });
+}
+
+void CompleteHandshakeLocked(ToolResultStatus status)
+{
+    QueueHandshakeCompleteLocked(status);
+    s_handshakeCompletedAt = std::chrono::steady_clock::now();
+    s_handshakeAwaitingAcknowledge = HasAcknowledgeInputLocked();
+    if (!s_handshakeAwaitingAcknowledge)
+    {
+        s_handshakeActive = false;
+        s_handshakeTestActive = false;
+        s_handshakeTaskGroupName.clear();
+    }
+}
+
+ToolResultStatus AggregateTaskGroupStatus(const std::string& taskGroupName)
+{
+    std::vector<ToolResult> results;
+    for (const ToolInstance& tool : ToolChainState::ReadOnlyTools())
+    {
+        if (tool.groupName == taskGroupName && tool.hasLastResult)
+            results.push_back(tool.lastResult);
+    }
+    return HardwareRuntimeService::AggregateInspectionStatus(results);
 }
 
 void OutputWorkerLoop()
@@ -328,44 +627,176 @@ void OutputWorkerLoop()
     std::unique_lock<std::mutex> lock(s_outputWorkerMutex);
     while (!s_outputWorkerStop)
     {
-        s_outputWorkerCondition.wait(lock, []
+        s_outputWorkerCondition.wait_for(lock, std::chrono::milliseconds(10), []
         {
-            return s_outputWorkerStop || !s_outputQueue.empty();
+            return s_outputWorkerStop || !s_outputQueue.empty() ||
+                !s_ioWriteQueue.empty();
         });
         if (s_outputWorkerStop)
             break;
 
-        PendingOutput pending = std::move(s_outputQueue.front());
-        s_outputQueue.pop_front();
-        s_outputWorkerBusy = true;
-        const int retries = (std::max)(0, s_outputConfig.retryCount);
-        const int retryDelayMs = (std::max)(1, s_outputConfig.retryDelayMs);
-        const bool reconnectBeforeRetry = s_outputConfig.reconnectBeforeRetry;
-        lock.unlock();
-
-        DeviceOperationResult result;
-        for (int attempt = 0; attempt <= retries; ++attempt)
+        const auto now = std::chrono::steady_clock::now();
+        for (auto pulse = s_activeIoPulses.begin(); pulse != s_activeIoPulses.end();)
         {
-            result = HardwareRuntimeService::PublishInspectionStatus(
-                pending.status, pending.binding);
-            if (result.success)
-                break;
-            if (attempt < retries)
+            if (pulse->resetAt <= now)
             {
-                if (reconnectBeforeRetry)
-                    ReconnectOutputAdapter(pending);
-                std::this_thread::sleep_for(std::chrono::milliseconds(retryDelayMs));
+                s_ioWriteQueue.push_back({pulse->mapping, false, false});
+                pulse = s_activeIoPulses.erase(pulse);
+            }
+            else
+            {
+                ++pulse;
             }
         }
 
+        const bool reconnectNow = s_outputReconnecting &&
+            now >= s_nextOutputReconnectAt;
+        if (reconnectNow)
+        {
+            s_outputWorkerBusy = true;
+            ++s_outputReconnectAttempts;
+            lock.unlock();
+            DeviceOperationResult result = ReconnectOutputAdapter();
+            lock.lock();
+            RecordCommunicationResultLocked(result);
+            s_outputWorkerBusy = false;
+            s_outputWorkerCondition.notify_all();
+            continue;
+        }
+
+        if (!s_ioWriteQueue.empty())
+        {
+            PendingIoWrite write = std::move(s_ioWriteQueue.front());
+            s_ioWriteQueue.pop_front();
+            s_outputWorkerBusy = true;
+            lock.unlock();
+            DeviceOperationResult result = WriteIoMapping(write.mapping, write.active);
+            lock.lock();
+            RecordCommunicationResultLocked(result);
+            if (result.success && write.active && write.usePulse &&
+                write.mapping.pulseMs > 0)
+            {
+                s_activeIoPulses.push_back({write.mapping,
+                    std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(write.mapping.pulseMs)});
+            }
+            s_outputWorkerBusy = false;
+            s_outputWorkerCondition.notify_all();
+            continue;
+        }
+
+        if (!s_outputQueue.empty())
+        {
+            PendingOutput pending = std::move(s_outputQueue.front());
+            s_outputQueue.pop_front();
+            s_outputWorkerBusy = true;
+            const int retries = (std::max)(0, s_outputConfig.retryCount);
+            const int retryDelayMs = (std::max)(1, s_outputConfig.retryDelayMs);
+            const bool reconnectBeforeRetry = s_outputConfig.reconnectBeforeRetry;
+            lock.unlock();
+
+            DeviceOperationResult result;
+            for (int attempt = 0; attempt <= retries; ++attempt)
+            {
+                result = HardwareRuntimeService::PublishInspectionStatus(
+                    pending.status, pending.binding);
+                if (result.success)
+                    break;
+                if (attempt < retries)
+                {
+                    if (reconnectBeforeRetry)
+                        ReconnectOutputAdapter();
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(retryDelayMs));
+                }
+            }
+
+            lock.lock();
+            RecordCommunicationResultLocked(result);
+            if (result.success)
+                ++s_outputSentCount;
+            else
+                ++s_outputFailedCount;
+            s_outputWorkerBusy = false;
+            s_outputWorkerCondition.notify_all();
+            continue;
+        }
+
+        if (!s_outputConfig.handshake.enabled)
+            continue;
+
+        if (now >= s_nextHeartbeatAt)
+        {
+            s_heartbeatState = !s_heartbeatState;
+            QueueSignalLocked(HardwareIoSignal::Heartbeat,
+                s_heartbeatState, false);
+            s_nextHeartbeatAt = now + std::chrono::milliseconds((std::max)(100,
+                s_outputConfig.handshake.heartbeatIntervalMs));
+            continue;
+        }
+
+        if (now < s_nextIoPollAt)
+            continue;
+
+        std::vector<std::pair<std::size_t, HardwareIoMapping>> inputs;
+        for (std::size_t index = 0;
+            index < s_outputConfig.handshake.mappings.size(); ++index)
+        {
+            const HardwareIoMapping& mapping =
+                s_outputConfig.handshake.mappings[index];
+            if (mapping.enabled && mapping.direction == HardwareIoDirection::Input)
+                inputs.emplace_back(index, mapping);
+        }
+        s_nextIoPollAt = now + std::chrono::milliseconds((std::max)(10,
+            s_outputConfig.handshake.pollIntervalMs));
+        if (inputs.empty())
+            continue;
+
+        lock.unlock();
+        std::vector<bool> values;
+        DeviceOperationResult pollResult = PollHandshakeInputs(inputs, values);
         lock.lock();
-        s_lastOutputOperation = result;
-        if (result.success)
-            ++s_outputSentCount;
-        else
-            ++s_outputFailedCount;
-        s_outputWorkerBusy = false;
-        s_outputWorkerCondition.notify_all();
+        RecordCommunicationResultLocked(pollResult);
+        if (!pollResult.success)
+            continue;
+
+        if (s_inputStates.size() != s_outputConfig.handshake.mappings.size())
+        {
+            s_inputStates.assign(s_outputConfig.handshake.mappings.size(), false);
+            s_inputStateInitialized.assign(
+                s_outputConfig.handshake.mappings.size(), false);
+        }
+        for (std::size_t valueIndex = 0; valueIndex < inputs.size(); ++valueIndex)
+        {
+            const std::size_t mappingIndex = inputs[valueIndex].first;
+            const bool value = values[valueIndex];
+            const bool rising = s_inputStateInitialized[mappingIndex] &&
+                !s_inputStates[mappingIndex] && value;
+            s_inputStates[mappingIndex] = value;
+            s_inputStateInitialized[mappingIndex] = true;
+            if (!rising)
+                continue;
+
+            const HardwareIoMapping& mapping = inputs[valueIndex].second;
+            if (mapping.signal == HardwareIoSignal::Trigger &&
+                !mapping.taskGroupName.empty())
+            {
+                if (!s_handshakeActive && !s_handshakeTestRequested &&
+                    !s_pendingTaskInspection.has_value())
+                {
+                    s_pendingTaskInspection =
+                        PendingTaskInspection{mapping.taskGroupName, true};
+                }
+                else
+                {
+                    ++s_handshakeIgnoredTriggerCount;
+                }
+            }
+            else if (mapping.signal == HardwareIoSignal::Acknowledge)
+            {
+                s_handshakeAcknowledgeReceived = true;
+            }
+        }
     }
 }
 
@@ -375,6 +806,13 @@ void StartOutputWorker()
     if (s_outputWorker.joinable())
         return;
     s_outputWorkerStop = false;
+    const auto now = std::chrono::steady_clock::now();
+    s_nextIoPollAt = now;
+    s_nextHeartbeatAt = now;
+    s_nextOutputReconnectAt = now;
+    s_inputStates.assign(s_outputConfig.handshake.mappings.size(), false);
+    s_inputStateInitialized.assign(
+        s_outputConfig.handshake.mappings.size(), false);
     s_outputWorker = std::thread(OutputWorkerLoop);
 }
 
@@ -384,7 +822,12 @@ void StopOutputWorker(bool clearQueue)
         std::lock_guard<std::mutex> lock(s_outputWorkerMutex);
         s_outputWorkerStop = true;
         if (clearQueue)
+        {
             s_outputQueue.clear();
+            s_ioWriteQueue.clear();
+            s_activeIoPulses.clear();
+            s_pendingTaskInspection.reset();
+        }
     }
     s_outputWorkerCondition.notify_all();
     if (s_outputWorker.joinable())
@@ -528,6 +971,7 @@ void RequestCameraFrame(bool runToolChainAfterCapture, bool loop)
         {
             s_runToolChainAfterFrameIndex = s_cameraScheduledFrameIndex + 1;
             s_cameraToolRunLoop = loop;
+            s_cameraToolRunFrameAvailable = false;
         }
     }
     s_cameraWorkerCondition.notify_all();
@@ -542,6 +986,7 @@ void CancelPendingCameraToolRun()
         s_runToolChainAfterFrameIndex = -1;
         s_cameraToolRunPending = false;
         s_cameraToolRunLoop = false;
+        s_cameraToolRunFrameAvailable = false;
         if (hadPendingToolRun && !s_cameraAutoCapture)
             s_cameraFrameRequested = false;
     }
@@ -559,6 +1004,33 @@ DeviceOperationResult ConnectOutput(const HardwareOutputConnectionConfig& rawCon
     config.maxQueueSize = (std::max)(1, config.maxQueueSize);
     config.retryCount = std::clamp(config.retryCount, 0, 10);
     config.retryDelayMs = (std::max)(1, config.retryDelayMs);
+    config.handshake.pollIntervalMs = std::clamp(
+        config.handshake.pollIntervalMs, 10, 5000);
+    config.handshake.acknowledgementTimeoutMs = std::clamp(
+        config.handshake.acknowledgementTimeoutMs, 100, 60000);
+    config.handshake.inspectionTimeoutMs = std::clamp(
+        config.handshake.inspectionTimeoutMs, 1000, 600000);
+    config.handshake.heartbeatIntervalMs = std::clamp(
+        config.handshake.heartbeatIntervalMs, 100, 60000);
+    config.handshake.reconnectFailureThreshold = std::clamp(
+        config.handshake.reconnectFailureThreshold, 1, 100);
+    config.handshake.reconnectInitialDelayMs = std::clamp(
+        config.handshake.reconnectInitialDelayMs, 1, 60000);
+    config.handshake.reconnectMaxDelayMs = std::clamp(
+        config.handshake.reconnectMaxDelayMs,
+        config.handshake.reconnectInitialDelayMs, 60000);
+    for (HardwareIoMapping& mapping : config.handshake.mappings)
+        mapping.pulseMs = std::clamp(mapping.pulseMs, 0, 60000);
+    if (config.handshake.enabled &&
+        config.adapterType != HardwareOutputAdapterType::ModbusTcp)
+    {
+        return s_lastOutputOperation = InvalidConfiguration(
+            "PLC IO 握手仅支持 Modbus TCP 输出类型");
+    }
+    const DeviceOperationResult handshakeValidation =
+        ValidateHandshakeConfig(config.handshake);
+    if (!handshakeValidation.success)
+        return s_lastOutputOperation = handshakeValidation;
 
     std::unique_ptr<IDeviceAdapter> adapter;
     switch (config.adapterType)
@@ -611,7 +1083,18 @@ DeviceOperationResult ConnectOutput(const HardwareOutputConnectionConfig& rawCon
     s_outputConfig = std::move(config);
     s_outputBinding = s_outputConfig.binding;
     s_outputAdapterKey = key;
-    s_outputAutoPublish = s_outputConfig.autoPublish;
+    s_outputAutoPublish = s_outputConfig.autoPublish &&
+        !s_outputConfig.handshake.enabled;
+    {
+        std::lock_guard<std::mutex> workerLock(s_outputWorkerMutex);
+        ResetHandshakeStateLocked(true);
+        s_outputConsecutiveFailures = 0;
+        s_outputReconnectAttempts = 0;
+        s_outputReconnectDelayMs = 0;
+        s_outputReconnecting = false;
+        s_outputCommunicationAlarm = false;
+        s_outputLastCommunicationTimestampMs = CurrentTimestampMs();
+    }
     s_lastOutputOperation = {true, result.message.empty()
         ? "硬件输出已连接"
         : std::move(result.message)};
@@ -622,20 +1105,62 @@ DeviceOperationResult ConnectOutput(const HardwareOutputConnectionConfig& rawCon
 void DisconnectOutput()
 {
     StopOutputWorker(true);
-    std::lock_guard<std::mutex> adapterLock(s_outputAdapterMutex);
-    if (!s_outputAdapterKey.empty())
-        HardwareAdapterService::Remove(s_outputAdapterKey);
-    s_outputAdapterKey.clear();
+    {
+        std::lock_guard<std::mutex> adapterLock(s_outputAdapterMutex);
+        if (!s_outputAdapterKey.empty())
+            HardwareAdapterService::Remove(s_outputAdapterKey);
+        s_outputAdapterKey.clear();
+    }
     s_outputAutoPublish = false;
-    s_lastOutputOperation = {true, "硬件输出已断开"};
+    {
+        std::lock_guard<std::mutex> workerLock(s_outputWorkerMutex);
+        ResetHandshakeStateLocked(true);
+        s_lastOutputOperation = {true, "硬件输出已断开"};
+    }
 }
 
 void ConfigureOutputBinding(const HardwareOutputBinding& binding, bool autoPublish)
 {
-    s_outputBinding = binding;
-    s_outputAdapterKey = binding.adapterKey;
-    s_outputAutoPublish = autoPublish;
+    {
+        std::scoped_lock lock(s_outputWorkerMutex, s_outputAdapterMutex);
+        s_outputBinding = binding;
+        s_outputAdapterKey = binding.adapterKey;
+        s_outputAutoPublish = autoPublish;
+    }
     StartOutputWorker();
+}
+
+void ConfigureModbusHandshake(const HardwareHandshakeConfig& rawConfig)
+{
+    HardwareHandshakeConfig config = rawConfig;
+    config.pollIntervalMs = std::clamp(config.pollIntervalMs, 10, 5000);
+    config.acknowledgementTimeoutMs = std::clamp(
+        config.acknowledgementTimeoutMs, 100, 60000);
+    config.inspectionTimeoutMs = std::clamp(
+        config.inspectionTimeoutMs, 1000, 600000);
+    config.heartbeatIntervalMs = std::clamp(
+        config.heartbeatIntervalMs, 100, 60000);
+    config.reconnectFailureThreshold = std::clamp(
+        config.reconnectFailureThreshold, 1, 100);
+    config.reconnectInitialDelayMs = std::clamp(
+        config.reconnectInitialDelayMs, 1, 60000);
+    config.reconnectMaxDelayMs = std::clamp(config.reconnectMaxDelayMs,
+        config.reconnectInitialDelayMs, 60000);
+    for (HardwareIoMapping& mapping : config.mappings)
+        mapping.pulseMs = std::clamp(mapping.pulseMs, 0, 60000);
+
+    {
+        std::lock_guard<std::mutex> lock(s_outputWorkerMutex);
+        s_outputConfig.handshake = std::move(config);
+        s_inputStates.assign(s_outputConfig.handshake.mappings.size(), false);
+        s_inputStateInitialized.assign(
+            s_outputConfig.handshake.mappings.size(), false);
+        s_nextIoPollAt = std::chrono::steady_clock::now();
+        s_nextHeartbeatAt = s_nextIoPollAt;
+        ResetHandshakeStateLocked(true);
+    }
+    StartOutputWorker();
+    s_outputWorkerCondition.notify_one();
 }
 
 void SetOutputAutoPublish(bool enabled)
@@ -725,6 +1250,95 @@ DeviceOperationResult PublishInspectionStatus(ToolResultStatus status,
     return {false, "不支持的硬件输出类型"};
 }
 
+DeviceOperationResult TestIoMapping(std::size_t mappingIndex, bool active)
+{
+    HardwareIoMapping mapping;
+    {
+        std::lock_guard<std::mutex> lock(s_outputWorkerMutex);
+        if (!s_outputConfig.handshake.enabled)
+            return {false, "请先启用并连接 PLC IO 握手"};
+        if (mappingIndex >= s_outputConfig.handshake.mappings.size())
+            return {false, "IO 映射索引无效"};
+        mapping = s_outputConfig.handshake.mappings[mappingIndex];
+    }
+    if (!mapping.enabled)
+        return {false, "该 IO 映射未启用"};
+
+    DeviceOperationResult result;
+    if (mapping.direction == HardwareIoDirection::Output)
+    {
+        result = WriteIoMapping(mapping, active);
+    }
+    else
+    {
+        std::lock_guard<std::mutex> adapterLock(s_outputAdapterMutex);
+        IDeviceAdapter* adapter = HardwareAdapterService::Find(s_outputAdapterKey);
+        auto* modbus = dynamic_cast<IModbusTcpAdapter*>(adapter);
+        if (!adapter || !modbus)
+            result = {false, "当前适配器不支持 Modbus TCP IO 读取"};
+        else if (adapter->ConnectionState() != DeviceConnectionState::Connected)
+            result = NotConnected(adapter->AdapterName());
+        else
+        {
+            std::vector<bool> values;
+            result = modbus->ReadCoils(mapping.address, 1, values);
+            if (result.success && values.size() == 1)
+            {
+                const bool logical = mapping.invert ? !values.front() : values.front();
+                result.message = std::string("输入状态: ") + (logical ? "ON" : "OFF");
+            }
+            else if (result.success)
+            {
+                result = {false, "Modbus 输入线圈返回为空"};
+            }
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(s_outputWorkerMutex);
+        RecordCommunicationResultLocked(result);
+    }
+    return result;
+}
+
+DeviceOperationResult RequestHandshakeTest(ToolResultStatus status)
+{
+    std::lock_guard<std::mutex> lock(s_outputWorkerMutex);
+    if (!s_outputConfig.handshake.enabled)
+        return {false, "请先启用并连接 PLC IO 握手"};
+    if (s_handshakeActive || s_handshakeTestRequested ||
+        s_pendingTaskInspection.has_value())
+        return {false, "已有 PLC 握手周期正在进行"};
+    s_handshakeTestStatus = status;
+    s_handshakeTestRequested = true;
+    s_outputWorkerCondition.notify_one();
+    return {true, "整套握手测试请求已接收"};
+}
+
+DeviceOperationResult RequestTaskInspection(const std::string& taskGroupName,
+    bool preferCamera)
+{
+    if (taskGroupName.empty())
+        return {false, "触发任务名称为空"};
+    const int taskIndex = ToolChainState::TaskGroupIndexByName(taskGroupName);
+    if (taskIndex < 0)
+        return {false, "任务不存在: " + taskGroupName};
+    if (!ToolChainState::ReadOnlyTaskGroups()[taskIndex].enabled)
+        return {false, "任务已禁用: " + taskGroupName};
+
+    std::lock_guard<std::mutex> lock(s_outputWorkerMutex);
+    if (!s_outputConfig.handshake.enabled)
+        return {false, "请先启用并连接 PLC IO 握手"};
+    if (s_handshakeActive || s_handshakeTestRequested ||
+        s_pendingTaskInspection.has_value())
+    {
+        ++s_handshakeIgnoredTriggerCount;
+        return {false, "PLC 握手忙碌，本次触发已忽略（不会排队补跑）"};
+    }
+    s_pendingTaskInspection = PendingTaskInspection{taskGroupName, preferCamera};
+    return {true, "任务触发已接收: " + taskGroupName};
+}
+
 ToolResultStatus AggregateInspectionStatus(const std::vector<ToolResult>& results)
 {
     bool hasResult = false;
@@ -781,7 +1395,8 @@ bool WaitForOutputIdle(int timeoutMs)
     return s_outputWorkerCondition.wait_for(lock,
         std::chrono::milliseconds((std::max)(1, timeoutMs)), []
         {
-            return s_outputQueue.empty() && !s_outputWorkerBusy;
+            return s_outputQueue.empty() && s_ioWriteQueue.empty() &&
+                s_activeIoPulses.empty() && !s_outputWorkerBusy;
         });
 }
 
@@ -789,7 +1404,8 @@ void Tick()
 {
     PendingCameraFrame pending;
     bool hasPendingFrame = false;
-    bool runToolChainAfterPublish = false;
+    bool completeToolRunRequest = false;
+    bool cameraFrameAvailable = false;
     bool runToolChainLoop = false;
     {
         std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
@@ -802,7 +1418,8 @@ void Tick()
             if (s_runToolChainAfterFrameIndex >= 0 &&
                 pending.frameIndex >= s_runToolChainAfterFrameIndex)
             {
-                runToolChainAfterPublish = pending.operation.success &&
+                completeToolRunRequest = true;
+                cameraFrameAvailable = pending.operation.success &&
                     !pending.frame.empty();
                 runToolChainLoop = s_cameraToolRunLoop;
                 s_runToolChainAfterFrameIndex = -1;
@@ -819,12 +1436,13 @@ void Tick()
                 pending.frameIndex, pending.timestampMs);
             s_cameraFrameIndex = pending.frameIndex;
             s_lastCameraOperation.message = "工业相机帧已发布";
-            if (runToolChainAfterPublish)
-            {
-                std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
-                s_cameraToolRunPending = true;
-                s_cameraToolRunLoop = runToolChainLoop;
-            }
+        }
+        if (completeToolRunRequest)
+        {
+            std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
+            s_cameraToolRunPending = true;
+            s_cameraToolRunLoop = runToolChainLoop;
+            s_cameraToolRunFrameAvailable = cameraFrameAvailable;
         }
     }
 
@@ -841,13 +1459,147 @@ void Tick()
     if (requestToolRun)
     {
         bool loop = false;
+        bool frameAvailable = false;
         {
             std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
             loop = s_cameraToolRunLoop;
+            frameAvailable = s_cameraToolRunFrameAvailable;
             s_cameraToolRunLoop = false;
+            s_cameraToolRunFrameAvailable = false;
         }
-        ToolController::ResumeRunAfterCamera(loop);
-        s_lastCameraOperation.message = "工业相机帧已发布，工具链已开始执行";
+        ToolController::ResumeRunAfterCamera(loop, frameAvailable);
+        s_lastCameraOperation.message = frameAvailable
+            ? "工业相机帧已发布，工具链已开始执行"
+            : "工业相机抓帧失败，工具链使用任务备用图片继续执行";
+    }
+
+    PendingTaskInspection inspectionRequest;
+    bool dispatchInspection = false;
+    bool cancelTimedOutInspection = false;
+    {
+        std::lock_guard<std::mutex> lock(s_outputWorkerMutex);
+        const auto now = std::chrono::steady_clock::now();
+
+        if (s_handshakeAcknowledgeReceived)
+        {
+            s_handshakeAcknowledgeReceived = false;
+            if (s_handshakeAwaitingAcknowledge)
+            {
+                QueueHandshakeResetLocked();
+                s_handshakeAwaitingAcknowledge = false;
+                s_handshakeActive = false;
+                s_handshakeTestActive = false;
+                s_handshakeTaskGroupName.clear();
+                s_handshakeAlarm = false;
+                s_handshakeAlarmMessage.clear();
+                s_lastOutputOperation = {true, "PLC 已确认本轮检测结果"};
+            }
+        }
+
+        if (s_handshakeTestRequested && !s_handshakeActive)
+        {
+            s_handshakeTestRequested = false;
+            s_handshakeTestActive = true;
+            s_handshakeActive = true;
+            s_handshakeAwaitingAcknowledge = false;
+            s_handshakeTaskGroupName = "握手自检";
+            s_handshakeStartedAt = now;
+            s_handshakeTestCompleteAt = now + std::chrono::milliseconds(300);
+            QueueHandshakeStartLocked();
+        }
+
+        if (s_handshakeTestActive && !s_handshakeAwaitingAcknowledge &&
+            now >= s_handshakeTestCompleteAt)
+        {
+            CompleteHandshakeLocked(s_handshakeTestStatus);
+        }
+
+        if (s_handshakeActive && !s_handshakeTestActive &&
+            !s_handshakeAwaitingAcknowledge)
+        {
+            const bool completed =
+                ToolController::GetCompletedBatchSerial() >
+                    s_handshakeStartBatchSerial &&
+                ToolController::GetMode() == ToolController::Mode::Idle &&
+                ToolController::WasLastRunTaskGroup() &&
+                ToolController::GetLastRunTaskGroupName() ==
+                    s_handshakeTaskGroupName;
+            if (completed)
+            {
+                CompleteHandshakeLocked(
+                    AggregateTaskGroupStatus(s_handshakeTaskGroupName));
+            }
+            else if (now - s_handshakeStartedAt >= std::chrono::milliseconds(
+                s_outputConfig.handshake.inspectionTimeoutMs))
+            {
+                cancelTimedOutInspection = true;
+                s_handshakeAlarm = true;
+                s_handshakeAlarmMessage =
+                    "单任务拍照检测超时: " + s_handshakeTaskGroupName;
+                s_lastOutputOperation = {false, s_handshakeAlarmMessage};
+                CompleteHandshakeLocked(ToolResultStatus::Error);
+            }
+        }
+
+        if (s_handshakeAwaitingAcknowledge &&
+            now - s_handshakeCompletedAt >= std::chrono::milliseconds(
+                s_outputConfig.handshake.acknowledgementTimeoutMs))
+        {
+            s_handshakeAlarm = true;
+            s_handshakeAlarmMessage = "PLC 结果确认应答超时";
+            s_lastOutputOperation = {false, s_handshakeAlarmMessage};
+            QueueHandshakeResetLocked();
+            s_handshakeAwaitingAcknowledge = false;
+            s_handshakeActive = false;
+            s_handshakeTestActive = false;
+            s_handshakeTaskGroupName.clear();
+        }
+
+        if (!s_handshakeActive && !s_handshakeTestRequested &&
+            ToolController::GetMode() == ToolController::Mode::Idle &&
+            s_pendingTaskInspection.has_value())
+        {
+            inspectionRequest = std::move(*s_pendingTaskInspection);
+            s_pendingTaskInspection.reset();
+            s_handshakeActive = true;
+            s_handshakeAwaitingAcknowledge = false;
+            s_handshakeTestActive = false;
+            s_handshakeTaskGroupName = inspectionRequest.taskGroupName;
+            s_handshakeStartBatchSerial =
+                ToolController::GetCompletedBatchSerial();
+            s_handshakeStartedAt = now;
+            QueueHandshakeStartLocked();
+            dispatchInspection = true;
+        }
+    }
+
+    if (cancelTimedOutInspection)
+        ToolController::Reset();
+
+    if (dispatchInspection)
+    {
+        const int taskIndex = ToolChainState::TaskGroupIndexByName(
+            inspectionRequest.taskGroupName);
+        const bool taskAvailable = taskIndex >= 0 &&
+            ToolChainState::ReadOnlyTaskGroups()[taskIndex].enabled;
+        if (!taskAvailable)
+        {
+            std::lock_guard<std::mutex> lock(s_outputWorkerMutex);
+            s_lastOutputOperation = {false,
+                "PLC 触发的任务不存在或已禁用: " +
+                    inspectionRequest.taskGroupName};
+            s_handshakeAlarm = true;
+            s_handshakeAlarmMessage = s_lastOutputOperation.message;
+            CompleteHandshakeLocked(ToolResultStatus::Error);
+        }
+        else
+        {
+            const bool useCamera = inspectionRequest.preferCamera &&
+                Snapshot().cameraState == DeviceConnectionState::Connected;
+            ToolController::RequestRunTaskGroup(
+                inspectionRequest.taskGroupName, false,
+                useCamera, useCamera);
+        }
     }
 }
 
@@ -859,15 +1611,19 @@ HardwareRuntimeSnapshot Snapshot()
         snapshot.cameraState = camera->ConnectionState();
         snapshot.cameraAdapterName = camera->AdapterName();
     }
-    if (!s_outputAdapterKey.empty())
     {
-        if (const IDeviceAdapter* output = HardwareAdapterService::FindReadOnly(s_outputAdapterKey))
+        std::lock_guard<std::mutex> adapterLock(s_outputAdapterMutex);
+        if (!s_outputAdapterKey.empty())
         {
-            snapshot.outputState = output->ConnectionState();
-            snapshot.outputAdapterName = output->AdapterName();
+            if (const IDeviceAdapter* output =
+                HardwareAdapterService::FindReadOnly(s_outputAdapterKey))
+            {
+                snapshot.outputState = output->ConnectionState();
+                snapshot.outputAdapterName = output->AdapterName();
+            }
         }
+        snapshot.outputAdapterKey = s_outputAdapterKey;
     }
-    snapshot.outputAdapterKey = s_outputAdapterKey;
     {
         std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
         snapshot.cameraAutoCapture = s_cameraAutoCapture;
@@ -889,6 +1645,23 @@ HardwareRuntimeSnapshot Snapshot()
         snapshot.outputFailedCount = s_outputFailedCount;
         snapshot.outputDroppedCount = s_outputDroppedCount;
         snapshot.lastOutputOperation = s_lastOutputOperation;
+        snapshot.outputConsecutiveFailures = s_outputConsecutiveFailures;
+        snapshot.outputReconnectAttempts = s_outputReconnectAttempts;
+        snapshot.outputReconnectDelayMs = s_outputReconnectDelayMs;
+        snapshot.outputReconnecting = s_outputReconnecting;
+        snapshot.outputCommunicationAlarm = s_outputCommunicationAlarm;
+        snapshot.outputLastCommunicationTimestampMs =
+            s_outputLastCommunicationTimestampMs;
+        snapshot.handshakeEnabled = s_outputConfig.handshake.enabled;
+        snapshot.handshakeActive = s_handshakeActive;
+        snapshot.handshakeAwaitingAcknowledge =
+            s_handshakeAwaitingAcknowledge;
+        snapshot.handshakeTestActive = s_handshakeTestActive;
+        snapshot.handshakeIgnoredTriggerCount =
+            s_handshakeIgnoredTriggerCount;
+        snapshot.handshakeTaskGroupName = s_handshakeTaskGroupName;
+        snapshot.handshakeAlarm = s_handshakeAlarm;
+        snapshot.handshakeAlarmMessage = s_handshakeAlarmMessage;
     }
     snapshot.outputAutoPublish = s_outputAutoPublish;
     snapshot.cameraFrameIndex = s_cameraFrameIndex;

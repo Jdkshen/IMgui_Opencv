@@ -56,6 +56,10 @@ struct RecipeTaskGroup
     std::string name;
     bool enabled = true;
     std::string imagePath;
+    std::string imageFolderPath;
+    int imageFolderIndex = -1;
+    int imageFolderCount = 0;
+    bool cameraPreferred = false;
 };
 
 // Recipe snapshot for one tool. Runtime parameters remain serialized by

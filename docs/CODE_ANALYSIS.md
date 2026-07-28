@@ -1,11 +1,11 @@
 # Windows_imgui 代码解析
 
-> Documentation sync: 2026-07-25. This file has been reviewed against `master` after the `codex/p0-p4-release` merge; see `docs/STATUS_2026-07-25.md` for the consolidated change summary.
+> 文档同步日期：2026-07-27。入口、任务管理、图像/ROI 状态、PLC 硬件调度、结果发布和 type 0-17 已与当前实现同步。
 
 
 ## 📖 项目概述
 
-这是一个基于 **Dear ImGui + DirectX 12 + OpenCV** 构建的 Windows 桌面视觉工具应用。用户可以通过图形界面加载图片、进行图像处理（灰度/模糊/二值化/Canny）、通过 ROI（感兴趣区域）进行交互式标注，并在一个可停靠的多窗口 UI 中实时查看结果。
+这是一个基于 **Dear ImGui + DirectX 12 + OpenCV** 构建的 Windows 桌面视觉工具应用。用户可以导入单图、递归图片文件夹、视频或相机帧，创建最多 16 个独立任务，配置 type 0-17 工具链、ROI、Fixture 和判定条件，并在可停靠窗口中查看任务结果、耗时和叠加图。
 
 ---
 
@@ -52,9 +52,9 @@
               │  ├─ ShowStatsWindow  │
               │  ├─ ShowOpenCV       │
               │  ├─ ShowToolsWindow  │
-              │  ├─ ShowThresholdWin │
-              │  ├─ TemplateMatch    │
-              │  └─ YOLODetector     │
+              │  ├─ ShowHardwareWindow│
+              │  ├─ ShowRunResultWindow│
+              │  └─ 任务列表/工具分配窗口│
               └──────────────────────┘
                           │
                           ▼
@@ -83,7 +83,7 @@
 | `Core/AudioPlayer.h/cpp` | **音频播放** | XAudio2 + Media Foundation，与视频同步 |
 | `Core/OpenFileDialog.h/cpp` | **文件选择对话框** | `OpenFileDialog()` `OpenFolderDialog()` `ScanImageFiles()` |
 | `Core/ThemeManager.h/cpp` | **主题管理** | 夜间/白天切换, theme.cfg 持久化 |
-| `Core/RecipeManager.h/cpp` | **配方系统** | JSON 保存/加载阈值+匹配+ROI 参数 |
+| `Core/RecipeManager.h/cpp` | **配方系统** | version 4 JSON 保存/加载任务、工具参数、ROI 和资产，兼容旧版本 |
 | `Core/ImageState.h/cpp` | **图像状态** | 当前图、原图和图像版本状态收口 |
 | `Core/ROI.h` / `Core/ROIState.h/cpp` | **ROI 状态** | ROI 数据结构和当前选区状态 |
 | `Core/FrameSourceState.h/cpp` | **帧来源状态** | 单图、图片序列、视频、摄像头来源状态 |
@@ -92,19 +92,20 @@
 | `Core/LiveYoloRunner.h/cpp` | **实时 YOLO 调度** | 视频/摄像头实时推理和耗时统计 |
 | `Core/VisionContext.h/cpp` | **统一视觉上下文** | `struct VisionContext { image, rois, frozenTemplate, unifiedResults }` 替代散落全局变量；视图变换由 `ImageViewState` 管理 |
 | `Core/ToolInstance.h` / `Core/ToolTypes.h` | **工具元数据** | 工具实例参数、类型常量和工具名称 |
-| `Core/ToolChainState.h/cpp` | **工具链状态** | 工具输入/输出图像链路状态 |
-| `Core/ToolExecutor.h/cpp` | **统一工具执行器** | type 0-11、13 统一分发到 `RunViaITool()`，type 12 原图由 `ToolController` 特殊处理 |
+| `Core/ToolChainState.h/cpp` | **工具链状态** | 工具实例、任务定义、归属、顺序、启用和独立输入 |
+| `Core/ToolExecutor.h/cpp` | **统一工具执行器** | type 0-11、13-17 统一分发到 `RunViaITool()`，type 12 原图由 `ToolController` 特殊处理 |
 | `Core/ToolController.h/cpp` | **工具调度器** | queue 驱动 + Tick() 替代旧 ExecState 状态机 |
 | `Core/FrameRenderer.h/cpp` | **帧渲染提交** | 每帧渲染提交和渲染资源收尾 |
 | `UI/DockSpaceHost.h/cpp` | **主框架** | DockSpace 容器 + 菜单栏 + 配方菜单 |
-| `UI/AppTitleBar.h/cpp` | **标题栏辅助** | 原生标题栏颜色同步和标题区辅助 |
 | `UI/LogWindow.h/cpp` | **日志窗口** | 带颜色分级和时间戳的日志列表 |
 | `UI/Sidebar.h/cpp` | **侧边栏** | ROI 类型切换、快捷操作、自定义日志 |
 | `UI/StatsWindow.h/cpp` | **性能统计窗口** | FPS、帧耗时、渲染信息 |
-| `UI/ToolsWindow.h/cpp` | **功能窗口** | 手风琴工具列表 + 全部/单步/循环执行 |
+| `UI/ToolsWindow.h/cpp` | **功能窗口** | 工具参数、任务管理、输入配置、全部/当前任务/单步/循环/并行入口 |
+| `UI/RunResultWindow.h/cpp` | **结果总览** | 任务卡片、详情、结果图、缩放/最大化和整轮耗时 |
 | `UI/ImageViewer.h/cpp` | **图像/视频显示** | 缩放/平移/图片列表导航/视频控制栏 |
 | `UI/ROIManager.h/cpp` | **ROI 交互管理** | 画框/拖拽/控制点/坐标转换 |
 | `Renderer/FontManager.h/cpp` | **字体管理** | 加载 simsun.ttc 中文字体 |
+| `Renderer/PreviewTextureCache.h/cpp` | **预览纹理缓存** | 缓存工具预览图和任务结果图对应的 DX12 纹理 |
 | `Log/LogSystem.h/cpp` | **线程安全日志系统** | 3级日志(INFO/WARN/ERROR), 颜色, 时间戳, 2000条上限 |
 | `Algorithm/ThresholdTool.h/cpp` | **图像处理管线** | 灰度→模糊→二值化/Canny→RGBA上传, 性能计时 |
 | `Algorithm/ThresholdITool.cpp` | **阈值工具适配** | 把阈值调试接入 ITool |
@@ -116,7 +117,7 @@
 | `Algorithm/YOLODetector.h/cpp` | **YOLO 目标检测** | ONNX Runtime 推理 YOLO11，ROI 限定区域，NMS 后处理 |
 | `Algorithm/OpenCVYoloDetector.h/cpp` | **OpenCV DNN YOLO** | OpenCV 5.0 DNN 实验后端 |
 | `Algorithm/ITool.h` / `Algorithm/ITool.cpp` | **工具接口** | 抽象基类 `ITool` + `ToolRegistry` 工厂 + 自动注册 |
-| `Algorithm/ToolResult.h` | **统一输出** | `ToolResult { measurements, regions, detections, lines, texts, debugImage }` |
+| `Algorithm/ToolResult.h` | **统一输出** | 来源 ID、Pass/Fail/Error、分段耗时、测量、区域、检测、线、文本和调试图 |
 | `Algorithm/YOLOTool.h/cpp` | **YOLO 工具** | 实现 ITool 接口的 YOLO 封装 |
 | `Algorithm/ShapeTools.h/cpp` | **形状工具组** | ContourTool/ShapeTool/LineTool 实现 ITool 接口 |
 
@@ -189,9 +190,12 @@ while (!done)
     UI::ShowSidebar()           // 侧边栏
     UI::ShowLogWindow()         // 日志
     UI::ShowStatsWindow()       // 性能
+    UI::ShowHardwareWindow()    // 设备连接页签
     UI::ShowOpenCV()            // 图像显示
-    UI::ShowToolsWindow()       // 工具入口
-    ThresholdTool::ShowThresholdWindow()
+    UI::ShowToolsWindow()       // 工具/任务入口，内部调用 ToolController::Tick()
+    UI::ShowRunResultWindow()   // 任务结果总览与详情
+
+    HardwareRuntimeService::Tick() // 发布异步抓帧结果和硬件运行状态
 
     // ── ⑤ ImGui 渲染 ──
     ImGui::Render()
@@ -421,9 +425,16 @@ DockSpace → 子窗口可随意停靠/浮动
 **⑥ `ShowToolsWindow()` — 工具窗口**
 
 ```
-按钮: [打印ROI] [清理图片] [边缘检测] [模板匹配] [Blob分析]
-勾选: [阈值调试] → 打开 ThresholdTool 窗口
+顶部: 任务分组管理、任务列表、工具分配、添加工具
+执行: 执行全部、执行当前任务、全部单步、当前任务单步、循环、再次运行
+任务: 最多16个，支持重命名/排序/启用/删除/独立图片或文件夹/相机优先
+工具卡片: 独立参数、任务下拉、移动/复制/删除、输入来源、ROI/Fixture/判定
+每帧末尾: ToolController::Tick() 推进当前队列或收集并行任务结果
 ```
+
+**⑦ `ShowRunResultWindow()` — 结果窗口**
+
+按启用任务顺序显示卡片；详情展示任务内工具状态、耗时和结果图，支持缩放、平移和最大化。预览纹理由 `PreviewTextureCache` 复用。
 
 ---
 
@@ -433,8 +444,8 @@ DockSpace → 子窗口可随意停靠/浮动
 
 | 变量 | 类型 | 说明 |
 |------|------|------|
-| `gZoom` | `float` | 缩放倍数 (0.05~50.0) |
-| `gPan` | `ImVec2` | 平移偏移量（像素） |
+| `gZoom` | `float&` | `ImageViewState` 中缩放倍数的兼容引用 (0.05~50.0) |
+| `gPan` | `ImVec2&` | `ImageViewState` 中平移偏移量的兼容引用（像素） |
 | `imageScreenPos` | `ImVec2` | 图像左上角在屏幕上的位置 |
 | `gCanvasSize` | `ImVec2` | 画布区域大小 |
 
@@ -473,8 +484,12 @@ ZoomAtCenter(delta):
 
 ```cpp
 struct ROI {
-    ImVec2 start;  // 标准化坐标 0~1（相对于图像宽高）
-    ImVec2 end;
+    std::uint64_t runtimeId = 0; // UI 运行时关联标识，不写入配方
+    int type = ROI_TYPE_RECT;
+    ImVec2 start = {0, 0};       // 图像像素坐标
+    ImVec2 end = {0, 0};         // 图像像素坐标
+    float angle = 0.0f;          // 矩形顺时针旋转角度（度）
+    std::vector<ImVec2> points;  // 多边形顶点
 };
 
 struct ROIBox {
@@ -486,8 +501,8 @@ struct ROIBox {
 #### 3.5.5 ROI 交互状态机
 
 ```
-右击开始绘制 → gDrawingROI = true, gROIStart = imageMousePos
-右击结束绘制 → 创建 ROI，加入 gROIs 列表
+右击开始绘制 → ROIEditorState 记录绘制状态和起点
+右击结束绘制 → 创建 ROI，调用 ROIState::Add(...)
 
 左击检测优先级:
   ① 检测是否点在 Handle 上（8方向控制点）
@@ -502,8 +517,10 @@ ROI 移动:
   记录鼠标在图像中的位移 → 平移 start/end
 
 释放左键:
-  gDraggingROI = false, gActiveHandle = HANDLE_NONE
+  ROIEditorState 清除拖动状态和活动控制点
 ```
+
+`gDrawingROI`、`gROIStart` 仍作为兼容引用存在，实际状态由 `ROIEditorState` 持有；ROI 集合和当前选择由 `ROIState` 管理。`gZoom`、`gPan` 同理，是 `ImageViewState` 状态的兼容引用。
 
 #### 3.5.6 8 方向 Handle 枚举
 
@@ -585,7 +602,7 @@ struct LogItem {
 
 ---
 
-### 3.7 字体管理 — `Renderer/FontManager.h/cpp`
+### 3.7 渲染辅助 — `Renderer/`
 
 #### 3.7.1 流程
 
@@ -603,6 +620,10 @@ InitFonts(dpi_scale):
 
 > `GetGlyphRangesChineseFull()` 加载完整的 CJK 统一表意文字（超过 2 万个汉字）。
 
+### 3.7.2 预览纹理缓存 — `Renderer/PreviewTextureCache.h/cpp`
+
+工具预览图和任务结果图通过 `PreviewTextureCache` 复用 DX12 纹理；当源图变化或缓存被清理时再更新或释放资源，减少结果总览和工具卡片重复创建纹理的开销。
+
 ---
 
 ### 3.8 图像处理管线 — `Algorithm/ThresholdTool.h/cpp`
@@ -612,16 +633,16 @@ InitFonts(dpi_scale):
 ```
 VisionContext.image（只读输入）
   │
-  ├── [可选] 灰度化 gUseGray
+  ├── [可选] 灰度化 ToolInstance::threshold.useGray
   │     BGRA/BGR/GRAY → GRAY
   │
-  ├── [可选] 高斯模糊 gPipe.enableBlur
+  ├── [可选] 高斯模糊 threshold.enableBlur
   │     GaussianBlur(kernel = blurSize*2+1)
   │
-  ├── [可选] 二值化 gPipe.enableThreshold
+  ├── [可选] 二值化 threshold.enableThreshold
   │     threshold(value, THRESH_BINARY)
   │
-  ├── [可选] Canny 边缘检测 gPipe.enableCanny
+  ├── [可选] Canny 边缘检测 threshold.enableCanny
   │     Canny(lowThreshold, highThreshold)
   │
   └── ToolResult.debugImage（新图像输出）
@@ -629,10 +650,11 @@ VisionContext.image（只读输入）
         → ImageLoadController 请求纹理更新
 ```
 
-#### 3.8.2 PipelineState 参数
+#### 3.8.2 ThresholdSettings 参数
 
 ```cpp
-struct PipelineState {
+struct ThresholdSettings {
+    bool useGray         = false;
     bool enableBlur       = false;  // 启用模糊
     bool enableThreshold  = false;  // 启用二值化
     bool enableCanny      = false;  // 启用边缘检测
@@ -643,24 +665,14 @@ struct PipelineState {
 };
 ```
 
-#### 3.8.3 性能计时系统
+#### 3.8.3 性能计时
 
 ```
-ApplyProcess() 内部使用 std::chrono::high_resolution_clock 计时：
-
-t0 ── 开始
-  │
-t1 ── 灰度前
-  │
-t2 ── 灰度后        → gTimeGray = t2 - t0
-  │
-t3 ── 模糊后        → gTimeBlur = t3 - t2
-  │
-t4 ── 阈值/Canny后  → gTimeFilter = t4 - t3
-  │
-t5 ── RGBA 转换后   → gTimeRGBA = t5 - t4
-  │
-t6 ── 完成          → gTimeTotal = t6 - t0
+ToolExecutor 统一记录：
+prepareMs → 准备图像、ROI、参数和依赖
+executeMs → ITool::Execute 算法执行
+publishMs → 判定、缓存和结果发布
+wallMs    → 工具墙钟耗时
 ```
 
 #### 3.8.4 UI 界面
@@ -794,8 +806,8 @@ struct DetectedObject {
           ┌──────────┴──────────┐
           ▼                     ▼
    ┌───────────────┐    ┌───────────────┐
-   │ImGui::Image() │    │ThresholdTool  │
-   │ (显示原图)    │    │ ApplyProcess  │
+   │ImGui::Image() │    │ToolController │
+   │ (显示当前图)  │    │→ ToolExecutor │
    └───────────────┘    │   ├─ 灰度化    │
                         │   ├─ 模糊      │
                         │   ├─ 二值化    │
@@ -804,8 +816,8 @@ struct DetectedObject {
                                │ ToolResult.debugImage
                                ▼
                         ┌──────────────┐
-                        │UploadToDX12()│
-                        │ (覆盖纹理)    │
+                        │ImageState::  │
+                        │SetDebugImage │
                         └──────┬───────┘
                                │
                                ▼
@@ -814,6 +826,28 @@ struct DetectedObject {
                         │ (处理结果)    │
                         └──────────────┘
 ```
+
+---
+
+## 四、任务与 PLC 运行调度
+
+任务配置由 `ToolChainState` 持有，执行批次由 `ToolController` 持有，硬件连接和握手状态由 `HardwareRuntimeService` 持有。三者职责不能互换：任务重命名/排序不会直接操作 PLC；PLC 线程也不会直接修改工具卡片或结果纹理。
+
+```text
+HardwareWindow 配置
+  -> HardwareSettingsService 保存并校验 IO 表
+  -> HardwareRuntimeService 后台轮询 Modbus
+  -> Trigger 上升沿且握手空闲
+  -> UI 主线程 Tick 取出指定任务请求
+  -> ToolController 只运行该任务
+  -> 结果聚合为 Pass / Fail / Error
+  -> HardwareRuntimeService 写 Busy/Done/OK/NG/Error
+  -> ACK 上升沿清除结果并释放下一轮
+```
+
+标准映射中任务01 Trigger 为地址0，任务02～16为地址8～22，地址1～7保留给 Busy、Done、OK、NG、Error、Heartbeat、ACK。任务列表变更只补齐缺失 Trigger，不覆盖用户自定义地址；“恢复标准映射”才会按当前任务顺序重建。
+
+握手是单槽模型：请求已接收、Busy 或等待 ACK 时的新 Trigger 会被忽略并计数，不会在 ACK 后补跑。PLC 输入图像优先级是“在线相机 → 任务文件夹 → 任务单图 → 公共图片”；相机在线但本轮抓帧失败发布 Error。实现与操作细节见 [硬件接入说明](HARDWARE_INTEGRATION.md)。
 
 ---
 
@@ -858,11 +892,12 @@ struct DetectedObject {
 ### 6.1 添加新的图像处理算法
 
 ```
-① 在 Algorithm/ 目录下创建 YourTool.h 和 YourTool.cpp
-② 在 YourTool.h 中声明 UI 函数和参数变量
-③ 在 Windows_imgui.h 中添加 #include "Algorithm/YourTool.h"
-④ 在 UI::ShowToolsWindow() 中添加按钮入口
-⑤ 在主循环中添加 YourTool::ShowWindow() 调用
+① 从 type 18 开始分配编号，在 Algorithm/ 创建 YourTool.h/.cpp 并实现 ITool
+② 在 ToolRegistry 注册工厂，在 ToolInstance/ToolSettings 保存实例参数
+③ 在 ToolsWindow 的 g_ToolRegistry 和参数面板中添加入口
+④ 在 ToolExecutor::RunViaITool() 同步参数
+⑤ 在 ToolInstance::ToRecipeJson()/LoadRecipeJson() 保存与加载参数
+⑥ 更新 vcxproj/filters、回归测试和文档
 ```
 
 ### 6.2 添加新的菜单项
