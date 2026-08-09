@@ -66,7 +66,7 @@
       <AdditionalDependencies>opencv_world500d.lib;zxingcppd.lib;open62541d.lib;Comdlg32.lib;Ole32.lib;Shell32.lib;Ws2_32.lib;Iphlpapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /Y "$(ProjectDir)..\redist\opencv_world500d.dll" "$(OutDir)"</Command>
+      <Command>xcopy /Y /D "$(ProjectDir)..\redist\opencv_world500d.dll" "$(OutDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -89,7 +89,7 @@
       <AdditionalDependencies>opencv_world500.lib;ncnn.lib;zxingcpp.lib;open62541.lib;Comdlg32.lib;Ole32.lib;Shell32.lib;Ws2_32.lib;Iphlpapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /Y "$(ProjectDir)..\redist\opencv_world500.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)..\redist\ncnn.dll" "$(OutDir)"</Command>
+      <Command>xcopy /Y /D "$(ProjectDir)..\redist\opencv_world500.dll" "$(OutDir)" &amp; xcopy /Y /D "$(ProjectDir)..\redist\ncnn.dll" "$(OutDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
