@@ -1349,7 +1349,7 @@ namespace
         const std::string dashboardTitle = expandedGroup
             ? "任务详情 · " + (expandedGroup->groupName.empty()
                 ? std::string("未分组") : expandedGroup->groupName)
-            : std::string("任务结果总览");
+            : "任务结果总览（共 " + std::to_string(currentGroups.size()) + " 个任务）";
 
         ImGuiViewport* viewport = ImGui::GetMainViewport();
         const RunResultLayout::Size normalLayoutSize =
