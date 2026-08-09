@@ -1596,7 +1596,10 @@ namespace UI
         ImGui::SameLine();
         ImGui::TextDisabled("%zu 个", visibleToolIndices.size());
 
-        if (ImGui::Button("打开流程图窗口##workflow_graph_window", ImVec2(-1.0f, 0.0f)))
+        const char* workflowButtonLabel = s_showWorkflowWindow
+            ? "切换到工具流程图##workflow_graph_window"
+            : "打开工具流程图##workflow_graph_window";
+        if (ImGui::Button(workflowButtonLabel, ImVec2(-1.0f, 0.0f)))
         {
             s_showWorkflowWindow = true;
             s_requestWorkflowWindowFocus = true;
