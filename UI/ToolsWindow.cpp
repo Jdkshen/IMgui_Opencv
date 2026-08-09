@@ -3259,7 +3259,10 @@ TemplateState::ClearResults();
             if (ImGui::BeginTable("##yolo_model_files", 2,
                 ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings))
             {
-                const float pickerWidth = ImGui::CalcTextSize("选择类别文件").x +
+                const float pickerLabelWidth = (std::max)(
+                    ImGui::CalcTextSize("选择 ONNX 模型").x,
+                    ImGui::CalcTextSize("选择类别文件").x);
+                const float pickerWidth = pickerLabelWidth +
                     ImGui::GetStyle().FramePadding.x * 2.0f;
                 ImGui::TableSetupColumn("##picker", ImGuiTableColumnFlags_WidthFixed, pickerWidth);
                 ImGui::TableSetupColumn("##file", ImGuiTableColumnFlags_WidthStretch);
@@ -3361,7 +3364,10 @@ TemplateState::ClearResults();
             if (ImGui::BeginTable("##ocv5_model_files", 2,
                 ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings))
             {
-                const float pickerWidth = ImGui::CalcTextSize("选择类别文件").x +
+                const float pickerLabelWidth = (std::max)(
+                    ImGui::CalcTextSize("选择 ONNX 模型").x,
+                    ImGui::CalcTextSize("选择类别文件").x);
+                const float pickerWidth = pickerLabelWidth +
                     ImGui::GetStyle().FramePadding.x * 2.0f;
                 ImGui::TableSetupColumn("##picker", ImGuiTableColumnFlags_WidthFixed, pickerWidth);
                 ImGui::TableSetupColumn("##file", ImGuiTableColumnFlags_WidthStretch);
