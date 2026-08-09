@@ -159,6 +159,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	// 高 DPI 显示器（如 4K 屏 150%/200% 缩放）下，若不禁用系统缩放，
 	// 窗口会被整体拉伸导致模糊。启用 Per-Monitor DPI Awareness v2 后，
 	// 由应用程序自己处理缩放，实现像素级精确渲染。
+	// 显式设置进程级上下文，避免仅设置线程上下文时 Win32 工作区
+	// 仍按系统 DPI 虚拟化，导致 DockSpace 使用逻辑尺寸溢出实际客户区。
+	::SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 	ImGui_ImplWin32_EnableDpiAwareness();
 	// 获取主显示器的 DPI 缩放比例（例：100%=1.0, 150%=1.5, 200%=2.0）
 	// MonitorFromPoint({0,0}) 始终返回主显示器
@@ -368,6 +371,18 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		//   3. ImGui::NewFrame() — 初始化 ImGui 内部帧状态（draw list、ID 栈等）
 		GraphicsBackend::NewFrame();
 		ImGui_ImplWin32_NewFrame();
+		RECT clientRect{};
+		if (::GetClientRect(hwnd, &clientRect))
+		{
+			const float clientWidth = static_cast<float>(clientRect.right - clientRect.left);
+			const float clientHeight = static_cast<float>(clientRect.bottom - clientRect.top);
+			if (clientWidth > 0.0f && clientHeight > 0.0f)
+			{
+				const float dpiScale = (std::max)(1.0f, AppRuntimeState::DpiScale());
+				ImGui::GetIO().DisplaySize = ImVec2(
+					clientWidth / dpiScale, clientHeight / dpiScale);
+			}
+		}
 		ImGui::NewFrame();
 
 		// ----- 6.3b 延迟日志启动 -----
