@@ -501,6 +501,7 @@ namespace UI
         bool s_requestToolsWindowFocus = false;
         bool s_showWorkflowWindow = false;
         bool s_requestWorkflowWindowFocus = false;
+        bool s_requestWorkflowWindowDock = true;
         char s_toolCatalogFilter[96]{};
 
         std::string AsciiLower(std::string value)
@@ -1387,6 +1388,15 @@ namespace UI
             if (!s_showWorkflowWindow)
                 return;
 
+            if (s_requestWorkflowWindowDock)
+            {
+                const ImGuiID dockId = WindowDockId("图像预览");
+                if (dockId != 0)
+                {
+                    ImGui::SetNextWindowDockID(dockId, ImGuiCond_Always);
+                    s_requestWorkflowWindowDock = false;
+                }
+            }
             if (s_requestWorkflowWindowFocus)
             {
                 ImGui::SetNextWindowFocus();

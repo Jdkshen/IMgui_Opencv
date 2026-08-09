@@ -764,6 +764,7 @@ TemplateState::ClearResults();
 
             ImGui::DockBuilderDockWindow("功能窗口", right );
             ImGui::DockBuilderDockWindow("图像预览", main);
+            ImGui::DockBuilderDockWindow("工具流程图", main);
             ImGui::DockBuilderDockWindow("侧边栏",   left);
             ImGui::DockBuilderDockWindow(
                 "任务列表###task_group_list_window", left);
