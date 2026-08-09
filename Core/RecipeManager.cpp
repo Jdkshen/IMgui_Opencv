@@ -25,7 +25,7 @@ using json = nlohmann::json;
 
 namespace
 {
-constexpr int kRecipeVersion = 4;
+constexpr int kRecipeVersion = 5;
 
 void MigrateLegacyResultLabelSetting(nlohmann::json& tool)
 {
@@ -335,8 +335,14 @@ namespace RecipeManager
         json &rois = j["rois"] = json::array();
         for (const auto &r : data.rois)
         {
+            json points = json::array();
+            for (const ImVec2& point : r.points)
+                points.push_back({{"x", point.x}, {"y", point.y}});
             rois.push_back({{"startX", r.startX}, {"startY", r.startY},
-                {"endX", r.endX}, {"endY", r.endY}, {"angle", r.angle}, {"type", r.type}});
+                {"endX", r.endX}, {"endY", r.endY}, {"angle", r.angle},
+                {"type", r.type}, {"locked", r.locked},
+                {"visible", r.visible}, {"constrainToImage", r.constrainToImage},
+                {"points", std::move(points)}});
         }
 
         json &taskGroups = j["taskGroups"] = json::array();
@@ -346,7 +352,8 @@ namespace RecipeManager
                 {"imageFolderPath", group.imageFolderPath},
                 {"imageFolderIndex", group.imageFolderIndex},
                 {"imageFolderCount", group.imageFolderCount},
-                {"cameraPreferred", group.cameraPreferred}});
+                {"cameraIndex", group.cameraIndex},
+                {"cameraPreferred", group.cameraIndex >= 0 || group.cameraPreferred}});
 
         // Tool instances
         json &tools = j["tools"] = json::array();
@@ -473,8 +480,6 @@ namespace RecipeManager
 
     bool Load(const char *filepath, RecipeData &data)
     {
-        g_LastRecipePath = filepath;
-
         std::string text;
         if (!ReadTextUtf8File(filepath, text))
         {
@@ -495,8 +500,15 @@ namespace RecipeManager
 
         int version = j.value("version", 0);
         if (version > kRecipeVersion)
-            LogSystem::Add(LOG_WARN, "RecipeManager: recipe version %d > supported version %d",
-                version, kRecipeVersion);
+        {
+            LogSystem::Add(LOG_ERROR,
+                "event=recipe_version_rejected path=%s version=%d supported=%d "
+                "reason=newer_recipe_would_lose_fields",
+                filepath, version, kRecipeVersion);
+            return false;
+        }
+
+        g_LastRecipePath = filepath;
 
         data.name = j.value("name", "");
         data.imagePath = j.value("imagePath", "");
@@ -555,6 +567,14 @@ namespace RecipeManager
                 roi.endY = r.value("endY", 0.0f);
                 roi.angle = r.value("angle", 0.0f);
                 roi.type = r.value("type", 0);
+                roi.locked = r.value("locked", false);
+                roi.visible = r.value("visible", true);
+                roi.constrainToImage = r.value("constrainToImage", true);
+                if (r.contains("points") && r["points"].is_array())
+                {
+                    for (const auto& point : r["points"])
+                        roi.points.emplace_back(point.value("x", 0.0f), point.value("y", 0.0f));
+                }
                 data.rois.push_back(roi);
             }
         }
@@ -572,6 +592,9 @@ namespace RecipeManager
                 group.imageFolderIndex = groupJson.value("imageFolderIndex", -1);
                 group.imageFolderCount = groupJson.value("imageFolderCount", 0);
                 group.cameraPreferred = groupJson.value("cameraPreferred", false);
+                group.cameraIndex = std::clamp(groupJson.value("cameraIndex",
+                    group.cameraPreferred ? 0 : -1), -1, 15);
+                group.cameraPreferred = group.cameraIndex >= 0;
                 if (!group.name.empty())
                     data.taskGroups.push_back(std::move(group));
             }
@@ -702,6 +725,10 @@ namespace RecipeManager
             r.endY = roi.end.y;
             r.angle = roi.angle;
             r.type = roi.type;
+            r.locked = roi.locked;
+            r.visible = roi.visible;
+            r.constrainToImage = roi.constrainToImage;
+            r.points = roi.points;
             d.rois.push_back(r);
         }
 
@@ -719,7 +746,8 @@ namespace RecipeManager
             group.imageFolderPath = source.imageFolderPath;
             group.imageFolderIndex = source.imageFolderIndex;
             group.imageFolderCount = source.imageFolderCount;
-            group.cameraPreferred = source.cameraPreferred;
+            group.cameraIndex = source.cameraIndex;
+            group.cameraPreferred = source.cameraIndex >= 0 || source.cameraPreferred;
             d.taskGroups.push_back(std::move(group));
         }
 
@@ -771,6 +799,12 @@ namespace RecipeManager
             roi.end = ImVec2(r.endX, r.endY);
             roi.angle = r.angle;
             roi.type = r.type;
+            roi.locked = r.locked;
+            roi.visible = r.visible;
+            roi.constrainToImage = r.constrainToImage;
+            if (roi.type == ROI_TYPE_RECT)
+                roi.angle = ROI::NormalizeRectangle2AngleDegrees(roi.angle);
+            roi.points = r.points;
             restoredROIs.push_back(std::move(roi));
         }
         if (!data.imagePath.empty())
@@ -847,7 +881,8 @@ namespace RecipeManager
             group.imageFolderPath = ResolveRecipeAssetPath(source.imageFolderPath);
             group.imageFolderIndex = source.imageFolderIndex;
             group.imageFolderCount = source.imageFolderCount;
-            group.cameraPreferred = source.cameraPreferred;
+            group.cameraIndex = source.cameraIndex;
+            group.cameraPreferred = source.cameraIndex >= 0 || source.cameraPreferred;
             restoredGroups.push_back(std::move(group));
         }
         ToolChainState::ReplaceTaskGroups(std::move(restoredGroups));
@@ -861,6 +896,13 @@ namespace RecipeManager
             {
                 tool.resultRoiSourceToolId =
                     ToolChainState::ReadOnlyTools()[tool.resultRoiSourceTool].toolId;
+            }
+            if (tool.resultRoiSecondSourceToolId == 0 &&
+                tool.resultRoiSecondSourceTool >= 0 &&
+                tool.resultRoiSecondSourceTool < static_cast<int>(ToolChainState::ReadOnlyTools().size()))
+            {
+                tool.resultRoiSecondSourceToolId =
+                    ToolChainState::ReadOnlyTools()[tool.resultRoiSecondSourceTool].toolId;
             }
             if (tool.fixture.sourceToolId == 0 &&
                 tool.fixture.sourceToolIndex >= 0 &&

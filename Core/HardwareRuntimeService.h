@@ -81,6 +81,7 @@ struct HardwareHandshakeConfig
 
 struct HardwareCameraConnectionConfig
 {
+    int slotIndex = -1;
     DeviceEndpoint endpoint;
     std::string sourceName = "industrial-camera";
     int grabTimeoutMs = 250;
@@ -91,6 +92,9 @@ struct HardwareCameraConnectionConfig
     bool autoExposure = true;
     double exposure = -6.0;
     double gain = 0.0;
+    CameraTriggerConfig trigger;
+    CameraBufferPolicy bufferPolicy = CameraBufferPolicy::Sequential;
+    bool ptpEnabled = false;
     bool autoReconnect = true;
     int reconnectFailureThreshold = 3;
     int reconnectInitialDelayMs = 250;
@@ -99,6 +103,7 @@ struct HardwareCameraConnectionConfig
 
 struct HardwareOutputConnectionConfig
 {
+    bool enabled = true;
     HardwareOutputAdapterType adapterType = HardwareOutputAdapterType::ModbusTcp;
     DeviceEndpoint endpoint;
     HardwareOutputBinding binding;
@@ -109,6 +114,20 @@ struct HardwareOutputConnectionConfig
     int retryDelayMs = 150;
     bool reconnectBeforeRetry = true;
     HardwareHandshakeConfig handshake;
+};
+
+struct HardwareAuxiliaryOutputSnapshot
+{
+    std::string adapterKey;
+    std::string adapterName;
+    DeviceConnectionState state = DeviceConnectionState::Disconnected;
+    DeviceOperationResult lastOperation;
+};
+
+struct CameraDiscoveryResult
+{
+    DeviceOperationResult operation;
+    std::vector<CameraDeviceInfo> devices;
 };
 
 struct HardwareRuntimeSnapshot
@@ -133,6 +152,7 @@ struct HardwareRuntimeSnapshot
     bool handshakeTestActive = false;
     bool handshakeAlarm = false;
     int cameraFrameIndex = 0;
+    int cameraSlotIndex = -1;
     int cameraConsecutiveFailures = 0;
     int cameraReconnectAttempts = 0;
     int cameraReconnectDelayMs = 0;
@@ -147,6 +167,10 @@ struct HardwareRuntimeSnapshot
     double outputLastCommunicationTimestampMs = 0.0;
     std::string handshakeTaskGroupName;
     std::string handshakeAlarmMessage;
+    CameraTriggerConfig cameraTrigger;
+    CameraFrameMetadata cameraFrameMetadata;
+    CameraCapabilities cameraCapabilities;
+    CameraStatistics cameraStatistics;
     DeviceOperationResult lastCameraOperation;
     DeviceOperationResult lastOutputOperation;
 };
@@ -154,6 +178,7 @@ struct HardwareRuntimeSnapshot
 namespace HardwareRuntimeService
 {
     DeviceOperationResult ConnectCamera(const HardwareCameraConnectionConfig& config);
+    DeviceOperationResult ActivateCameraSlot(int cameraIndex);
     DeviceOperationResult StartCameraCapture(const HardwareCameraConnectionConfig& config);
     void DisconnectCamera();
     void SetCameraAutoCapture(bool enabled);
@@ -162,11 +187,25 @@ namespace HardwareRuntimeService
     bool CameraTriggerOnInspectionEnabled();
     void SetCameraOrientation(int orientation);
     DeviceOperationResult SetCameraControl(CameraControl control, double value);
+    DeviceOperationResult ConfigureCameraTrigger(const CameraTriggerConfig& config);
+    DeviceOperationResult ConfigureCameraBufferPolicy(CameraBufferPolicy policy);
+    DeviceOperationResult ExecuteCameraSoftwareTrigger();
+    DeviceOperationResult ConfigureCameraPtp(bool enabled);
+    CameraDiscoveryResult DiscoverCameras(const std::string& backend);
+    DeviceOperationResult ForceCameraIp(const std::string& backend,
+        const std::string& selector, const std::string& ipAddress,
+        const std::string& subnetMask, const std::string& defaultGateway);
     void RequestCameraFrame(bool runToolChainAfterCapture = false, bool loop = false);
     void CancelPendingCameraToolRun();
 
     DeviceOperationResult ConnectOutput(const HardwareOutputConnectionConfig& config);
     void DisconnectOutput();
+    DeviceOperationResult ConnectAuxiliaryOutput(
+        const HardwareOutputConnectionConfig& config);
+    void ConfigureAuxiliaryOutputBinding(
+        const HardwareOutputConnectionConfig& config);
+    void DisconnectAuxiliaryOutput(const std::string& adapterKey);
+    std::vector<HardwareAuxiliaryOutputSnapshot> AuxiliaryOutputSnapshots();
     void ConfigureOutputBinding(const HardwareOutputBinding& binding, bool autoPublish);
     void ConfigureModbusHandshake(const HardwareHandshakeConfig& config);
     void SetOutputAutoPublish(bool enabled);

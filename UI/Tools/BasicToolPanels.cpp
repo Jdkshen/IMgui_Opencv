@@ -1,7 +1,5 @@
 #include "BasicToolPanels.h"
 
-#include "../../Algorithm/ColorAnalyzer.h"
-#include "../../Algorithm/MorphologyTool.h"
 #include "../../Algorithm/ThresholdTool.h"
 #include "../../include/imgui/imgui.h"
 
@@ -89,8 +87,6 @@ void RegisterBasicToolPanels(
             if (ImGui::SliderInt("Canny高", &settings.cannyHigh, 0, 255))
                 applyPreview();
         }
-        if (ThresholdTool::LastTimeMs() > 0)
-            ImGui::TextDisabled("总耗时: %.3fms", ThresholdTool::LastTimeMs());
         ui.endCard();
     };
 
@@ -100,8 +96,6 @@ void RegisterBasicToolPanels(
         MorphologySettings& settings = tool.morphology;
         if (ui.secondaryButton("重置参数"))
             settings = MorphologySettings{};
-        if (MorphologyTool::g_ProcTimeMs > 0)
-            ImGui::TextDisabled("上次: %.3fms", MorphologyTool::g_ProcTimeMs);
         if (ui.primaryButton("执行形态学##morph"))
             ui.runTool(instanceIndex);
 
@@ -110,15 +104,11 @@ void RegisterBasicToolPanels(
         const char* operationNames[] = {
             "Erode 腐蚀", "Dilate 膨胀", "Open 开运算", "Close 闭运算",
             "Gradient 梯度", "TopHat 顶帽", "BlackHat 黑帽"};
-        ui.parameterLabel("操作", 56.0f);
-        ImGui::Combo("##morph_op", &settings.operation, operationNames, 7);
-        ui.parameterLabel("核大小", 56.0f);
-        ImGui::SliderInt("##morph_kernel_size", &settings.kernelSize, 1, 15);
+        ImGui::Combo("操作##morph_op", &settings.operation, operationNames, 7);
+        ImGui::SliderInt("核大小##morph_kernel_size", &settings.kernelSize, 1, 15);
         const char* kernelShapes[] = {"矩形", "椭圆", "十字"};
-        ui.parameterLabel("核形状", 56.0f);
-        ImGui::Combo("##morph_kernel_shape", &settings.kernelShape, kernelShapes, 3);
-        ui.parameterLabel("迭代", 56.0f);
-        ImGui::SliderInt("##morph_iterations", &settings.iterations, 1, 10);
+        ImGui::Combo("核形状##morph_kernel_shape", &settings.kernelShape, kernelShapes, 3);
+        ImGui::SliderInt("迭代##morph_iterations", &settings.iterations, 1, 10);
         ImGui::Checkbox("灰度##morph", &settings.useGray);
         ui.endCard();
     };
@@ -141,15 +131,6 @@ void RegisterBasicToolPanels(
         if (settings.showHistogram)
             ImGui::SliderInt("高度##color", &settings.histogramHeight, 50, 300);
 
-        ui.sectionHeader("结果");
-        if (ColorAnalyzer::g_AnalyzeTimeMs > 0)
-        {
-            ImGui::TextDisabled("R:%.1f±%.1f G:%.1f±%.1f B:%.1f±%.1f",
-                ColorAnalyzer::g_LastResult.meanR, ColorAnalyzer::g_LastResult.stdR,
-                ColorAnalyzer::g_LastResult.meanG, ColorAnalyzer::g_LastResult.stdG,
-                ColorAnalyzer::g_LastResult.meanB, ColorAnalyzer::g_LastResult.stdB);
-            ImGui::TextDisabled("%.3fms", ColorAnalyzer::g_AnalyzeTimeMs);
-        }
         ui.endCard();
     };
 }

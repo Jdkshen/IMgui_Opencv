@@ -1,11 +1,13 @@
 # IMgui_Opencv
 
-> 文档同步日期：2026-07-28。任务分组、独立输入、PLC 单槽握手、16 任务触发、并行执行和结果总览均已按当前代码复核。全部文档入口见 `docs/README.md`。
+> 文档同步日期：2026-08-09。双图形后端、任务分组、独立输入、PLC 单槽握手、独立流程图窗口、工具面板对齐、发布图标资源和 18 类工具结果适配均已按当前代码复核。当前构建、回归和未闭环验收见 [`docs/STATUS_2026-08-09.md`](docs/STATUS_2026-08-09.md)，全部文档入口见 `docs/README.md`。
 
-## 2026-07-28 当前能力摘要
+## 2026-08-09 当前能力摘要
 
 | 模块 | 当前能力 |
 | --- | --- |
+| 图形后端 | 启动时优先 DirectX 12，初始化失败自动回退 DirectX 11；两套后端共用同一套 UI、字体、Docking、图片显示、窗口缩放和最大化逻辑 |
+| 启动布局 | 左侧默认只显示任务列表；ROI“侧边栏”控制面板不再随程序启动，可从“查看(V) → 侧边栏控制”按需打开 |
 | 任务管理 | 最多 16 个任务，支持新建、重命名、排序、启用、禁用和删除；工具可直接加入当前任务 |
 | 任务输入 | 每个任务可独立选择单图或递归图片文件夹；文件夹每轮推进一张图片，同一任务内的工具共用本轮输入 |
 | 手动执行输入 | 任务可选择已连接的工业相机作为首选输入；相机不可用时回退到任务文件夹、任务单图或公共图片 |
@@ -14,9 +16,12 @@
 | 结果总览 | 按任务顺序显示结果卡片和结果图；禁用任务不执行，也不显示结果卡片；支持详情和最大化 |
 | 配方持久化 | 保存任务顺序、启用状态、独立图片、图片文件夹进度和相机优先设置 |
 | PLC 握手 | 任务01 使用 Trigger 0，任务02～任务16使用 8～22；Busy/Done/OK/NG/Error/Heartbeat/ACK 使用 1～7；任务重命名保留自定义地址，删除和新增任务自动同步 Trigger |
+| 工具界面 | 工具卡片、参数表单和添加工具弹窗统一对齐；独立流程图按窗口宽度自动换行，16 工具默认排成多行并支持点击节点定位 |
+| 结果与上下游 | 工具卡片统一显示状态、区域/检测框/线段/文本/测量/处理图数量及详情；结果 ROI 支持第 N 项、全部结果或从同一/不同上游各选择一项；Fixture 和结果 ROI 会校验不兼容或循环依赖；工业测量“点点距离”自动把所选区域结果转换为中心点，测量线标签固定显示数值和单位 |
+| 发布资源 | PostBuild 和运行包脚本均复制中文字体及 `assets/icons/`，发布版不依赖源码目录查找工具图标 |
 
-历史合并说明见 `docs/STATUS_2026-07-25.md`，任务分组收尾见 `docs/STATUS_2026-07-26.md`，PLC 工业握手初版见 `docs/STATUS_2026-07-27.md`，最新整合与验证见 `docs/STATUS_2026-07-28.md`。
-基于 **Dear ImGui + DirectX 12 + OpenCV** 的 Windows 桌面视觉工具应用。
+历史合并说明见 `docs/STATUS_2026-07-25.md`，任务分组收尾见 `docs/STATUS_2026-07-26.md`，PLC 工业握手初版见 `docs/STATUS_2026-07-27.md`，工业功能整合见 `docs/STATUS_2026-07-28.md`，双图形后端状态见 `docs/STATUS_2026-07-30.md`，界面和发布资源整理见 `docs/STATUS_2026-08-02.md`，工具链统一检查见 `docs/STATUS_2026-08-05.md`；当前总状态见 `docs/STATUS_2026-08-09.md`。
+基于 **Dear ImGui + DirectX 12 / DirectX 11 + OpenCV** 的 Windows 桌面视觉工具应用。
 
 ---
 
@@ -30,8 +35,11 @@ IMgui_Opencv/
 │   └── images/                 ←   测试图片
 │
 ├── Core/                       ← 核心模块
-│   ├── DX12Context.cpp/h       ←   DX12 设备管理 + 全局状态
-│   ├── OpenCVTest.cpp/h        ←   图片读取 + GPU 纹理上传
+│   ├── RenderBackend.h         ←   DX11 / DX12 公共渲染与纹理契约
+│   ├── GraphicsBackend.cpp/h   ←   DX12 优先、DX11 自动回退门面
+│   ├── DX12Backend.cpp/h       ←   保留 DX12Context 的公共契约适配器
+│   ├── DX12Context.cpp/h       ←   完整保留的 DX12 设备与交换链实现
+│   ├── DX11Context.cpp/h       ←   独立 DX11 设备、交换链与纹理实现
 │   ├── AsyncImageLoader.cpp/h  ←   异步图片加载（后台线程 + 回调）
 │   ├── ImageLoadController.cpp/h ← 图片加载调度控制器
 │   ├── OpenFileDialog.cpp/h    ←   文件/文件夹选择对话框
@@ -53,7 +61,6 @@ IMgui_Opencv/
 │   ├── ToolExecutor.h/cpp      ←   统一工具执行器（参数同步、ROI 注入、执行、发布）
 │   ├── ToolController.h/cpp    ←   工具调度器（全部/单步/循环/运行模式）
 │   ├── HardwareRuntimeService.cpp/h ← 相机抓帧与检测结果硬件发布
-│   ├── FrameRenderer.cpp/h     ←   每帧渲染提交
 │   ├── ResultPublisher.h       ←   ToolResult 统一发布入口
 │   ├── ResultOverlayState.cpp/h ←   结果、实时检测和 Fixture 叠加查询
 │   ├── ToolJudgement.cpp/h   ←   Pass/Fail/Error 判定与失败停止
@@ -61,7 +68,7 @@ IMgui_Opencv/
 │
 ├── UI/                         ← 界面模块
 │   ├── DockSpaceHost.cpp/h     ←   主停靠空间 + 菜单栏
-│   ├── ImageViewer.cpp/h       ←   图片预览 + 缩放平移 + 文件夹浏览 + 视频控制                                                                                                 
+│   ├── ImageViewer.cpp/h       ←   图片预览 + 缩放平移 + 文件夹浏览 + 视频控制
 │   ├── LogWindow.cpp/h         ←   日志窗口（ImGuiListClipper 虚拟滚动）
 │   ├── Sidebar.cpp/h           ←   侧边栏控制面板
 │   ├── StatsWindow.cpp/h       ←   性能统计窗口
@@ -82,7 +89,6 @@ IMgui_Opencv/
 │   ├── MultiColorFinder.h/cpp  ←   多点找色工具（实现 ITool）
 │   ├── YOLODetector.cpp/h      ←   YOLO 目标检测（ONNX Runtime 推理）
 │   ├── TemplateMatchingTool.cpp/h ← 工具链模板匹配（实例参数/旋转/NMS）
-│   ├── TemplateMatch.cpp/h     ←   旧模板调试窗口兼容层
 │   ├── QRCodeTool.cpp/h        ←   QR/Code128/EAN/Data Matrix/PDF417
 │   ├── MeasurementTool.cpp/h   ←   距离/线宽/角度/圆直径与公差
 │   ├── OCRTool.cpp/h            ←   PP-OCRv6 tiny + NCNN 文字识别
@@ -97,7 +103,7 @@ IMgui_Opencv/
 │
 ├── Renderer/                   ← 渲染模块
 │   ├── FontManager.cpp/h       ←   中文字体加载 + 工具 PNG 图标合并到 ImGui 图集
-│   └── PreviewTextureCache.cpp/h ← 工具预览图与任务结果图的 DX12 纹理缓存
+│   └── PreviewTextureCache.cpp/h ← 工具预览图与任务结果图的后端无关纹理缓存
 │
 ├── Log/                        ← 日志系统
 │   └── LogSystem.cpp/h         ←   线程安全日志（shared_ptr COW + displayText 预格式化）
@@ -162,7 +168,7 @@ IMgui_Opencv/
 └───────────────┬─────────────────┘
                 │
 ┌───────────────▼─────────────────┐
-│        DX12 Renderer            │
+│ DX12 Renderer / DX11 Renderer   │
 └─────────────────────────────────┘
 ```
 
@@ -173,8 +179,8 @@ IMgui_Opencv/
 ```
 UI                          Core                        Algorithm
 ─────────────────────────────────────────────────────────────────
-DockSpaceHost               DX12Context                 ITool / ToolResult
-Sidebar                     OpenCVTest                  TemplateMatch
+DockSpaceHost               GraphicsBackend             ITool / ToolResult
+Sidebar                     AsyncImageLoader            TemplateMatchingTool
 ImageViewer                 AsyncImageLoader            YOLODetector
 ToolsWindow                 ImageLoadController         OpenCVYoloDetector
 ROIManager                  RecipeManager               ContourDetector
@@ -188,7 +194,6 @@ RunResultWindow             ROI / ROIState              ThresholdTool
                             FrameSourceState
                             FrameNavigation
                             LiveYoloRunner
-                            FrameRenderer
                             VideoCapture / AudioPlayer
                             ThemeManager
 ```
@@ -230,8 +235,8 @@ ImageImportService / FrameNavigation / HardwareRuntimeService
 wWinMain()
   ├── DPI 感知设置
   ├── 创建 Win32 窗口
-  ├── DX12 设备初始化（Device/SwapChain/CommandQueue/Fence）
-  ├── 初始化 Dear ImGui（Docking + Viewports + DX12 后端）
+  ├── GraphicsBackend 初始化（优先 DX12，失败自动回退 DX11）
+  ├── 初始化 Dear ImGui（Docking + Viewports + 当前图形后端）
   ├── 加载中文字体（simhei.ttf → 系统微软雅黑 → 默认）
   │
   └── 主循环
@@ -241,10 +246,10 @@ wWinMain()
         ├── ImGui 新帧
         ├── UI 绘制（DockSpace/侧边栏/日志/图像/工具/阈值/模板匹配）
         ├── 图片加载调度（OpenCV → GPU 纹理上传）
-        ├── DX12 渲染管线
-        │     ├── Barrier: PRESENT → RENDER_TARGET
+        ├── 当前后端渲染管线（GraphicsBackend::RenderAndPresent）
+        │     ├── 提交纹理更新
         │     ├── Clear + RenderDrawData
-        │     ├── Barrier: RENDER_TARGET → PRESENT
+        │     ├── 更新 ImGui 多视口
         │     └── Present
         └── 清理 → 退出
 ```
@@ -258,6 +263,7 @@ wWinMain()
 | 音频播放 | XAudio2 + Media Foundation，与视频同步播放/暂停/跳转 |
 | 图像处理 | 灰度化、高斯模糊、二值化、Canny 边缘检测 |
 | ROI 管理 | 交互式创建/选中/拖动/缩放/删除，5 种几何类型（矩形/点/线段/圆/多边形）按类型着色 |
+| 工具 ROI 规则 | 工具显示“未绑定”时始终处理整图，不继承画布上其他 ROI；只有“添加 ROI”确认绑定、结果 ROI 或 Fixture 才限制执行区域 |
 | 模板匹配 | 多实例模板匹配，旋转/NMS/阈值，结果可视化 |
 | YOLO 检测 | ONNX Runtime 推理 YOLO11 ONNX 模型，支持 ROI 限定区域，NMS 后处理 |
 | 轮廓分析 | findContours + 凸包/圆度/多边形近似，可选 ROI matchShapes 轮廓比对 |
@@ -267,9 +273,11 @@ wWinMain()
 | 颜色分析 | BGR/HSV/Lab/YCbCr 色域切换 + 直方图统计 |
 | 多点找色 | 参考图 ROI 捕获 + 点击取色 + 容差匹配 + 部分匹配反馈 |
 | 工具实例 | 手风琴式工具面板，每实例独立参数（模板/ROI/角度/预处理），支持 18 种工具类型 |
+| 工具目录 | 18 个工具按“输入与预处理、定位与识别、区域与几何、分析与测量、实验工具”归类；支持按名称或用途搜索，并显示用途说明 |
 | 添加工具图标 | 添加工具弹窗支持 PNG 图片图标，资源位于 `assets/icons/`，加载失败时回退到内置绘制图标 |
+| 工具流程图 | 从右侧面板移出，点击“打开流程图窗口”后在独立窗口显示，可移动、停靠和关闭 |
 | 批量执行 | 全部执行（逐帧高亮）+ 单步执行（点击推进）+ 循环模式 |
-| 任务分组 | 最多 16 个任务；支持任务排序、独立工具链、独立图片/文件夹、相机优先和任务级结果图 |
+| 任务分组 | 最多 16 个任务；启动时允许保持空任务列表，只有点击“+ 新建任务”才创建任务；支持任务排序、独立工具链、独立图片/文件夹、相机优先和任务级结果图 |
 | 任务并行 | “全部执行”可并行处理最多 4 个互相独立的任务；跨任务依赖时自动回退顺序执行 |
 | 结果总览 | 按启用任务顺序显示结果卡片、状态、耗时和结果图，禁用任务自动隐藏 |
 | 工具链输入 | 每个工具可选择“上一步原图”“上一步处理图”或“原图工具输出”，也可插入“原图”工具重置链路 |
@@ -289,7 +297,7 @@ wWinMain()
 |------|------|---------|-------|
 | 原图 | 恢复本轮开始时缓存的原图，阻断前面处理结果继续累加 | — | 特殊工具 |
 | 边缘检测 | Canny 边缘检测 | 低/高阈值、灰度开关 | ✅ EdgeTool |
-| 模板匹配 | 多实例模板匹配 | 模板图、搜索ROI、旋转角度、匹配阈值/NMS、模板预处理、图像预处理，结果发布到统一叠加层 | ✅ TemplateMatchITool |
+| 模板匹配 | 多实例模板匹配 | 模板图、搜索ROI、旋转角度、匹配阈值/NMS、模板预处理、图像预处理，结果发布到统一叠加层 | ✅ TemplateMatchingTool |
 | Blob分析 | 斑点分析 | 面积范围 | ✅ BlobTool |
 | 阈值调试 | 图像处理管线 | 灰度/模糊/二值化/Canny 全套 | ✅ ThresholdITool |
 | YOLO检测 | ONNX 目标检测 | 模型文件、类别文件、置信度/NMS阈值、ROI限定 | ✅ YOLOTool |
@@ -308,7 +316,7 @@ wWinMain()
 
 > **ITool 接口**：统一 `Execute(VisionContext& ctx) → ToolResult`，结果经 `ResultPublisher` 发布、由 `ResultOverlayState` 查询，最后通过 `DrawUnifiedResults()` 在图像上叠加绘制。
 
-每个实例的参数完全独立，互不影响。模板图像和搜索 ROI 按实例保存。
+每个实例的参数完全独立，互不影响。模板图像和搜索 ROI 按实例保存。画布 ROI 只负责显示和编辑，不会自动注入未绑定工具；工具卡片显示“未绑定（执行整图）”时按整图运行。
 每个实例还可以独立选择输入来源：`上一步原图` 使用上一个工具执行前的图，`上一步处理图` 使用上一个工具执行后的图，`原图工具输出` 使用最近一次 `原图` 工具恢复出的图片（未执行原图工具时回退到本轮原图）。新添加工具默认使用 `原图工具输出`。`原图` 工具可作为链路中的重置步骤，把当前图恢复成本轮原图，避免多个处理工具在同一张图上持续累加。边缘、阈值、形态学、颜色分析等处理类工具会把结果写回工具链，后续模板匹配、YOLO、多点找色等识别类工具可以直接使用处理后的图片，也可以随时切回原图工具输出。
 
 ### 执行模式（ToolController 调度）
@@ -322,7 +330,7 @@ enum class Mode { Idle, Running, Waiting };
 - **当前任务**：`RequestRunTaskGroup(name)` 只执行选中任务，任务内保持工具顺序。
 - **单步执行**：`RequestStepNext()` 推进整条配方，`RequestStepNextTaskGroup(name)` 只推进当前任务；高亮使用真实的全局工具索引。
 - **任务并行**：启用“任务并行”后，“全部执行”最多同时运行 4 个启用任务；任务内部仍顺序执行，跨任务结果依赖会自动回退顺序模式。
-- **计时口径**：工具行显示单工具执行耗时；结果总览标题的“本轮总耗时”使用整轮墙钟时间，包含任务调度与并行等待，更接近用户实际等待时间。
+- **计时口径**：工具行显示单工具执行耗时；结果总览标题的“本轮总耗时”使用整轮墙钟时间，包含任务调度与并行等待，更接近用户实际等待时间。总耗时在窄窗口下自动换行，极短耗时以 `<0.1 ms` / `<0.01 ms` 显示，不再显示为 `0.0 ms`。
 - **工具链传图**：批量/单步开始时缓存当前图片；每个工具执行前按实例输入来源选择图片，执行后把当前图片记录为下一步可用输出。
 
 任务输入按以下规则解析：任务勾选“使用工业相机（优先）”且相机已连接时，先请求一帧；相机不可用或抓帧失败时使用该任务绑定的文件夹或单图；任务未绑定图片时使用当前公共图片。文件夹在每轮开始时推进一张，同一任务内所有工具使用同一张本轮图片。完整说明见 `docs/TASK_GROUPS.md`。
@@ -349,9 +357,11 @@ enum class Mode { Idle, Running, Waiting };
 
 | 操作 | 说明 |
 |------|------|
-| 💾 保存 | 菜单 → 配方 → 输入名称 → 保存当前配方 |
-| 📂 加载 | 菜单 → 配方 → 输入名称 → 加载，或点击已有配方列表 |
+| 💾 保存 | 文件(F) → 保存当前配方 |
+| 📂 加载 | 文件(F) → 打开配方...，或点击菜单中的已有配方列表 |
 | 🖼 模板 | 每实例模板自动保存为 `配方名_tplN.png` |
+
+仓库内置 [2、4、6、8、10、12、16 任务中文完整案例](docs/recipe_examples/task_series/README.md)。配方、逐任务中文解析和一份共用测试图片放在同一 `task_series` 总目录，可直接加载或整体复制。
 
 ---
 
@@ -372,7 +382,7 @@ enum class Mode { Idle, Running, Waiting };
 | ① | **ITool 接口** — ✅ YOLO/轮廓/形状/直线/多点找色已接入 | 新工具优先走统一接口 |
 | ② | **ToolResult 统一** — ✅ ITool 返回状态、来源、耗时及 `measurements/regions/detections/lines/texts/debugImage` | 结果经统一发布与叠加层显示 |
 | ③ | **ROI 升级** — ✅ Point/Line/Circle/Polygon 已实现 | 工业场景必备 |
-| ④ | **Recipe 版本化** — ✅ 当前写出 version 4，并兼容旧配方字段 | 配方演进不破坏旧案例 |
+| ④ | **Recipe 版本化** — ✅ 当前写出 version 5，并兼容旧配方字段 | 配方演进不破坏旧案例 |
 | ⑤ | **VisionContext** — ✅ 图像快照、帧源、ROI、模板、取消令牌和统一结果 | 多线程/批量执行安全 |
 | ⑥ | **节点流程编辑器** — 可视化拖拽式工具链 | 平台化关键一步 |
 
@@ -410,7 +420,7 @@ public:
 };
 ```
 
-已接入：EdgeTool(0) / TemplateMatchITool(1) / BlobTool(2) / ThresholdITool(3) / YOLOTool(4) / ContourTool(5) / ShapeTool(6) / LineTool(7) / MorphologyITool(8) / ColorAnalyzerITool(9) / MultiColorFinder(10) / OpenCVYoloITool(11) / OCRTool(13) / QRCodeTool(14) / MeasurementTool(15) / DifferenceTool(16) / GeometryDrawTool(17)。原图工具(type 12)由 `ToolController` 直接恢复本轮原图。
+已接入：EdgeTool(0) / TemplateMatchingTool(1) / BlobTool(2) / ThresholdITool(3) / YOLOTool(4) / ContourTool(5) / ShapeTool(6) / LineTool(7) / MorphologyITool(8) / ColorAnalyzerITool(9) / MultiColorFinder(10) / OpenCVYoloITool(11) / OCRTool(13) / QRCodeTool(14) / MeasurementTool(15) / DifferenceTool(16) / GeometryDrawTool(17)。原图工具(type 12)由 `ToolController` 直接恢复本轮原图。
 
 执行结果统一封装为 `ToolResult`，除几何和测量数据外还包含来源工具 ID、Pass/Fail/Error、跳过状态、原因和 prepare/execute/publish/wall/backend 分段耗时。
 
@@ -434,13 +444,13 @@ ROI → 矩形(RECT) / 点(POINT) / 线段(LINE) / 圆(CIRCLE) / 多边形(POLYG
 | 二 | ✅ 完成 | ITool 接口、ToolResult、VisionContext、ROI 类型升级 |
 | 三 | ✅ 完成 | 多点找色、结果导出、运行报告、OCR、二维码/条码、Blob增强、测量、差分和几何绘制 |
 | 四 | 进行中 | ✅ OpenCV/UVC/RTSP 相机、TCP、Modbus TCP、PLC 和 OPC UA；PLC IO 握手、单任务拍照触发、心跳、ACK、超时报警和自动重连已接入；厂商相机 SDK、加密 OPC UA 和 MQTT 按现场需求接入 |
-| 五 | 🔲 远景 | 节点式流程编辑器、可选脚本/插件系统；当前主线不依赖 Python |
+| 五 | 进行中 | ✅ 已有只读工具流程图独立窗口；节点拖拽编辑与插件系统仍属远景，当前主线不依赖 Python |
 
 ---
 
 ## 🌟 项目目标
 
-基于 **Dear ImGui + DirectX 12 + OpenCV + ONNX Runtime** 构建轻量级工业视觉平台。
+基于 **Dear ImGui + DirectX 12 / DirectX 11 + OpenCV + ONNX Runtime** 构建轻量级工业视觉平台。
 
 参考：Cognex VisionPro · Hikrobot VisionMaster · HALCON
 

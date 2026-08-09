@@ -32,6 +32,14 @@ namespace ROIState
     bool ApplyQueuedRestore();
     void CancelQueuedRestore();
     bool HasQueuedRestore();
+    bool CanUndo();
+    bool CanRedo();
+    bool Undo();
+    bool Redo();
+    void BeginHistoryTransaction();
+    void CommitHistoryTransaction();
+    void CancelHistoryTransaction();
+    void ResetHistory();
 
     // 清空所有 ROI 和交互状态（切换图片时调用）
     void ClearInteraction();

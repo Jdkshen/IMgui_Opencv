@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cstdio>
 #include <optional>
+#include <unordered_map>
+#include <unordered_set>
 
 // =====================================================
 // 内部状态（模块私有）
@@ -90,6 +92,8 @@ namespace
         ToolInstance copy = CloneToolForInsertion(source);
         if (copy.resultRoiSourceTool >= insertIndex)
             ++copy.resultRoiSourceTool;
+        if (copy.resultRoiSecondSourceTool >= insertIndex)
+            ++copy.resultRoiSecondSourceTool;
         if (copy.fixture.sourceToolIndex >= insertIndex)
             ++copy.fixture.sourceToolIndex;
 
@@ -103,6 +107,8 @@ namespace
             ToolInstance& tool = s_tools[i];
             if (tool.resultRoiSourceTool >= insertIndex)
                 ++tool.resultRoiSourceTool;
+            if (tool.resultRoiSecondSourceTool >= insertIndex)
+                ++tool.resultRoiSecondSourceTool;
             if (tool.fixture.sourceToolIndex >= insertIndex)
                 ++tool.fixture.sourceToolIndex;
         }
@@ -119,15 +125,13 @@ namespace
 
 std::vector<ToolInstance>& Tools()
 {
-    for (ToolInstance& tool : s_tools)
-        EnsureToolIdInternal(tool);
+    EnsureToolIds();
     return s_tools;
 }
 
 const std::vector<ToolInstance>& ReadOnlyTools()
 {
-    for (ToolInstance& tool : s_tools)
-        EnsureToolIdInternal(tool);
+    EnsureToolIds();
     return s_tools;
 }
 
@@ -169,8 +173,66 @@ std::uint64_t EnsureToolId(ToolInstance& tool)
 
 void EnsureToolIds()
 {
+    std::vector<std::uint64_t> originalIds;
+    originalIds.reserve(s_tools.size());
+    std::unordered_map<std::uint64_t, int> idCounts;
+    for (const ToolInstance& tool : s_tools)
+    {
+        originalIds.push_back(tool.toolId);
+        if (tool.toolId != 0)
+        {
+            ++idCounts[tool.toolId];
+            if (tool.toolId >= s_nextToolId)
+                s_nextToolId = tool.toolId + 1;
+        }
+    }
+
+    std::unordered_set<std::uint64_t> assigned;
     for (ToolInstance& tool : s_tools)
-        EnsureToolIdInternal(tool);
+    {
+        if (tool.toolId == 0 || !assigned.insert(tool.toolId).second)
+        {
+            do
+            {
+                tool.toolId = s_nextToolId++;
+            } while (tool.toolId == 0 || assigned.contains(tool.toolId));
+            assigned.insert(tool.toolId);
+        }
+    }
+
+    std::unordered_map<std::uint64_t, int> indexById;
+    for (int index = 0; index < static_cast<int>(s_tools.size()); ++index)
+        indexById.emplace(s_tools[index].toolId, index);
+
+    auto synchronize = [&](int& legacyIndex, std::uint64_t& stableId)
+    {
+        if (stableId != 0)
+        {
+            const auto count = idCounts.find(stableId);
+            if (count != idCounts.end() && count->second > 1 &&
+                legacyIndex >= 0 && legacyIndex < static_cast<int>(s_tools.size()) &&
+                originalIds[legacyIndex] == stableId)
+            {
+                stableId = s_tools[legacyIndex].toolId;
+            }
+            const auto found = indexById.find(stableId);
+            if (found != indexById.end())
+                legacyIndex = found->second;
+            else if (legacyIndex < 0 || legacyIndex >= static_cast<int>(s_tools.size()))
+                legacyIndex = -1;
+            return;
+        }
+        if (legacyIndex >= 0 && legacyIndex < static_cast<int>(s_tools.size()))
+            stableId = s_tools[legacyIndex].toolId;
+        else
+            legacyIndex = -1;
+    };
+    for (ToolInstance& tool : s_tools)
+    {
+        synchronize(tool.resultRoiSourceTool, tool.resultRoiSourceToolId);
+        synchronize(tool.resultRoiSecondSourceTool, tool.resultRoiSecondSourceToolId);
+        synchronize(tool.fixture.sourceToolIndex, tool.fixture.sourceToolId);
+    }
 }
 
 int IndexOfToolId(std::uint64_t toolId)
@@ -224,6 +286,7 @@ bool MoveTool(int from, int to)
     for (ToolInstance& tool : s_tools)
     {
         tool.resultRoiSourceTool = remap(tool.resultRoiSourceTool);
+        tool.resultRoiSecondSourceTool = remap(tool.resultRoiSecondSourceTool);
         tool.fixture.sourceToolIndex = remap(tool.fixture.sourceToolIndex);
     }
     return true;
@@ -251,26 +314,56 @@ bool RemoveTool(int index)
     if (index < 0 || index >= static_cast<int>(s_tools.size()))
         return false;
 
-    ToolAssetService::ForgetTool(s_tools[index].toolId);
-    ToolROIService::ForgetTool(s_tools[index].toolId);
+    EnsureToolIds();
+    const std::uint64_t removedToolId = s_tools[index].toolId;
+    ToolAssetService::ForgetTool(removedToolId);
+    ToolROIService::ForgetTool(removedToolId);
     s_tools.erase(s_tools.begin() + index);
+    auto removeOrRemap = [&](int& legacyIndex, std::uint64_t& stableId)
+    {
+        if (stableId != 0)
+        {
+            const int previousLegacyIndex = legacyIndex;
+            if (stableId == removedToolId)
+            {
+                legacyIndex = -1;
+                stableId = 0;
+                return;
+            }
+            legacyIndex = -1;
+            for (int candidate = 0; candidate < static_cast<int>(s_tools.size()); ++candidate)
+            {
+                if (s_tools[candidate].toolId == stableId)
+                {
+                    legacyIndex = candidate;
+                    break;
+                }
+            }
+            if (legacyIndex < 0)
+            {
+                // Keep the legacy index structurally aligned for diagnostics/import
+                // repair, but stable-id resolution remains authoritative at runtime.
+                if (previousLegacyIndex == index)
+                    legacyIndex = -1;
+                else if (previousLegacyIndex > index)
+                    legacyIndex = previousLegacyIndex - 1;
+                else
+                    legacyIndex = previousLegacyIndex;
+                if (legacyIndex < 0 || legacyIndex >= static_cast<int>(s_tools.size()))
+                    legacyIndex = -1;
+            }
+            return;
+        }
+        if (legacyIndex == index)
+            legacyIndex = -1;
+        else if (legacyIndex > index)
+            --legacyIndex;
+    };
     for (ToolInstance& tool : s_tools)
     {
-        if (tool.resultRoiSourceTool == index)
-        {
-            tool.resultRoiSourceTool = -1;
-            tool.resultRoiSourceToolId = 0;
-        }
-        else if (tool.resultRoiSourceTool > index)
-            --tool.resultRoiSourceTool;
-
-        if (tool.fixture.sourceToolIndex == index)
-        {
-            tool.fixture.sourceToolIndex = -1;
-            tool.fixture.sourceToolId = 0;
-        }
-        else if (tool.fixture.sourceToolIndex > index)
-            --tool.fixture.sourceToolIndex;
+        removeOrRemap(tool.resultRoiSourceTool, tool.resultRoiSourceToolId);
+        removeOrRemap(tool.resultRoiSecondSourceTool, tool.resultRoiSecondSourceToolId);
+        removeOrRemap(tool.fixture.sourceToolIndex, tool.fixture.sourceToolId);
     }
 
     if (s_activeToolIndex == index)
@@ -410,6 +503,11 @@ void MoveOriginalToolToFront()
         {
             tool.resultRoiSourceTool = oldToNew[tool.resultRoiSourceTool];
         }
+        if (tool.resultRoiSecondSourceTool >= 0 &&
+            tool.resultRoiSecondSourceTool < static_cast<int>(oldToNew.size()))
+        {
+            tool.resultRoiSecondSourceTool = oldToNew[tool.resultRoiSecondSourceTool];
+        }
         if (tool.fixture.sourceToolIndex >= 0 &&
             tool.fixture.sourceToolIndex < static_cast<int>(oldToNew.size()))
         {
@@ -497,6 +595,11 @@ void ReplaceTaskGroups(std::vector<TaskGroupDefinition> groups)
     {
         if (group.name.empty() || TaskGroupIndexByNameInternal(group.name) >= 0)
             continue;
+        if (group.cameraIndex < -1 || group.cameraIndex >= 16)
+            group.cameraIndex = -1;
+        if (group.cameraIndex < 0 && group.cameraPreferred)
+            group.cameraIndex = 0;
+        group.cameraPreferred = group.cameraIndex >= 0;
         EnsureTaskGroupIdInternal(group);
         s_taskGroups.push_back(std::move(group));
     }
@@ -588,6 +691,20 @@ bool SetTaskGroupCameraPreferred(int index, bool preferred)
     if (index < 0 || index >= static_cast<int>(s_taskGroups.size()))
         return false;
     s_taskGroups[index].cameraPreferred = preferred;
+    s_taskGroups[index].cameraIndex = preferred ? 0 : -1;
+    return true;
+}
+
+bool SetTaskGroupCameraIndex(int index, int cameraIndex)
+{
+    EnsureTaskGroupsFromToolsInternal();
+    if (index < 0 || index >= static_cast<int>(s_taskGroups.size()) ||
+        cameraIndex < -1 || cameraIndex >= 16)
+    {
+        return false;
+    }
+    s_taskGroups[index].cameraIndex = cameraIndex;
+    s_taskGroups[index].cameraPreferred = cameraIndex >= 0;
     return true;
 }
 

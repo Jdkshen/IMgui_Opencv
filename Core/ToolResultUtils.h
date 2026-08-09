@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdio>
 #include <string>
 
 #include "../Algorithm/ToolResult.h"
@@ -60,4 +61,25 @@ inline std::string StripLeadingToolLabel(const ToolResult& result, const std::st
 inline std::string BuildToolResultOverlayLabel(const ToolResult& result, const std::string& itemLabel)
 {
     return StripLeadingToolLabel(result, itemLabel);
+}
+
+inline std::string BuildToolResultLineOverlayLabel(const ToolResult& result)
+{
+    std::string detail = result.message;
+    for (const ToolResult::Measurement& measurement : result.measurements)
+    {
+        if (measurement.name != "value")
+            continue;
+        char value[96]{};
+        std::snprintf(value, sizeof(value), "%.3f%s%s", measurement.value,
+            measurement.unit.empty() ? "" : " ", measurement.unit.c_str());
+        detail = value;
+        break;
+    }
+
+    if (result.toolName.empty())
+        return detail;
+    if (detail.empty() || result.toolName.find(detail) != std::string::npos)
+        return result.toolName;
+    return result.toolName + " " + detail;
 }

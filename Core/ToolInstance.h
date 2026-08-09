@@ -39,10 +39,15 @@ struct ToolInstance
     std::string groupName;       // 工具链分组名称，空表示默认组
     bool collapsed = false;      // 工具卡片是否折叠
     ToolJudgementSettings judgement;
-    int resultRoiMode = 0;        // 0=disabled, 1=Nth result, 2=all results
+    int resultRoiMode = 0;        // 0=disabled, 1=Nth result, 2=all results, 3=selected pair
     int resultRoiSourceTool = -1;
     std::uint64_t resultRoiSourceToolId = 0;
     int resultRoiIndex = 0;
+    int resultRoiChannel = static_cast<int>(ToolSpatialResultChannel::Auto);
+    int resultRoiSecondSourceTool = -1;
+    std::uint64_t resultRoiSecondSourceToolId = 0;
+    int resultRoiSecondIndex = 0;
+    int resultRoiSecondChannel = static_cast<int>(ToolSpatialResultChannel::Auto);
     int resultRoiMissingPolicy = 0; // 0=skip, 1=fail
     std::string resultRoiCategory;
     int resultRoiClassId = -1;
@@ -62,6 +67,8 @@ struct ToolInstance
     // ---- 旋转/角度参数 ----
     TemplateMatchSettings templateMatch;
     bool enableRotation = false;
+    int roiResultPolicy = 0;     // 0=center, 1=any intersection, 2=fully contained, 3=coverage
+    float roiMinimumCoverage = 0.5f;
     int rotationStart = -45;
     int rotationEnd = 45;
     int rotationStep = 1;
@@ -71,6 +78,7 @@ struct ToolInstance
     float matchThreshold = 0.7f;
     int maxImageDim = 1000;
     float nmsThreshold = 0.3f;
+    bool matchSubpixel = true;
     int searchMode = 0; // 0=全图, 1=ROI内
 
     // ---- 模板预处理 ----
@@ -124,6 +132,8 @@ struct ToolInstance
     float cntApproxEps = 0.02f;
     int cntLineThick = 2;
     bool cntFillContours = false;
+    bool cntNormalizeDirection = true;
+    bool cntSubpixelBoundary = true;
     bool cntMatchROI = false;
     float cntMatchThresh = 0.1f;
 
@@ -133,6 +143,8 @@ struct ToolInstance
     float shpTplMinArea = 30, shpMinScore = 0.5f, shpShapeScore = 0.1f;
     int shpLineThick = 2, shpMethod = 0;
     int shpMaxResults = 1;
+    bool shpEnableRotation = false;
+    int shpRotationStart = -45, shpRotationEnd = 45, shpRotationStep = 5;
     bool shpTplGray = false, shpTplBinary = false;
     int shpTplBinThresh = 128;
     bool shpTplBlur = false;
@@ -216,6 +228,14 @@ struct ToolInstance
     double measureCalibrationRmsError = 0.0;
     double measureCalibrationMaxError = 0.0;
     std::string measureCalibrationFitMessage;
+    int measureChessboardColumns = 9;
+    int measureChessboardRows = 6;
+    float measureChessboardSquareSize = 10.0f;
+    std::vector<cv::Mat> measureChessboardImages;
+    std::vector<double> measureChessboardErrors;
+    int measureChessboardSuccessfulImages = 0;
+    float measureCalibrationRmsAcceptance = 0.5f;
+    float measureCalibrationMaxAcceptance = 1.0f;
 
     // ---- 几何绘制（type==17） ----
     int geometryDrawType = static_cast<int>(GeometryPrimitiveType::Line);

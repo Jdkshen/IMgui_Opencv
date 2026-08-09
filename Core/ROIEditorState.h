@@ -12,8 +12,10 @@ namespace ROIEditorState
     bool& Dragging();
     ImVec2& LastMousePosition();
     HandleType& ActiveHandle();
+    int& ActivePointIndex();
     int& HoveredROI();
     int& CurrentROIType();
+    std::vector<ImVec2>& PolygonDraftPoints();
 
     void BeginDrawSequence(std::initializer_list<int> roiTypes);
     void CancelDrawSequence();

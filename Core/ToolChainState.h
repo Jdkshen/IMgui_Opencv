@@ -15,6 +15,8 @@ struct TaskGroupDefinition
     std::string imageFolderPath;
     int imageFolderIndex = -1;
     int imageFolderCount = 0;
+    int cameraIndex = -1;
+    // 兼容旧配方；cameraIndex >= 0 时保持为 true。
     bool cameraPreferred = false;
 };
 
@@ -78,6 +80,7 @@ namespace ToolChainState
     bool RemoveTaskGroup(int index);
     bool SetTaskGroupEnabled(int index, bool enabled);
     bool SetTaskGroupCameraPreferred(int index, bool preferred);
+    bool SetTaskGroupCameraIndex(int index, int cameraIndex);
     bool SetTaskGroupImagePath(int index, const std::string& imagePath);
     bool SetTaskGroupImageFolder(int index, const std::string& folderPath,
         const std::string& previewImagePath, int imageCount);

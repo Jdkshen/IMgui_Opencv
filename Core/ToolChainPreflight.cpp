@@ -26,6 +26,7 @@ namespace ToolChainPreflight
 ToolChainPreflightResult Check(const std::vector<ToolInstance>& tools,
     bool hasImage, std::size_t visibleRoiCount)
 {
+    (void)visibleRoiCount; // 画布 ROI 不再作为未绑定工具的隐式搜索区域。
     ToolChainPreflightResult result;
     const ToolChainValidationResult chain = ToolChainValidator::Validate(tools);
     for (const ToolChainValidationIssue& issue : chain.issues)
@@ -40,7 +41,7 @@ ToolChainPreflightResult Check(const std::vector<ToolInstance>& tools,
         if (!tool.enabled)
             continue;
 
-        if (tool.useSearchROI && tool.searchROIs.empty() && visibleRoiCount == 0)
+        if (tool.useSearchROI && tool.searchROIs.empty())
             AddMissing(result, i, "搜索 ROI");
 
         switch (tool.type)

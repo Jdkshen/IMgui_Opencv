@@ -2,7 +2,6 @@
 
 #include "ImageState.h"
 #include "RealtimeDetectionState.h"
-#include "ROIState.h"
 #include "ToolChainState.h"
 #include "VideoCapture.h"
 #include "VisionContext.h"
@@ -80,23 +79,16 @@ private:
     }
 };
 
-// 从工具实例或全局 ROI 列表中选取实时 YOLO 搜索区域
+// 实时检测只使用当前工具显式绑定的 ROI；未绑定时检测整图。
 cv::Rect SelectLiveYoloSearchRect(const ToolInstance& it, const cv::Mat& image)
 {
     if (image.empty())
         return {};
 
-    // 优先使用工具自身 ROI，否则使用全局 ROI
-    const auto& globalROIs = ROIState::ReadOnlyItems();
-    const std::vector<ROI>* rois = !it.searchROIs.empty() ? &it.searchROIs : &globalROIs;
-    if (!rois || rois->empty())
+    if (it.searchROIs.empty())
         return {};
 
-    int roiIndex = 0;
-    if (rois == &globalROIs)
-        roiIndex = ROIState::SelectIndexFor(*rois);
-
-    cv::Rect roi = (*rois)[roiIndex].ToCvRect();
+    cv::Rect roi = it.searchROIs.front().ToCvRect();
     roi &= cv::Rect(0, 0, image.cols, image.rows);  // 裁剪到图像范围内
     return (roi.width > 0 && roi.height > 0) ? roi : cv::Rect();
 }

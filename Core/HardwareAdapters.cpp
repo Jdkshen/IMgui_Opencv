@@ -5,7 +5,7 @@
 
 namespace
 {
-std::unique_ptr<ICameraAdapter> s_camera;
+std::map<std::string, std::unique_ptr<ICameraAdapter>> s_cameras;
 std::map<std::string, std::unique_ptr<IDeviceAdapter>> s_adapters;
 }
 
@@ -13,22 +13,59 @@ namespace HardwareAdapterService
 {
 void SetCamera(std::unique_ptr<ICameraAdapter> camera)
 {
-    if (s_camera)
-    {
-        s_camera->StopStream();
-        s_camera->Disconnect();
-    }
-    s_camera = std::move(camera);
+    RemoveCamera("default");
+    if (camera)
+        s_cameras.emplace("default", std::move(camera));
 }
 
 ICameraAdapter* Camera()
 {
-    return s_camera.get();
+    return Camera("default");
 }
 
 const ICameraAdapter* CameraReadOnly()
 {
-    return s_camera.get();
+    return CameraReadOnly("default");
+}
+
+bool RegisterCamera(const std::string& key, std::unique_ptr<ICameraAdapter> camera)
+{
+    if (key.empty() || !camera || s_cameras.find(key) != s_cameras.end())
+        return false;
+    s_cameras.emplace(key, std::move(camera));
+    return true;
+}
+
+ICameraAdapter* Camera(const std::string& key)
+{
+    const auto found = s_cameras.find(key);
+    return found == s_cameras.end() ? nullptr : found->second.get();
+}
+
+const ICameraAdapter* CameraReadOnly(const std::string& key)
+{
+    const auto found = s_cameras.find(key);
+    return found == s_cameras.end() ? nullptr : found->second.get();
+}
+
+std::vector<std::string> CameraKeys()
+{
+    std::vector<std::string> keys;
+    keys.reserve(s_cameras.size());
+    for (const auto& item : s_cameras)
+        keys.push_back(item.first);
+    return keys;
+}
+
+bool RemoveCamera(const std::string& key)
+{
+    const auto found = s_cameras.find(key);
+    if (found == s_cameras.end())
+        return false;
+    found->second->StopStream();
+    found->second->Disconnect();
+    s_cameras.erase(found);
+    return true;
 }
 
 bool Register(const std::string& key, std::unique_ptr<IDeviceAdapter> adapter)
@@ -72,10 +109,10 @@ bool Remove(const std::string& key)
 
 void DisconnectAll()
 {
-    if (s_camera)
+    for (auto& item : s_cameras)
     {
-        s_camera->StopStream();
-        s_camera->Disconnect();
+        item.second->StopStream();
+        item.second->Disconnect();
     }
     for (auto& item : s_adapters)
         item.second->Disconnect();
@@ -84,7 +121,7 @@ void DisconnectAll()
 void Clear()
 {
     DisconnectAll();
-    s_camera.reset();
+    s_cameras.clear();
     s_adapters.clear();
 }
 }

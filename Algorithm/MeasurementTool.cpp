@@ -84,20 +84,13 @@ CaliperOperators::LinearCaliperRegion ToLinearRegion(const ROI& roi)
     cv::Point2f secondAxis = points[3] - points[0];
     float firstLength = static_cast<float>(cv::norm(firstAxis));
     float secondLength = static_cast<float>(cv::norm(secondAxis));
-    if (firstLength >= secondLength)
-    {
-        region.tangent = firstLength > 0.0f ? firstAxis * (1.0f / firstLength) : cv::Point2f(1, 0);
-        region.normal = secondLength > 0.0f ? secondAxis * (1.0f / secondLength) : cv::Point2f(0, 1);
-        region.span = firstLength;
-        region.searchLength = secondLength;
-    }
-    else
-    {
-        region.tangent = secondLength > 0.0f ? secondAxis * (1.0f / secondLength) : cv::Point2f(0, 1);
-        region.normal = firstLength > 0.0f ? firstAxis * (1.0f / firstLength) : cv::Point2f(1, 0);
-        region.span = secondLength;
-        region.searchLength = firstLength;
-    }
+    // HALCON gen_measure_rectangle2: Length1/Phi define the longitudinal
+    // direction, and measurement is performed perpendicular to that axis.
+    // Do not silently swap axes merely because Length2 is larger.
+    region.tangent = firstLength > 0.0f ? firstAxis * (1.0f / firstLength) : cv::Point2f(1, 0);
+    region.normal = secondLength > 0.0f ? secondAxis * (1.0f / secondLength) : cv::Point2f(0, 1);
+    region.span = firstLength;
+    region.searchLength = secondLength;
     return region;
 }
 

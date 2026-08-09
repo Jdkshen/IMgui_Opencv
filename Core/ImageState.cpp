@@ -111,7 +111,6 @@ namespace ImageState
         s_current = image.clone();
         s_width = image.cols;
         s_height = image.rows;
-        ++s_version;
         gContext.image = s_current;
         gContext.width = s_width;
         gContext.height = s_height;

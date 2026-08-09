@@ -1,6 +1,7 @@
 #include "ToolExecutionGraph.h"
 
 #include "ResultROIResolver.h"
+#include "ToolChainValidator.h"
 
 #include <algorithm>
 #include <deque>
@@ -56,6 +57,7 @@ int ResolveSource(const std::vector<ToolInstance>& tools,
             if (tools[index].toolId == toolId)
                 return index;
         }
+        return -1;
     }
     return legacyIndex >= 0 && legacyIndex < static_cast<int>(tools.size())
         ? legacyIndex : -1;
@@ -78,6 +80,13 @@ namespace ToolExecutionGraph
 ToolExecutionGraphPlan Build(const std::vector<ToolInstance>& tools)
 {
     ToolExecutionGraphPlan plan;
+    const ToolChainValidationResult validation = ToolChainValidator::Validate(tools);
+    if (!validation.valid())
+    {
+        plan.valid = false;
+        plan.error = validation.issues.front().message;
+        return plan;
+    }
     plan.nodes.resize(tools.size());
     int originalToolIndex = -1;
     for (int index = 0; index < static_cast<int>(tools.size()); ++index)
@@ -102,6 +111,12 @@ ToolExecutionGraphPlan Build(const std::vector<ToolInstance>& tools)
         {
             AddDependency(node, ResolveSource(tools,
                 tool.resultRoiSourceTool, tool.resultRoiSourceToolId));
+            if (tool.resultRoiMode == static_cast<int>(ResultROIMode::SelectedPair))
+            {
+                AddDependency(node, ResolveSource(tools,
+                    tool.resultRoiSecondSourceTool,
+                    tool.resultRoiSecondSourceToolId));
+            }
         }
         if (tool.inputSourceMode == 1)
         {

@@ -12,7 +12,8 @@ struct ToolMeta
     int type;
     const char* name;
     ToolCategory category;
-    const char* icon;  // 预留：未来可加图标
+    const char* icon;
+    const char* description;
 };
 
 extern const std::vector<ToolMeta> g_ToolRegistry;

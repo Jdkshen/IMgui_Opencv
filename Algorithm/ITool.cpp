@@ -74,37 +74,37 @@ namespace
         AutoRegister()
         {
             ToolRegistry::Register(1, []() -> std::unique_ptr<ITool> { return std::make_unique<TemplateMatchingTool>(); });
-            ToolRegistry::RegisterName(1, "TemplateMatch");
+            ToolRegistry::RegisterName(1, "模板匹配");
             ToolRegistry::Register(0, []() -> std::unique_ptr<ITool> { return std::make_unique<EdgeTool>(); });
-            ToolRegistry::RegisterName(0, "Edge");
+            ToolRegistry::RegisterName(0, "边缘检测");
             ToolRegistry::Register(2, []() -> std::unique_ptr<ITool> { return std::make_unique<BlobTool>(); });
-            ToolRegistry::RegisterName(2, "Blob");
+            ToolRegistry::RegisterName(2, "Blob分析");
             ToolRegistry::Register(3, []() -> std::unique_ptr<ITool> { return std::make_unique<ThresholdITool>(); });
-            ToolRegistry::RegisterName(3, "Threshold");
+            ToolRegistry::RegisterName(3, "阈值调试");
             ToolRegistry::Register(4, []() -> std::unique_ptr<ITool> { return std::make_unique<YOLOTool>(); });
-            ToolRegistry::RegisterName(4, "YOLO");
+            ToolRegistry::RegisterName(4, "YOLO检测");
             ToolRegistry::Register(5, []() -> std::unique_ptr<ITool> { return std::make_unique<ContourTool>(); });
-            ToolRegistry::RegisterName(5, "Contour");
+            ToolRegistry::RegisterName(5, "轮廓分析");
             ToolRegistry::Register(6, []() -> std::unique_ptr<ITool> { return std::make_unique<ShapeTool>(); });
-            ToolRegistry::RegisterName(6, "Shape");
+            ToolRegistry::RegisterName(6, "形状匹配");
             ToolRegistry::Register(7, []() -> std::unique_ptr<ITool> { return std::make_unique<LineTool>(); });
-            ToolRegistry::RegisterName(7, "Line");
+            ToolRegistry::RegisterName(7, "直线检测");
             ToolRegistry::Register(8, []() -> std::unique_ptr<ITool> { return std::make_unique<MorphologyITool>(); });
-            ToolRegistry::RegisterName(8, "Morphology");
+            ToolRegistry::RegisterName(8, "形态学");
             ToolRegistry::Register(9, []() -> std::unique_ptr<ITool> { return std::make_unique<ColorAnalyzerITool>(); });
-            ToolRegistry::RegisterName(9, "ColorAnalyzer");
+            ToolRegistry::RegisterName(9, "颜色分析");
             ToolRegistry::Register(10, []() -> std::unique_ptr<ITool> { return std::make_unique<MultiColorFinder>(); });
-            ToolRegistry::RegisterName(10, "MultiColorFinder");
+            ToolRegistry::RegisterName(10, "多点找色");
             ToolRegistry::Register(13, []() -> std::unique_ptr<ITool> { return std::make_unique<OCRTool>(); });
-            ToolRegistry::RegisterName(13, "OCR");
+            ToolRegistry::RegisterName(13, "文字识别");
             ToolRegistry::Register(14, []() -> std::unique_ptr<ITool> { return std::make_unique<QRCodeTool>(); });
-            ToolRegistry::RegisterName(14, "Barcode");
+            ToolRegistry::RegisterName(14, "二维码/条码识别");
             ToolRegistry::Register(15, []() -> std::unique_ptr<ITool> { return std::make_unique<MeasurementTool>(); });
-            ToolRegistry::RegisterName(15, "Measurement");
+            ToolRegistry::RegisterName(15, "工业测量");
             ToolRegistry::Register(16, []() -> std::unique_ptr<ITool> { return std::make_unique<DifferenceTool>(); });
-            ToolRegistry::RegisterName(16, "Difference");
+            ToolRegistry::RegisterName(16, "图像差分");
             ToolRegistry::Register(17, []() -> std::unique_ptr<ITool> { return std::make_unique<GeometryDrawTool>(); });
-            ToolRegistry::RegisterName(17, "GeometryDraw");
+            ToolRegistry::RegisterName(17, "几何绘制");
         }
     };
 

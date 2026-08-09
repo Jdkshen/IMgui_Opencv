@@ -54,6 +54,11 @@ ToolResult DifferenceTool::Execute(VisionContext& context)
         result.message = "参考图与当前图尺寸不一致";
         return result;
     }
+    if (!ToolImageUtils::ValidateAreaContext(context, true, result.message))
+    {
+        result.success = false;
+        return result;
+    }
 
     const cv::Rect roi = ToolImageUtils::PrimaryContextRect(context);
     const cv::Mat current = roi.empty() ? context.image : context.image(roi);
@@ -75,6 +80,7 @@ ToolResult DifferenceTool::Execute(VisionContext& context)
     cv::morphologyEx(mask, mask, cv::MORPH_OPEN,
         cv::getStructuringElement(cv::MORPH_RECT, cv::Size(morphKernel, morphKernel)),
         cv::Point(-1, -1), morphIterations);
+    ToolImageUtils::ApplyDomainMask(mask, ToolImageUtils::PrimaryContextMask(context));
 
     std::vector<std::vector<cv::Point>> contours;
     cv::findContours(mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);

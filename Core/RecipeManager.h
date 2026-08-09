@@ -49,6 +49,10 @@ struct RecipeROI
     float endY = 0.0f;
     float angle = 0.0f;
     int type = 0;
+    bool locked = false;
+    bool visible = true;
+    bool constrainToImage = true;
+    std::vector<ImVec2> points;
 };
 
 struct RecipeTaskGroup
@@ -59,6 +63,7 @@ struct RecipeTaskGroup
     std::string imageFolderPath;
     int imageFolderIndex = -1;
     int imageFolderCount = 0;
+    int cameraIndex = -1;
     bool cameraPreferred = false;
 };
 

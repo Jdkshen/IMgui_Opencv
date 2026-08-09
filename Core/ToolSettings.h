@@ -12,6 +12,7 @@ struct TemplateMatchSettings
     float matchThreshold = 0.7f;
     int maxImageDim = 1000;
     float nmsThreshold = 0.3f;
+    bool subpixelRefinement = true;
     int searchMode = 0;
     bool templateGray = false;
     bool templateBinary = false;

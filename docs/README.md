@@ -1,16 +1,20 @@
 # 项目文档索引
 
-> 文档同步日期：2026-07-28。这里用于区分当前使用说明、开发规范、状态快照和历史设计稿。
+> 文档同步日期：2026-08-09。这里用于区分当前使用说明、开发规范、状态快照和历史设计稿。
 
 ## 建议阅读顺序
 
 1. [根目录 README](../README.md)：项目能力、工具列表和快速入口。
 2. [任务分组与执行](TASK_GROUPS.md)：任务管理、独立输入、相机优先、单步、并行和结果总览。
 3. [硬件接入](HARDWARE_INTEGRATION.md)：工业相机、16 任务 PLC Trigger、Busy/Done/ACK 时序和模拟器。
-4. [代码结构](CODE_STRUCTURE.md)：目录职责、核心状态和实际执行链路。
-5. [模块关系](MODULE_RELATIONSHIP.md)：输入、执行、结果发布和显示关系。
-6. [算法说明](ALGORITHMS.md)：type 0-17 工具、统一接口和扩展方法。
-7. [构建基线](BUILD.md) 与 [发布说明](RELEASE.md)：编译、测试和打包。
+4. [当前项目状态](STATUS_2026-08-09.md)：最新构建、回归、发布包和未闭环验收项。
+5. [界面整理与发布资源状态](STATUS_2026-08-02.md)：独立流程图窗口、工具对齐和图标复制。
+6. [工具链统一检查状态](STATUS_2026-08-05.md)：输入、ROI、上下游结果和输出显示。
+7. [双图形后端状态](STATUS_2026-07-30.md)：DX12 优先、DX11 回退、统一接口和验证结果。
+8. [代码结构](CODE_STRUCTURE.md)：目录职责、核心状态和实际执行链路。
+9. [模块关系](MODULE_RELATIONSHIP.md)：输入、执行、结果发布和显示关系。
+10. [算法说明](ALGORITHMS.md)：type 0-17 工具、统一接口和扩展方法。
+11. [构建基线](BUILD.md) 与 [发布说明](RELEASE.md)：编译、测试和打包。
 
 ## 当前使用说明
 
@@ -23,6 +27,7 @@
 | [VIDEO_AUDIO.md](VIDEO_AUDIO.md) | 视频与音频播放模块及当前接入边界 |
 | [OPENCV5_EXPERIMENT.md](OPENCV5_EXPERIMENT.md) | OpenCV 5 DNN 实验工具和 helper |
 | [recipe_examples/README.md](recipe_examples/README.md) | 可运行案例配方说明 |
+| [多任务中文案例](recipe_examples/task_series/README.md) | 2、4、6、8、10、12、16 任务完整案例、共用配图和逐项解析 |
 
 ## 开发与维护
 
@@ -34,6 +39,7 @@
 | [INSPECTION_PIPELINE_2026.md](INSPECTION_PIPELINE_2026.md) | 判定、测量、标定、Fixture 和导出 |
 | [TASK_EXECUTION.md](TASK_EXECUTION.md) | 开发任务模板、type 分配和验收清单 |
 | [PROJECT_UPDATE_GUIDE.md](PROJECT_UPDATE_GUIDE.md) | 代码、工程、配方和文档同步规则 |
+| [TOOL_CHAIN_AUDIT_2026-08-03.md](TOOL_CHAIN_AUDIT_2026-08-03.md) | 18 类工具输入、ROI、上下游结果和输出显示统一检查矩阵 |
 | [ROADMAP.md](ROADMAP.md) | 已完成能力和后续方向 |
 | [IMGUI_API.md](IMGUI_API.md) | Dear ImGui API 本地参考手册 |
 | [PERFORMANCE_REVIEW.md](PERFORMANCE_REVIEW.md) | 早期性能审查快照及当前架构对照入口 |
@@ -48,6 +54,10 @@
 
 ## 状态快照与历史资料
 
+- [STATUS_2026-08-02.md](STATUS_2026-08-02.md)：独立流程图窗口、任务/工具布局、字体/图标资源、代码清理和标准 Release 构建快照。
+- [STATUS_2026-08-09.md](STATUS_2026-08-09.md)：当前构建、回归、运行包、UI 冒烟、稳定性和硬件验收总状态。
+- [STATUS_2026-08-05.md](STATUS_2026-08-05.md)：工具输入、ROI、上下游结果、输出显示和运行包收尾验证。
+- [STATUS_2026-07-30.md](STATUS_2026-07-30.md)：DX12 优先、DX11 自动回退、公共渲染接口、双配置构建、双后端冒烟和发布包快照。
 - [STATUS_2026-07-28.md](STATUS_2026-07-28.md)：PLC 单槽收敛、ACK 超时复位、Trigger 映射同步及本轮干净构建与回归快照。
 - [STATUS_2026-07-27.md](STATUS_2026-07-27.md)：Modbus TCP IO 映射、工业握手和 PLC 触发指定任务拍照的实现与验证快照。
 - [STATUS_2026-07-26.md](STATUS_2026-07-26.md)：任务分组、独立图片/文件夹、相机优先和多任务执行收尾快照。
@@ -75,4 +85,6 @@
 - 新工具需要同步算法表、type 表、工程文件和回归说明。
 - 修改任务、配方、输入或结果链路时，至少检查 `README.md`、`TASK_GROUPS.md`、`CODE_STRUCTURE.md`、`MODULE_RELATIONSHIP.md` 和 `PROJECT_UPDATE_GUIDE.md`。
 - 修改 PLC 触发、IO 地址或相机回退时，必须同时检查 `HARDWARE_INTEGRATION.md`、PLC 模拟器说明、构建专项命令和最新状态快照。
+- 修改图形设备、纹理、窗口缩放或 ImGui 渲染时，必须同时检查 DX11、DX12、`RenderBackend` 契约、双后端冒烟和最新发布包。
+- 修改 UI 资源、字体或工具图标时，必须同时检查 `Windows_imgui.vcxproj` PostBuild、`scripts/package_runtime.ps1`、输出目录和脱离源码目录的运行包。
 - 修改后运行旧术语搜索、Markdown 围栏检查和 `git diff --check`。

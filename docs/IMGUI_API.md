@@ -1,6 +1,6 @@
 # Dear ImGui C++ API 完整参考手册
 
-> 文档同步日期：2026-07-27。API 参考版本仍为项目内 Dear ImGui 1.92.8 WIP；此文档只描述 UI API，不代表项目的任务或硬件执行规则。
+> 文档同步日期：2026-08-09。API 参考版本仍为项目内 Dear ImGui 1.92.8 WIP；本轮使用表格完成标签/控件对齐，并用独立 ImGui 窗口承载流程图，API 版本未变。
 
 
 > Dear ImGui v1.92.8 WIP | 基于项目 `include/imgui/imgui.h` 整理

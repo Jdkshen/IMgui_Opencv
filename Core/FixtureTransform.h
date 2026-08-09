@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ROI.h"
+#include "ToolResultCapabilities.h"
 #include "../Algorithm/ToolResult.h"
 
 #include <vector>
@@ -19,6 +20,7 @@ struct FixtureSettings
     int sourceToolIndex = -1;
     std::uint64_t sourceToolId = 0;
     int resultIndex = 0;
+    int resultChannel = static_cast<int>(ToolSpatialResultChannel::Auto);
     cv::Point2f referenceOrigin;
     float referenceAngleDegrees = 0.0f;
     bool failOnMissing = true;
@@ -26,7 +28,8 @@ struct FixtureSettings
 
 namespace FixtureTransform
 {
-    bool TryExtractPose(const ToolResult& result, int resultIndex, FixturePose& pose);
+    bool TryExtractPose(const ToolResult& result, int resultIndex, FixturePose& pose,
+        ToolSpatialResultChannel channel = ToolSpatialResultChannel::Auto);
     cv::Point2f TransformPoint(cv::Point2f point, const FixturePose& reference, const FixturePose& current);
     ROI TransformROI(const ROI& roi, const FixturePose& reference, const FixturePose& current);
     std::vector<ROI> TransformROIs(

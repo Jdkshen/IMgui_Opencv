@@ -1,6 +1,17 @@
 # 项目代码结构梳理
 
-> 文档同步日期：2026-07-27。本文已补充任务分组、独立输入、任务并行、PLC 单槽握手和 16 任务触发的代码边界。
+> 文档同步日期：2026-08-09。本文已补充 DX12/DX11 双后端、任务分组、独立输入、独立流程图窗口、工具界面资源、统一结果能力、任务并行、PLC 单槽握手和 16 任务触发的代码边界。
+
+## 2026-08-02 图形后端代码边界
+
+| 层次 | 文件 | 职责 |
+| --- | --- | --- |
+| Contract | `Core/RenderBackend.h` | 定义统一初始化、清理、新帧、遮挡、Resize、渲染、等待和纹理生命周期接口 |
+| Facade | `Core/GraphicsBackend.*` | 启动时优先 DX12、失败自动回退 DX11，保存失败原因并向 UI/业务提供单一入口 |
+| DX12 | `Core/DX12Backend.*`、`Core/DX12Context.*` | 适配并完整保留 DX12 设备、交换链、帧同步、描述符和上传实现 |
+| DX11 | `Core/DX11Context.*` | 独立实现 D3D11 设备、交换链、RenderTarget、ImGui 后端和纹理上传/释放 |
+| Renderer | `Renderer/PreviewTextureCache.*` | 只保存通用纹理句柄和 `ImTextureID`，不暴露 D3D11/D3D12 类型 |
+| UI | `Windows_imgui.cpp`、`UI/*` | 共用一套布局、字体、Docking、图片、Resize、多视口和最大化行为 |
 
 ## 2026-07-27 任务与硬件执行代码边界
 
@@ -11,7 +22,7 @@
 | Core | `Core/HardwareRuntimeService.*` | 异步相机帧、PLC 轮询、单槽 Trigger/Busy/Done/ACK 握手、结果输出与重连 |
 | Core | `Core/HardwareSettingsService.*` | 硬件设置持久化、IO 映射校验、任务 Trigger 自动补齐与标准映射生成 |
 | Core | `Core/RecipeManager.*` | 保存和加载任务图片、文件夹进度及相机优先字段 |
-| UI | `UI/ToolsWindow.cpp` | 任务管理、输入配置、执行全部/当前任务/单步/并行入口 |
+| UI | `UI/ToolsWindow.cpp` | 任务管理、输入配置、自适应多行流程图、执行全部/当前任务/单步/并行入口 |
 | UI | `UI/RunResultWindow.cpp` | 任务结果总览、详情、结果图、缩放和本轮总耗时 |
 | Test | `Test/regression_tests.cpp` | 验证任务顺序、独立图片、文件夹、相机回退、并行、PLC 指定任务与连续触发丢弃 |
 
@@ -20,14 +31,14 @@
 
 ## 项目定位
 
-`IMgui_Opencv` 是一个基于 Dear ImGui、DirectX 12、OpenCV 的 Windows 桌面视觉工具。项目使用 Visual Studio C++ 工程组织，核心能力包括图片/视频加载、ROI 管理、图像处理、模板匹配、YOLO 检测、轮廓/形状/直线检测、形态学、颜色分析、多点找色、OCR、结果导出、工具链输入、配方保存加载和日志显示。
+`IMgui_Opencv` 是一个基于 Dear ImGui、DirectX 12 / DirectX 11、OpenCV 的 Windows 桌面视觉工具。项目使用 Visual Studio C++ 工程组织，核心能力包括图片/视频加载、ROI 管理、图像处理、模板匹配、YOLO 检测、轮廓/形状/直线检测、形态学、颜色分析、多点找色、OCR、结果导出、工具链输入、配方保存加载和日志显示。
 
 主要技术栈：
 
 | 类型 | 使用内容 |
 | --- | --- |
 | UI | Dear ImGui，Docking，多视口 |
-| 渲染 | DirectX 12 |
+| 渲染 | DirectX 12 优先，初始化失败自动回退 DirectX 11 |
 | 图像处理 | OpenCV |
 | 推理 | ONNX Runtime / OpenCV DNN / NCNN；OpenCV 5.0 YOLO 实验工具和 PP-OCRv6 tiny OCR |
 | 配置/配方 | nlohmann/json |
@@ -50,7 +61,7 @@ IMgui_Opencv/
 ├── recipes/                # 配方文件及模板资源
 ├── Test/                   # C++ 回归测试工程
 ├── docs/                   # 项目文档
-├── Windows_imgui.cpp       # Win32 / DX12 / ImGui 程序入口和主循环
+├── Windows_imgui.cpp       # Win32 / GraphicsBackend / ImGui 程序入口和主循环
 ├── Windows_imgui.h         # 公共头文件汇总和通用转换函数
 ├── framework.h             # Windows 基础头文件
 └── Windows_imgui.vcxproj   # Visual Studio C++ 工程文件
@@ -75,7 +86,7 @@ flowchart TD
 - UI 负责显示窗口、收集参数、编辑 ROI 和触发执行。
 - Core 负责保存运行上下文、调度工具、执行工具、加载资源和管理配方。
 - Algorithm 封装具体视觉算法；当前 type 0-11、13-17 已接入 `ITool`，type 12 原图由 `ToolController` 特殊处理。
-- 渲染纹理上传、图片显示状态、部分工具链状态仍通过全局变量连接。
+- UI、业务和预览缓存只依赖 `GraphicsBackend` 与通用纹理句柄，不读取 D3D11/D3D12 全局资源。
 
 ## 程序入口和主循环
 
@@ -85,7 +96,7 @@ flowchart TD
 
 1. 设置 DPI 感知和窗口缩放。
 2. 创建 Win32 主窗口。
-3. 初始化 DirectX 12 设备、交换链、描述符堆和命令队列。
+3. 初始化 `GraphicsBackend`：优先创建 DirectX 12，失败时记录原因并自动创建 DirectX 11。
 4. 初始化 Dear ImGui，启用键盘、手柄、Docking、多视口。
 5. 加载主题和中文字体。
 6. 进入主循环。
@@ -93,8 +104,8 @@ flowchart TD
 8. 开启 ImGui 新帧。
 9. 绘制各 UI 窗口。
 10. 更新视频帧和实时 YOLO 检测。
-11. 执行 DX12 渲染并 Present。
-12. 退出时清理 ImGui、DX12 和 Win32 资源。
+11. 调用当前后端执行纹理提交、ImGui 渲染、多视口更新和 Present。
+12. 退出时通过统一接口清理纹理、当前图形后端和 Win32 资源。
 
 主循环里直接调用的 UI/算法入口包括：
 
@@ -111,7 +122,7 @@ VideoCapture::Update()
 HardwareRuntimeService::Tick()
 LiveYoloRunner::Update()
 ImageLoadController::Update()
-FrameRenderer::RenderAndPresent()
+GraphicsBackend::RenderAndPresent()
 ```
 
 `UI::ShowToolsWindow()` 内部每帧调用 `ToolController::Tick()`，因此单步、批量、循环和并行任务的推进仍由 Core 调度器完成，不是 UI 直接执行算法。
@@ -125,12 +136,17 @@ FrameRenderer::RenderAndPresent()
 | `DockSpaceHost.*` | 主 DockSpace、菜单栏和全局窗口显示开关；通过 `Core/ROI.h` 使用 ROI 类型 |
 | `ImageViewer.*` | 图片窗口、缩放平移、文件夹图片列表、上一张/下一张、图片清理 |
 | `ROIManager.*` | ROI 创建、选择、拖动、缩放、绘制、坐标转换 |
-| `ToolsWindow.*` | 工具实例、任务管理、任务输入，以及全部/当前任务/单步/循环/任务并行入口 |
+| `ToolsWindow.*` | 工具实例、任务管理、任务输入、独立“工具流程图”窗口，以及全部/当前任务/单步/循环/任务并行入口；公共表单行负责参数对齐 |
 | `RunResultWindow.*` | 任务结果总览、任务详情、结果图和本轮总耗时 |
-| `Sidebar.*` | 左侧控制面板页签 |
+| `RunResultLayout.*` | 结果窗口尺寸、任务卡片网格和覆盖标签避让等无渲染布局策略 |
+| `Sidebar.*` | ROI 控制面板；启动时默认隐藏，通过“查看 → 侧边栏控制”手动打开 |
 | `HardwareWindow.*` | 与控制面板位于同一左侧停靠区的设备连接页签 |
 | `LogWindow.*` | 日志窗口显示 |
 | `StatsWindow.*` | 性能统计窗口 |
+
+`ToolsWindow.cpp` 只在右侧工具区保留“打开流程图窗口”入口；流程图本体使用独立 ImGui 窗口，不再占用工具列表顶部高度。节点按窗口宽度自动换行，常规窗口中的 16 工具默认形成 4 列多行布局；长标题在节点内裁切并提供悬停完整名称，跨行顺序线与结果 ROI/Fixture 依赖线分别绘制。任务设置中的“绑定相机”使用标签/控件两列表格，执行区预留并行状态和工具数量两行，避免窄窗口或底部日志区导致文字裁切。
+
+工具 ROI 使用显式绑定语义：`ToolExecutor::SelectSearchROIs()` 在 `searchROIs` 为空时返回空集合，不能回退到 `ROIState` 的画布 ROI；`PrepareDetachedSnapshot()` 和 `LiveYoloRunner` 使用相同规则。绑定 ROI 仍可通过 `runtimeId` 跟随画布编辑后的几何位置。
 
 ### ROI 数据结构
 
@@ -164,8 +180,11 @@ ROI 相关职责分为三层：
 
 | 文件 | 职责 |
 | --- | --- |
-| `DX12Context.*` | DX12 设备、交换链、描述符堆、帧上下文、GPU 资源辅助 |
-| `OpenCVTest.*` | 图片读取、OpenCV 图像到 GPU 纹理上传 |
+| `RenderBackend.h` | DX11 / DX12 统一接口与通用纹理句柄 |
+| `GraphicsBackend.*` | 后端选择、回退、统一渲染/Resize/纹理门面和主图片纹理 |
+| `DX12Backend.*` | 把保留的 DX12 实现适配到统一契约，并管理 DX12 通用纹理 |
+| `DX12Context.*` | 完整保留的 DX12 设备、交换链、描述符堆、帧上下文和 GPU 资源辅助 |
+| `DX11Context.*` | 独立 DX11 设备、交换链、RenderTarget、遮挡处理和通用纹理实现 |
 | `AsyncImageLoader.*` | 后台线程异步加载图片 |
 | `OpenFileDialog.*` | 文件/文件夹选择对话框 |
 | `VideoCapture.*` | 视频文件和摄像头播放，基于 `cv::VideoCapture` |
@@ -188,7 +207,6 @@ ROI 相关职责分为三层：
 | `Open62541OpcUaAdapter.*` | open62541 原生 OPC UA TCP 客户端、NodeId 与标量读写 |
 | `../UI/HardwareWindow.*` | 左侧设备连接页签中的工业相机和结果输出配置，仅调用 HardwareRuntimeService API |
 | `LiveYoloRunner.*` | 实时 YOLO 推理调度和耗时统计 |
-| `FrameRenderer.*` | 每帧渲染提交和渲染资源收尾 |
 | `VisionContext.*` | 统一视觉上下文，保存图片、ROI、模板和结果 |
 | `ImageViewState.*` | Core-owned image zoom, pan, canvas position, and grid settings |
 | `ToolInstance.h` / `ToolTypes.h` | 工具实例参数、类型常量和工具名称 |
@@ -266,7 +284,7 @@ ToolController::Reset()
 | type | 工具 | 执行路径 |
 | --- | --- | --- |
 | 0 | 边缘检测 | `RunViaITool()`，`EdgeTool` |
-| 1 | 模板匹配 | `RunViaITool()`，`TemplateMatchITool` |
+| 1 | 模板匹配 | `RunViaITool()`，`TemplateMatchingTool` |
 | 2 | Blob 分析 | `RunViaITool()`，`BlobTool`，特征筛选、区域与统一测量判定 |
 | 3 | 阈值调试 | `RunViaITool()`，`ThresholdITool` |
 | 4 | YOLO 检测 | `RunViaITool()` |
@@ -292,6 +310,8 @@ ToolResult result = it.toolImpl->Execute(gContext);
 
 执行结果经 `ResultPublisher` 发布到 `gContext.unifiedResults`；并行任务产生的脱离主执行上下文结果由 `ToolExecutor::PublishDetached()` 发布。显示层再通过 `ResultOverlayState::Results()` 查询，最终由 `ImageViewer::DrawUnifiedResults()` 统一叠加。
 
+`Core/ToolResultUtils.h` 统一生成线段结果标签。存在 `measurements[name="value"]` 时优先显示结构化数值和单位，因此工业测量在主图与任务结果总览中保持相同的完整标签。任务分组不设置启动兜底；空配方保持零任务，用户点击“+ 新建任务”后才由 `ToolChainState::CreateTaskGroup()` 创建任务。
+
 ## Algorithm 模块
 
 目录：`Algorithm/`
@@ -309,7 +329,7 @@ ToolResult result = it.toolImpl->Execute(gContext);
 | `YOLODetector.*` | YOLO 模型加载、推理、NMS、结果绘制 |
 | `OpenCVYoloDetector.*` | OpenCV DNN YOLO 实验检测器 |
 | `ShapeTools.*` | 轮廓、形状、直线工具的 `ITool` 实现 |
-| `TemplateMatch.*` | 模板匹配、旋转匹配、NMS、模板编辑窗口 |
+| `TemplateMatchingTool.*` | 模板预处理、旋转搜索、NMS 和结果发布 |
 | `ContourDetector.*` | 轮廓检测和分析 |
 | `ShapeMatcher.*` | 形状匹配 |
 | `LineDetector.*` | Canny + HoughLinesP 直线检测 |
@@ -384,6 +404,8 @@ ITool::Create(type)
 
 这套结构是 UI 统一叠加绘制和结果管理的基础。
 
+`Core/ToolResultCapabilities.h` 是 type 0-17 的静态输出能力契约。`ToolsWindow` 用它过滤结果 ROI/Fixture 上游并显示输出种类，`ToolChainValidator` 用它拒绝不兼容依赖；实际运行结果仍以 `ToolResult` 中非空字段为准。`ResultROIResolver` 和 `FixtureTransform` 统一消费区域、检测框、线段与文本框，避免 UI 与执行后端各维护一套白名单。结果 ROI 默认输出包围矩形，并支持第 N 项、全部项和 A/B 双结果；A、B 可来自同一或不同上游。工业测量模式 0 由 `ToolExecutor` 请求专用几何，把区域类结果转换为中心点、把线结果保留为线 ROI；双结果模式把两项分别转成点，三个执行入口保持一致。
+
 ## 工具实例系统
 
 工具实例定义在 `Core/ToolInstance.h` 的 `ToolInstance`，UI 只编辑实例参数。
@@ -430,7 +452,7 @@ flowchart LR
     -> AsyncImageLoader（文件异步解码）
     -> ImageState::Current() / ImageState::Original()
     -> SafeConvertToRGBA()
-    -> DX12 纹理上传
+    -> GraphicsBackend::UploadMainTexture（由当前后端上传）
     -> UI::ShowOpenCV() 显示
 ```
 
@@ -588,7 +610,7 @@ Modbus FC01 轮询 Trigger / ACK
 FontManager::InitFonts(main_scale);
 ```
 
-`Renderer/PreviewTextureCache.*` 负责缓存工具预览图和任务结果图对应的 DX12 纹理，避免 UI 每帧重复创建资源，并在图像更新或缓存清理时释放失效纹理。
+`Renderer/PreviewTextureCache.*` 负责缓存工具预览图和任务结果图对应的通用纹理，避免 UI 每帧重复创建资源，并在图像更新或缓存清理时通过当前后端释放失效纹理。
 
 ## 当前结构特点
 

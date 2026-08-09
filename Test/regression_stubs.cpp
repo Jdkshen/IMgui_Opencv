@@ -63,6 +63,35 @@ std::shared_ptr<std::vector<LogEntry>> LogSystem::GetLogs()
     return std::make_shared<std::vector<LogEntry>>();
 }
 
+void LogSystem::ConfigureStorage(const LogStorageOptions&)
+{
+}
+
+std::string LogSystem::GetLogDirectory()
+{
+    return {};
+}
+
+void LogSystem::SetContext(const LogContext& context)
+{
+    static thread_local LogContext current;
+    current = context;
+}
+
+LogContext LogSystem::GetContext()
+{
+    return {};
+}
+
+void LogSystem::ClearContext()
+{
+}
+
+bool LogSystem::ExportDiagnosticPackage(const std::string&, std::string*)
+{
+    return false;
+}
+
 namespace YOLODetector
 {
 bool LoadModel(const std::string&, const std::string&, bool)

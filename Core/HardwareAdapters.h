@@ -37,6 +37,75 @@ enum class CameraControl
     Gain
 };
 
+enum class CameraTriggerMode
+{
+    Continuous,
+    Software,
+    HardwareLine1,
+    HardwareLine2
+};
+
+enum class CameraBufferPolicy
+{
+    Sequential = 0,
+    LatestFrame = 1
+};
+
+struct CameraTriggerConfig
+{
+    CameraTriggerMode mode = CameraTriggerMode::Continuous;
+    double delayMicroseconds = 0.0;
+};
+
+struct CameraFrameMetadata
+{
+    std::uint64_t frameNumber = 0;
+    std::uint64_t hardwareTimestampNanoseconds = 0;
+    std::uint64_t receivedTimestampNanoseconds = 0;
+    std::uint64_t droppedFrames = 0;
+    bool exposureComplete = false;
+    std::uint32_t sourcePixelFormat = 0;
+    std::string sourcePixelFormatName;
+    int sourceBitDepth = 0;
+    int sourceStorageBitsPerPixel = 0;
+    bool sourceIsBayer = false;
+    bool convertedToDisplay = false;
+    std::string conversionPath;
+};
+
+struct CameraStatistics
+{
+    std::uint64_t receivedFrames = 0;
+    std::uint64_t droppedFrames = 0;
+    std::uint64_t incompleteFrames = 0;
+    std::uint32_t queuedFrames = 0;
+};
+
+struct CameraCapabilities
+{
+    bool softwareTrigger = false;
+    bool hardwareTrigger = false;
+    bool hardwareTimestamp = false;
+    bool exposureCompletion = false;
+    bool queueControl = false;
+    bool ptp = false;
+};
+
+struct CameraDeviceInfo
+{
+    std::string selector;
+    std::string model;
+    std::string serialNumber;
+    std::string ipAddress;
+    std::string macAddress;
+    std::string userDefinedName;
+    std::string transport;
+    std::string runtimePath;
+    std::string runtimeVersion;
+    bool accessible = true;
+    std::string status;
+};
+
 using DeviceValue = std::variant<bool, std::int64_t, double, std::string>;
 
 class IDeviceAdapter
@@ -54,11 +123,49 @@ class ICameraAdapter : public IDeviceAdapter
 {
 public:
     virtual DeviceOperationResult GrabFrame(cv::Mat& frame, int timeoutMs) = 0;
+    virtual DeviceOperationResult GrabFrame(cv::Mat& frame,
+        CameraFrameMetadata& metadata, int timeoutMs)
+    {
+        metadata = {};
+        return GrabFrame(frame, timeoutMs);
+    }
     virtual DeviceOperationResult StartStream() = 0;
     virtual void StopStream() = 0;
     virtual DeviceOperationResult SetControl(CameraControl, double)
     {
         return {false, "camera controls are not supported by this adapter"};
+    }
+    virtual CameraCapabilities Capabilities() const { return {}; }
+    virtual DeviceOperationResult ConfigureTrigger(const CameraTriggerConfig&)
+    {
+        return {false, "camera trigger configuration is not supported by this adapter"};
+    }
+    virtual DeviceOperationResult ExecuteSoftwareTrigger()
+    {
+        return {false, "software trigger is not supported by this adapter"};
+    }
+    virtual DeviceOperationResult FlushQueue()
+    {
+        return {false, "camera queue control is not supported by this adapter"};
+    }
+    virtual DeviceOperationResult ConfigureBufferPolicy(CameraBufferPolicy)
+    {
+        return {false, "camera frame buffer policy is not supported by this adapter"};
+    }
+    virtual CameraStatistics Statistics() const { return {}; }
+    virtual DeviceOperationResult EnumerateDevices(std::vector<CameraDeviceInfo>& devices)
+    {
+        devices.clear();
+        return {false, "camera device discovery is not supported by this adapter"};
+    }
+    virtual DeviceOperationResult ConfigurePtp(bool)
+    {
+        return {false, "PTP is not supported by this camera adapter"};
+    }
+    virtual DeviceOperationResult ForceIp(const std::string&, const std::string&,
+        const std::string&, const std::string&)
+    {
+        return {false, "GigE ForceIP is not supported by this camera adapter"};
     }
 };
 
@@ -100,6 +207,12 @@ namespace HardwareAdapterService
     void SetCamera(std::unique_ptr<ICameraAdapter> camera);
     ICameraAdapter* Camera();
     const ICameraAdapter* CameraReadOnly();
+    bool RegisterCamera(const std::string& key,
+        std::unique_ptr<ICameraAdapter> camera);
+    ICameraAdapter* Camera(const std::string& key);
+    const ICameraAdapter* CameraReadOnly(const std::string& key);
+    std::vector<std::string> CameraKeys();
+    bool RemoveCamera(const std::string& key);
 
     bool Register(const std::string& key, std::unique_ptr<IDeviceAdapter> adapter);
     IDeviceAdapter* Find(const std::string& key);

@@ -9,7 +9,7 @@ public:
     int cannyHigh = 150;
     bool useGray = false;
 
-    const char* GetName() const override { return "Edge"; }
+    const char* GetName() const override { return "边缘检测"; }
     int GetType() const override { return 0; }
     void DrawUI() override {}
     nlohmann::json Save() const override;

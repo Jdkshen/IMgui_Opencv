@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <utility>
 
 namespace
@@ -153,17 +154,86 @@ std::string OpenCvCameraAdapter::LastError() const
 
 DeviceOperationResult OpenCvCameraAdapter::GrabFrame(cv::Mat& frame, int timeoutMs)
 {
+    CameraFrameMetadata metadata;
+    return GrabFrame(frame, metadata, timeoutMs);
+}
+
+DeviceOperationResult OpenCvCameraAdapter::GrabFrame(cv::Mat& frame,
+    CameraFrameMetadata& metadata, int timeoutMs)
+{
     std::lock_guard<std::mutex> lock(mutex_);
     frame.release();
     if (state_ != DeviceConnectionState::Connected)
         return Fail("OpenCV camera is not connected");
+    if (triggerConfig_.mode == CameraTriggerMode::Software && !softwareTriggerPending_)
+        return Fail("OpenCV camera is waiting for a software trigger");
+    softwareTriggerPending_ = false;
 
     DeviceOperationResult result = backend_->Read(frame, (std::max)(1, timeoutMs));
     if (!result.success)
+    {
+        ++statistics_.incompleteFrames;
         return Fail(std::move(result.message));
+    }
     if (frame.empty())
+    {
+        ++statistics_.incompleteFrames;
         return Fail("OpenCV camera returned an empty frame");
+    }
+    ++statistics_.receivedFrames;
+    metadata.frameNumber = statistics_.receivedFrames;
+    metadata.receivedTimestampNanoseconds = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+    metadata.droppedFrames = statistics_.droppedFrames;
+    metadata.exposureComplete = true;
     return result;
+}
+
+CameraCapabilities OpenCvCameraAdapter::Capabilities() const
+{
+    CameraCapabilities capabilities;
+    capabilities.softwareTrigger = true;
+    capabilities.exposureCompletion = true;
+    capabilities.queueControl = true;
+    return capabilities;
+}
+
+DeviceOperationResult OpenCvCameraAdapter::ConfigureTrigger(
+    const CameraTriggerConfig& config)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (config.mode == CameraTriggerMode::HardwareLine1 ||
+        config.mode == CameraTriggerMode::HardwareLine2)
+        return {false, "OpenCV does not provide deterministic hardware triggering"};
+    triggerConfig_ = config;
+    softwareTriggerPending_ = false;
+    return {true, "OpenCV trigger mode configured"};
+}
+
+DeviceOperationResult OpenCvCameraAdapter::ExecuteSoftwareTrigger()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (state_ != DeviceConnectionState::Connected)
+        return Fail("OpenCV camera is not connected");
+    if (triggerConfig_.mode != CameraTriggerMode::Software)
+        return {false, "camera is not configured for software trigger mode"};
+    softwareTriggerPending_ = true;
+    return {true, "OpenCV software trigger armed"};
+}
+
+DeviceOperationResult OpenCvCameraAdapter::FlushQueue()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    softwareTriggerPending_ = false;
+    statistics_.queuedFrames = 0;
+    return {true, "OpenCV camera queue state cleared"};
+}
+
+CameraStatistics OpenCvCameraAdapter::Statistics() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return statistics_;
 }
 
 DeviceOperationResult OpenCvCameraAdapter::SetControl(CameraControl control, double value)

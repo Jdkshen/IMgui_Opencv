@@ -14,8 +14,10 @@ namespace UI
     inline bool& gDraggingROI = ROIEditorState::Dragging();
     inline ImVec2& gLastMousePos = ROIEditorState::LastMousePosition();
     inline HandleType& gActiveHandle = ROIEditorState::ActiveHandle();
+    inline int& gActivePointIndex = ROIEditorState::ActivePointIndex();
     inline int& gHoveredROI = ROIEditorState::HoveredROI();
     inline int& gCurrentROIType = ROIEditorState::CurrentROIType(); // 当前操作的ROI类型 (0-4)
+    inline std::vector<ImVec2>& gPolygonDraftPoints = ROIEditorState::PolygonDraftPoints();
 
     // 根据 ROI 类型返回对应颜色
     inline ImU32 GetROIColor(int type, bool selected)

@@ -53,20 +53,33 @@ cv::Mat ApplyPipelineToContextImage(const VisionContext& ctx, bool useGray, cons
 
     cv::Mat out = ctx.image.clone();
     const cv::Rect roi = ToolImageUtils::PrimaryContextRect(ctx);
+    const cv::Mat domainMask = ToolImageUtils::PrimaryContextMask(ctx);
     cv::Mat dst = ApplyPipelineToMat(roi.empty() ? out : out(roi), useGray, pipe);
     if (dst.empty())
         return {};
+    ToolImageUtils::ApplyDomainMask(dst, domainMask);
 
     if (!roi.empty())
     {
         cv::Mat converted;
         if (!ToolImageUtils::ConvertForCopyTo(dst, out.channels(), converted))
             return {};
-        converted.copyTo(out(roi));
+        if (domainMask.empty())
+            converted.copyTo(out(roi));
+        else
+            converted.copyTo(out(roi), domainMask);
     }
     else
     {
-        out = dst;
+        if (domainMask.empty())
+            out = dst;
+        else
+        {
+            cv::Mat converted;
+            if (!ToolImageUtils::ConvertForCopyTo(dst, out.channels(), converted))
+                return {};
+            converted.copyTo(out, domainMask);
+        }
     }
 
     return out;
@@ -96,6 +109,17 @@ ToolResult ThresholdITool::Execute(VisionContext& ctx)
 {
     ToolResult r;
     r.toolName = GetName();
+    if (ctx.image.empty())
+    {
+        r.success = false;
+        r.message = "请先加载图片";
+        return r;
+    }
+    if (!ToolImageUtils::ValidateAreaContext(ctx, true, r.message))
+    {
+        r.success = false;
+        return r;
+    }
     PipelineState pipe;
     pipe.enableBlur = enableBlur;
     pipe.blurSize = blurSize;
@@ -107,6 +131,6 @@ ToolResult ThresholdITool::Execute(VisionContext& ctx)
     r.debugImage = ApplyPipelineToContextImage(ctx, useGray, pipe);
     r.success = !r.debugImage.empty();
     if (!r.success)
-        r.message = "请先加载图片";
+        r.message = "图像预处理失败";
     return r;
 }

@@ -1,6 +1,6 @@
 # 发布与持续集成
 
-> 文档同步日期：2026-07-28。本文说明当前构建、打包、CI、PLC 联调和发布验收规则。
+> 文档同步日期：2026-08-09。本文说明当前双图形后端构建、字体/图标资源打包、CI、PLC 联调和发布验收规则。
 
 ## 1. 当前发布基线
 
@@ -13,7 +13,7 @@
 - 通用相机、TCP、Modbus、PLC 和 OPC UA；
 - 工具依赖、判定、失败停止和回归基础设施。
 
-2026-07-26 工作树进一步加入最多 16 个任务、独立单图/文件夹、相机优先、全部/当前任务单步、最多 4 任务并行和任务结果图。2026-07-27 又加入 Modbus TCP IO 映射、16 任务 Trigger、单槽 Busy/Done/ACK 握手、自动重连和独立 PLC 模拟器。2026-07-28 完成待执行槽、ACK 超时复位、Trigger 映射同步及标准主程序干净重建。当前本地验证状态见 [STATUS_2026-07-28.md](STATUS_2026-07-28.md)；这些修改正式提交和发布前，不应把状态快照等同于新的 GitHub Release。
+2026-07-26 工作树进一步加入最多 16 个任务、独立单图/文件夹、相机优先、全部/当前任务单步、最多 4 任务并行和任务结果图。2026-07-27 又加入 Modbus TCP IO 映射、16 任务 Trigger、单槽 Busy/Done/ACK 握手、自动重连和独立 PLC 模拟器。2026-07-28 完成待执行槽、ACK 超时复位、Trigger 映射同步及标准主程序干净重建。2026-07-30 增加完整保留 DX12 的独立 DX11 后端、统一渲染契约与自动回退。2026-08-02 完成独立流程图窗口、任务/工具面板对齐，并把工具 PNG 纳入 PostBuild 和运行包。2026-08-05 完成工具输入、ROI、上下游结果和统一输出的自动回归覆盖。当前本地验证状态见 [STATUS_2026-08-09.md](STATUS_2026-08-09.md)；这些修改正式提交和发布前，不应把状态快照等同于新的 GitHub Release。
 
 ## 2. 本地运行包
 
@@ -26,13 +26,14 @@ pwsh -File .\scripts\package_runtime.ps1
 脚本生成 `dist/IMgui_Opencv-Release-x64.zip`，并在压缩后校验必要文件。运行包包含：
 
 - `Windows_imgui.exe`；
+- `Start_Diagnostics.cmd`：先检查必须 DLL，再启动主程序；Win10 双击无反应时优先运行它，并查看 `%LOCALAPPDATA%\IMgui_Opencv\startup.log` 与同目录崩溃转储；
 - PostBuild 复制的 OpenCV、ONNX Runtime、DirectML、NCNN 等运行时；
-- 字体和运行配置；
-- 生产配方、案例配方及其必要图片；
+- 中文字体、`assets/icons/` 工具 PNG 和运行配置；
+- 生产配方、案例配方及其必要图片；其中包含 2、4、6、8、10、12、16 任务的中文案例和一份共用测试图片；
 - OCR 资产和存在于本机的可选模型；
 - 硬件说明与 open62541 许可证材料。
 
-当前本地发布基线是 2026-07-28 Clean 后全量构建生成的标准文件 `x64\Release\Windows_imgui.exe`，SHA256 为 `33A5F696EF4C628C5634F678B25D662EE20321158CF743A616A349B8F526FFA2`。2026-07-27 的 `Windows_imgui_updated.exe` 仅是避开旧进程文件锁的历史临时成品，不应装入当前正式运行包。
+当前标准 exe 的大小、时间和 SHA256 见 [STATUS_2026-08-09.md](STATUS_2026-08-09.md)。若主程序仍在运行，Windows 会锁定 EXE 并导致 `LNK1168`；关闭程序后重新构建。正式发布仍须重新运行打包脚本并记录最新 ZIP 校验值。2026-07-27 的 `Windows_imgui_updated.exe` 仅是避开旧进程文件锁的历史临时成品，不应装入当前正式运行包。
 
 默认不包含约 333 MB 的可选 CUDA provider，因为当前 GPU 路径使用 DirectML。确有需要时执行：
 
@@ -59,12 +60,18 @@ Winsock 和 IP Helper 通过系统库 `Ws2_32.lib`、`Iphlpapi.lib` 链接，不
 
 - `Windows_imgui.vcxproj` Release x64 零错误构建。
 - `Test/RegressionTests.vcxproj` Release x64 零错误构建。
+- Debug x64 和 Release x64 均需编译通过，并分别运行完整回归。
 - 完整回归全部通过，包括任务输入、相机回退、任务并行和 PLC 连续触发丢弃策略。
+- 在脱离源码目录的位置启动，中文标签完整，添加工具弹窗显示 12 个工具 PNG 图标；不得依赖 `..\..\assets\icons` 回退路径。
+- 右侧工具区在 1280×720 下仍能看到模式按钮和“`N 个工具`”状态，任务设置中的“绑定相机”文字不裁切。
+- 默认启动日志确认选择 DirectX 12；设置 `IMGUI_OPENCV_RENDER_BACKEND=dx11` 后确认 DirectX 11 路径可进入主循环。
+- DX12 初始化失败日志必须包含失败原因、自动回退动作和 DX11 回退结果。
+- DX11 与 DX12 的布局、字体、图片显示、窗口缩放、多视口和最大化行为使用同一套 UI 回归清单。
 - `RegressionTests.exe --plc-handshake-only` 与 `python tools\plc_simulator\plc_simulator.py --self-test` 通过。
 - 用模拟器至少完成一次“任务01 Trigger → Busy → Done/结果 → ACK → 清除”和一次非任务01 Trigger 联调。
 - `git diff --check` 通过，Markdown 围栏和文档链接无明显错误。
-- 运行包至少包含主程序、OpenCV 5、DirectML、NCNN 和 ONNX Runtime 必要 DLL。
-- 在干净目录解压运行包后，程序能启动并加载一个无需可选模型的案例配方。
+- 运行包至少包含主程序、OpenCV 5、DirectML、NCNN、ONNX Runtime，以及与构建工具集匹配的 x64 MSVC CRT/OpenMP DLL。打包脚本会从 `VCToolsRedistDir` 或 Visual Studio 官方 Redist 目录自动定位，并在 ZIP 校验阶段拒绝缺少 `msvcp140_atomic_wait.dll`、`vcruntime140_1.dll`、`vcomp140.dll` 等运行库的包。
+- 在干净目录解压运行包后，程序能启动，并通过「文件(F) → 打开配方...」加载一个无需可选模型的案例配方；多任务案例的同目录图片路径必须正常解析。
 - README、Roadmap、构建说明、第三方声明和本次状态快照已同步。
 
 ## 5. Release 命名建议

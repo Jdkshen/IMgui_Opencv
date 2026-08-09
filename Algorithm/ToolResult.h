@@ -48,6 +48,9 @@ struct ToolResultTiming
     float backendPreprocessMs = 0.0f;
     float backendInferenceMs = 0.0f;
     float backendPostprocessMs = 0.0f;
+    std::uint64_t inputBytes = 0;
+    std::uint64_t debugImageBytes = 0;
+    std::uint64_t resultDataBytes = 0;
 };
 
 struct ToolResult

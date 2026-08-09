@@ -107,34 +107,92 @@ namespace RotatedROI
 bool Transform::IsValid() const
 {
     return cropSize.width > 0 && cropSize.height > 0 &&
-           IsFiniteAffine(sourceToCrop) && IsFiniteAffine(cropToSource);
+           IsFiniteAffine(sourceToCrop) && IsFiniteAffine(cropToSource) &&
+           !domainMask.empty() && domainMask.type() == CV_8UC1 &&
+           domainMask.size() == cropSize;
 }
 
 bool Extract(const cv::Mat& source, const ROI& roi, cv::Mat& crop, Transform& transform)
 {
     crop.release();
     transform = {};
-    if (source.empty() || roi.type != ROI_TYPE_RECT ||
-        !std::isfinite(roi.angle) || roi.Width() < 1.0f || roi.Height() < 1.0f)
+    const bool isAreaROI = roi.type == ROI_TYPE_RECT ||
+                           roi.type == ROI_TYPE_CIRCLE ||
+                           roi.type == ROI_TYPE_POLYGON;
+    if (source.empty() || !isAreaROI || !std::isfinite(roi.angle) || roi.IsEmpty())
     {
         return false;
     }
 
-    const int width = (std::max)(1, cvRound(roi.Width()));
-    const int height = (std::max)(1, cvRound(roi.Height()));
-    const auto corners = roi.Corners();
-    const cv::Point2f sourcePoints[3] = {
-        {corners[0].x, corners[0].y},
-        {corners[1].x, corners[1].y},
-        {corners[3].x, corners[3].y}};
-    const cv::Point2f cropPoints[3] = {
-        {0.0f, 0.0f}, {static_cast<float>(width), 0.0f},
-        {0.0f, static_cast<float>(height)}};
-
-    transform.sourceToCrop = cv::getAffineTransform(sourcePoints, cropPoints);
+    if (roi.type == ROI_TYPE_RECT && std::abs(roi.angle) >= 0.0001f)
+    {
+        if (roi.Width() < 1.0f || roi.Height() < 1.0f)
+            return false;
+        const int width = (std::max)(1, cvRound(roi.Width()));
+        const int height = (std::max)(1, cvRound(roi.Height()));
+        const auto corners = roi.Corners();
+        const cv::Point2f sourcePoints[3] = {
+            {corners[0].x, corners[0].y},
+            {corners[1].x, corners[1].y},
+            {corners[3].x, corners[3].y}};
+        const cv::Point2f cropPoints[3] = {
+            {0.0f, 0.0f}, {static_cast<float>(width), 0.0f},
+            {0.0f, static_cast<float>(height)}};
+        transform.sourceToCrop = cv::getAffineTransform(sourcePoints, cropPoints);
+        transform.cropSize = cv::Size(width, height);
+    }
+    else
+    {
+        cv::Rect bounds = roi.ToCvRect() & cv::Rect(0, 0, source.cols, source.rows);
+        if (bounds.width <= 0 || bounds.height <= 0)
+            return false;
+        transform.sourceToCrop = cv::Mat::zeros(2, 3, CV_64F);
+        transform.sourceToCrop.at<double>(0, 0) = 1.0;
+        transform.sourceToCrop.at<double>(1, 1) = 1.0;
+        transform.sourceToCrop.at<double>(0, 2) = -static_cast<double>(bounds.x);
+        transform.sourceToCrop.at<double>(1, 2) = -static_cast<double>(bounds.y);
+        transform.cropSize = bounds.size();
+    }
     cv::invertAffineTransform(transform.sourceToCrop, transform.cropToSource);
-    transform.cropSize = cv::Size(width, height);
-    if (!transform.IsValid())
+
+    transform.domainMask = cv::Mat(transform.cropSize, CV_8UC1, cv::Scalar(0));
+    if (roi.type == ROI_TYPE_RECT)
+    {
+        transform.domainMask.setTo(255);
+    }
+    else if (roi.type == ROI_TYPE_CIRCLE)
+    {
+        const cv::Point2f center = MapPoint({roi.start.x, roi.start.y}, transform.sourceToCrop);
+        cv::circle(transform.domainMask,
+                   cv::Point(cvRound(center.x), cvRound(center.y)),
+                   (std::max)(1, cvRound(roi.CircleRadius())), cv::Scalar(255), cv::FILLED,
+                   cv::LINE_8);
+    }
+    else
+    {
+        std::vector<cv::Point> polygon;
+        polygon.reserve(roi.points.size());
+        for (const ImVec2& point : roi.points)
+        {
+            const cv::Point2f mapped = MapPoint({point.x, point.y}, transform.sourceToCrop);
+            polygon.emplace_back(cvRound(mapped.x), cvRound(mapped.y));
+        }
+        if (polygon.size() < 3)
+            return false;
+        cv::fillPoly(transform.domainMask, std::vector<std::vector<cv::Point>>{polygon},
+                     cv::Scalar(255), cv::LINE_8);
+    }
+
+    // HALCON reduce_domain uses the intersection with the image's existing domain.
+    // This matters for a rotated rectangle that extends beyond the source image.
+    cv::Mat sourceDomain(source.size(), CV_8UC1, cv::Scalar(255));
+    cv::Mat sourceDomainInCrop;
+    cv::warpAffine(sourceDomain, sourceDomainInCrop, transform.sourceToCrop,
+                   transform.cropSize, cv::INTER_NEAREST, cv::BORDER_CONSTANT,
+                   cv::Scalar(0));
+    cv::bitwise_and(transform.domainMask, sourceDomainInCrop, transform.domainMask);
+
+    if (!transform.IsValid() || cv::countNonZero(transform.domainMask) == 0)
     {
         transform = {};
         return false;
@@ -143,6 +201,41 @@ bool Extract(const cv::Mat& source, const ROI& roi, cv::Mat& crop, Transform& tr
     cv::warpAffine(source, crop, transform.sourceToCrop, transform.cropSize,
                    cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar::all(0));
     return !crop.empty();
+}
+
+cv::Mat BuildDomainMask(cv::Size imageSize, const std::vector<ROI>& rois)
+{
+    if (imageSize.width <= 0 || imageSize.height <= 0)
+        return {};
+    cv::Mat mask(imageSize, CV_8UC1, cv::Scalar(0));
+    for (const ROI& roi : rois)
+    {
+        if (roi.type == ROI_TYPE_RECT && !roi.IsEmpty())
+        {
+            const auto corners = roi.Corners();
+            std::vector<cv::Point> polygon;
+            polygon.reserve(corners.size());
+            for (const ImVec2& point : corners)
+                polygon.emplace_back(cvRound(point.x), cvRound(point.y));
+            cv::fillConvexPoly(mask, polygon, cv::Scalar(255), cv::LINE_8);
+        }
+        else if (roi.type == ROI_TYPE_CIRCLE && roi.CircleRadius() > 0.0f)
+        {
+            cv::circle(mask, cv::Point(cvRound(roi.start.x), cvRound(roi.start.y)),
+                       cvRound(roi.CircleRadius()), cv::Scalar(255), cv::FILLED,
+                       cv::LINE_8);
+        }
+        else if (roi.type == ROI_TYPE_POLYGON && roi.points.size() >= 3)
+        {
+            std::vector<cv::Point> polygon;
+            polygon.reserve(roi.points.size());
+            for (const ImVec2& point : roi.points)
+                polygon.emplace_back(cvRound(point.x), cvRound(point.y));
+            cv::fillPoly(mask, std::vector<std::vector<cv::Point>>{polygon},
+                         cv::Scalar(255), cv::LINE_8);
+        }
+    }
+    return cv::countNonZero(mask) > 0 ? mask : cv::Mat();
 }
 
 cv::Point2f MapPoint(const cv::Point2f& point, const cv::Mat& affine)
@@ -154,6 +247,33 @@ cv::Point2f MapPoint(const cv::Point2f& point, const cv::Mat& affine)
         static_cast<float>(affine.at<double>(1, 0) * point.x +
                            affine.at<double>(1, 1) * point.y +
                            affine.at<double>(1, 2)));
+}
+
+ROI ToCropROI(const ROI& roi, const Transform& transform)
+{
+    if (!transform.IsValid())
+        return roi;
+
+    ROI local = roi;
+    if (roi.type == ROI_TYPE_RECT)
+    {
+        local.start = ImVec2(0.0f, 0.0f);
+        local.end = ImVec2(static_cast<float>(transform.cropSize.width),
+                           static_cast<float>(transform.cropSize.height));
+        local.angle = 0.0f;
+        return local;
+    }
+
+    const cv::Point2f start = MapPoint({roi.start.x, roi.start.y}, transform.sourceToCrop);
+    const cv::Point2f end = MapPoint({roi.end.x, roi.end.y}, transform.sourceToCrop);
+    local.start = ImVec2(start.x, start.y);
+    local.end = ImVec2(end.x, end.y);
+    for (ImVec2& point : local.points)
+    {
+        const cv::Point2f mapped = MapPoint({point.x, point.y}, transform.sourceToCrop);
+        point = ImVec2(mapped.x, mapped.y);
+    }
+    return local;
 }
 
 ROI RestoreROI(const ROI& roi, const Transform& transform)
@@ -245,7 +365,8 @@ bool RestoreDebugImage(const cv::Mat& crop, const cv::Mat& source,
                        const Transform& transform, cv::Mat& restored)
 {
     restored.release();
-    if (crop.empty() || source.empty() || !transform.IsValid())
+    if (crop.empty() || source.empty() || !transform.IsValid() ||
+        crop.size() != transform.cropSize)
         return false;
 
     cv::Mat converted;
@@ -254,9 +375,8 @@ bool RestoreDebugImage(const cv::Mat& crop, const cv::Mat& source,
     cv::Mat warped(source.size(), source.type(), cv::Scalar::all(0));
     cv::warpAffine(converted, warped, transform.cropToSource, source.size(),
                    cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar::all(0));
-    cv::Mat cropMask(transform.cropSize, CV_8UC1, cv::Scalar(255));
     cv::Mat mask(source.size(), CV_8UC1, cv::Scalar(0));
-    cv::warpAffine(cropMask, mask, transform.cropToSource, source.size(),
+    cv::warpAffine(transform.domainMask, mask, transform.cropToSource, source.size(),
                    cv::INTER_NEAREST, cv::BORDER_CONSTANT, cv::Scalar(0));
     restored = source.clone();
     warped.copyTo(restored, mask);

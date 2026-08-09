@@ -1,10 +1,15 @@
 #include "CalibrationFitter.h"
 
 #include <opencv2/calib3d.hpp>
+#include <opencv2/imgproc.hpp>
+#include <opencv2/objdetect.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <iomanip>
+#include <numeric>
+#include <cctype>
 
 namespace
 {
@@ -98,6 +103,111 @@ CalibrationFitResult FitScale(const std::vector<CalibrationSample>& samples)
         return result;
     }
     return BuildFitResult(model, samples);
+}
+
+CalibrationFitResult FitChessboard(const std::vector<cv::Mat>& images,
+    cv::Size innerCorners, double squareSize, const CalibrationModel& baseModel,
+    double rmsAcceptance, double maxAcceptance)
+{
+    CalibrationFitResult result;
+    result.totalImageCount = images.size();
+    if (innerCorners.width < 2 || innerCorners.height < 2 || squareSize <= 0.0)
+    {
+        result.message = "棋盘格参数无效";
+        return result;
+    }
+
+    std::vector<cv::Point3f> objectTemplate;
+    objectTemplate.reserve(static_cast<std::size_t>(innerCorners.area()));
+    for (int row = 0; row < innerCorners.height; ++row)
+        for (int column = 0; column < innerCorners.width; ++column)
+            objectTemplate.emplace_back(static_cast<float>(column * squareSize),
+                static_cast<float>(row * squareSize), 0.0f);
+
+    std::vector<std::vector<cv::Point2f>> imagePoints;
+    std::vector<std::vector<cv::Point3f>> objectPoints;
+    cv::Size imageSize;
+    for (const cv::Mat& image : images)
+    {
+        if (image.empty())
+            continue;
+        if (imageSize.empty())
+            imageSize = image.size();
+        if (image.size() != imageSize)
+            continue;
+        cv::Mat gray;
+        if (image.channels() == 1)
+            gray = image;
+        else
+            cv::cvtColor(image, gray,
+                image.channels() == 4 ? cv::COLOR_BGRA2GRAY : cv::COLOR_BGR2GRAY);
+        std::vector<cv::Point2f> corners;
+        const bool found = cv::findChessboardCorners(gray, innerCorners, corners,
+            cv::CALIB_CB_ADAPTIVE_THRESH | cv::CALIB_CB_NORMALIZE_IMAGE |
+            cv::CALIB_CB_FAST_CHECK);
+        if (!found)
+            continue;
+        cv::cornerSubPix(gray, corners, cv::Size(5, 5), cv::Size(-1, -1),
+            cv::TermCriteria(cv::TermCriteria::EPS | cv::TermCriteria::COUNT,
+                40, 0.001));
+        imagePoints.push_back(std::move(corners));
+        objectPoints.push_back(objectTemplate);
+    }
+    if (imagePoints.size() < 3)
+    {
+        result.successfulImageCount = imagePoints.size();
+        result.message = "至少需要 3 张成功识别棋盘格的图像；当前成功 " +
+            std::to_string(imagePoints.size()) + " 张";
+        return result;
+    }
+
+    cv::Mat cameraMatrix = cv::Mat::eye(3, 3, CV_64F);
+    cv::Mat distortion = cv::Mat::zeros(1, 5, CV_64F);
+    std::vector<cv::Mat> rotations;
+    std::vector<cv::Mat> translations;
+    const double rms = cv::calibrateCamera(objectPoints, imagePoints, imageSize,
+        cameraMatrix, distortion, rotations, translations);
+    if (!std::isfinite(rms))
+    {
+        result.message = "棋盘格标定求解失败";
+        return result;
+    }
+
+    result.model = baseModel;
+    result.model.distortionEnabled = true;
+    result.model.fx = cameraMatrix.at<double>(0, 0);
+    result.model.fy = cameraMatrix.at<double>(1, 1);
+    result.model.cx = cameraMatrix.at<double>(0, 2);
+    result.model.cy = cameraMatrix.at<double>(1, 2);
+    result.model.k1 = distortion.at<double>(0, 0);
+    result.model.k2 = distortion.at<double>(0, 1);
+    result.model.p1 = distortion.at<double>(0, 2);
+    result.model.p2 = distortion.at<double>(0, 3);
+    result.model.k3 = distortion.total() > 4 ? distortion.at<double>(0, 4) : 0.0;
+    result.rmsError = rms;
+    result.maxError = 0.0;
+    for (std::size_t index = 0; index < imagePoints.size(); ++index)
+    {
+        std::vector<cv::Point2f> projected;
+        cv::projectPoints(objectPoints[index], rotations[index], translations[index],
+            cameraMatrix, distortion, projected);
+        const double error = cv::norm(imagePoints[index], projected, cv::NORM_L2) /
+            std::sqrt(static_cast<double>(projected.size()));
+        result.residuals.push_back(error);
+        result.maxError = (std::max)(result.maxError, error);
+    }
+    result.successfulImageCount = imagePoints.size();
+    if (!result.residuals.empty())
+    {
+        result.meanError = std::accumulate(result.residuals.begin(),
+            result.residuals.end(), 0.0) / result.residuals.size();
+    }
+    result.passedAcceptance = result.rmsError <= (std::max)(0.0, rmsAcceptance) &&
+        result.maxError <= (std::max)(0.0, maxAcceptance);
+    result.success = true;
+    result.message = "棋盘格标定完成：成功 " + std::to_string(imagePoints.size()) +
+        "/" + std::to_string(images.size()) + " 张";
+    return result;
 }
 
 CalibrationFitResult FitHomography(const std::vector<CalibrationSample>& samples,
@@ -283,5 +393,65 @@ bool LoadDocument(const char* path, CalibrationModel& model,
     model = loadedModel;
     samples = std::move(loadedSamples);
     return true;
+}
+
+bool SaveAcceptanceReport(const char* path, const CalibrationModel& model,
+    std::size_t totalImages, std::size_t successfulImages,
+    const std::vector<double>& imageErrors, double rmsError, double maxError,
+    double rmsAcceptance, double maxAcceptance)
+{
+    if (!path || !*path)
+        return false;
+    const bool passed = successfulImages >= 3 && rmsError <= rmsAcceptance &&
+        maxError <= maxAcceptance;
+    std::string filePath(path);
+    std::string extension;
+    const std::size_t dot = filePath.find_last_of('.');
+    if (dot != std::string::npos)
+    {
+        extension = filePath.substr(dot);
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+            [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+    }
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    if (!output)
+        return false;
+    output << std::setprecision(10);
+    if (extension == ".csv")
+    {
+        output << "metric,value,unit\n"
+               << "acceptance," << (passed ? "PASS" : "FAIL") << ",\n"
+               << "total_images," << totalImages << ",count\n"
+               << "successful_images," << successfulImages << ",count\n"
+               << "rms_error," << rmsError << ",px\n"
+               << "maximum_error," << maxError << ",px\n"
+               << "rms_limit," << rmsAcceptance << ",px\n"
+               << "maximum_limit," << maxAcceptance << ",px\n"
+               << "fx," << model.fx << ",px\n"
+               << "fy," << model.fy << ",px\n"
+               << "cx," << model.cx << ",px\n"
+               << "cy," << model.cy << ",px\n"
+               << "k1," << model.k1 << ",\n"
+               << "k2," << model.k2 << ",\n"
+               << "p1," << model.p1 << ",\n"
+               << "p2," << model.p2 << ",\n"
+               << "k3," << model.k3 << ",\n";
+        for (std::size_t index = 0; index < imageErrors.size(); ++index)
+            output << "image_" << (index + 1) << "_error," << imageErrors[index]
+                   << ",px\n";
+    }
+    else
+    {
+        nlohmann::json report = {
+            {"acceptance", passed ? "PASS" : "FAIL"},
+            {"totalImages", totalImages}, {"successfulImages", successfulImages},
+            {"rmsErrorPixels", rmsError}, {"maximumErrorPixels", maxError},
+            {"rmsAcceptancePixels", rmsAcceptance},
+            {"maximumAcceptancePixels", maxAcceptance},
+            {"imageErrorsPixels", imageErrors}, {"calibration", ToJson(model)}
+        };
+        output << report.dump(2);
+    }
+    return output.good();
 }
 }

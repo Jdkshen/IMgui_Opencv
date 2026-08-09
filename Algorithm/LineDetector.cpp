@@ -20,7 +20,8 @@ namespace LineDetector
         float dx = b.x - a.x, dy = b.y - a.y;
         return sqrt(dx * dx + dy * dy);
     }
-    std::vector<LineResult> Detect(const cv::Mat &img, const Params &p)
+    std::vector<LineResult> Detect(const cv::Mat &img, const Params &p,
+                                   const cv::Mat &domainMask)
     {
         using clock = std::chrono::high_resolution_clock;
         auto t0 = clock::now();
@@ -42,6 +43,11 @@ namespace LineDetector
             cv::cvtColor(crop, gray, crop.channels() == 4 ? cv::COLOR_BGRA2GRAY : cv::COLOR_BGR2GRAY);
         cv::Mat edges;
         cv::Canny(gray, edges, p.cannyLow, p.cannyHigh);
+        if (!domainMask.empty() && domainMask.type() == CV_8UC1 &&
+            domainMask.size() == img.size())
+        {
+            edges.setTo(0, domainMask(r) == 0);
+        }
         auto t1 = clock::now();
         std::vector<cv::Vec4i> raw;
         cv::HoughLinesP(edges, raw, 1, CV_PI / 180, 50, p.minLineLength, p.maxLineGap);

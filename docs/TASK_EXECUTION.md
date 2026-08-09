@@ -1,6 +1,6 @@
 # 任务执行说明
 
-> 文档同步日期：2026-07-27。本文中的“任务”主要指开发工作项；产品内任务分组见 [TASK_GROUPS.md](TASK_GROUPS.md)，PLC 触发时序见 [HARDWARE_INTEGRATION.md](HARDWARE_INTEGRATION.md)。
+> 文档同步日期：2026-08-09。本文中的“任务”主要指开发工作项；产品内任务分组见 [TASK_GROUPS.md](TASK_GROUPS.md)，PLC 触发时序见 [HARDWARE_INTEGRATION.md](HARDWARE_INTEGRATION.md)。
 
 
 本文档用于给开发者或 AI 助手派发项目任务。目标是让每个任务都有明确输入、修改范围、验收标准和文档同步要求。
@@ -19,13 +19,13 @@
 | P0-3 | 完整回归基线 | ✅ 已完成：完整 `RegressionTests.exe` 通过，不只运行专项参数 | `Test/RegressionTests.vcxproj`、`Test/regression_tests.cpp` |
 | P1-1 | 稳定工具身份 | ✅ `ToolInstance.toolId`、`ToolResult.sourceToolId`、配方字段和上游 ID 优先解析；UI 的活动工具/实时检测引用别名已删除 | `Core/ToolInstance.h`、`Core/ToolChainState.*`、`Core/ToolExecutor.cpp` |
 | P1-2 | ImageViewer/Core 边界 | ✅ ImageViewer 通过 `ImageState`、`FrameNavigation`、`ImageImportService`、`ImageViewState`、`ResultOverlayState` 获取图像、播放和叠加状态，不再直接调用视频/实时检测/工具链全局状态 | `UI/ImageViewer.*`、`Core/FrameNavigation.*`、`Core/ResultOverlayState.*` |
-| P1-3 | TemplateMatch 去全局状态 | ✅ `TemplateMatch` 已收缩为无 UI 的模板辅助，参数和模板资产归实例/Core 服务 | `Algorithm/TemplateMatch.*`、`Algorithm/TemplateMatchingTool.*` |
+| P1-3 | 模板匹配去全局状态 | ✅ `TemplateMatchingTool` 由实例参数和 Core 资产服务驱动，不再依赖全局 UI 状态 | `Algorithm/TemplateMatchingTool.*`、`Core/ToolAssetService.*` |
 | P1-4 | RecipeManager 轻量化 | ✅ `RecipeToolInstance` 改为 ToolInstance JSON + 资产快照组合 DTO；Save 不再反查实时工具链，Load 先解析资产再 Apply | `Core/RecipeManager.*`、`Core/ToolInstance.*` |
 | P1-5 | ROIEditorState | ✅ 绘制、拖拽、Handle、Hover、连续 ROI、runtimeId、工具绑定和测量 ROI 恢复/同步/回滚/删除均已迁入 Core | `Core/ROIEditorState.*`、`Core/ToolROIService.*`、`UI/ROIManager.*` |
 | P2-1 | Blob 与图像差分 | ✅ Blob 特征/筛选参数、聚合质量指标、统一命名测量项公差判定；图像差分参考图/差异区域/差异面积已完成 | `Algorithm/BlobTool.*`、`Algorithm/DifferenceTool.*`、`Core/ToolJudgement.*` |
 | P2-2 | 标定与 Fixture 产品化 | ✅ 多点 X/Y 比例拟合、透视拟合、逐点残差、RMS/最大残差、标定文件导入导出和 Fixture 坐标轴已接入；后续补镜头畸变标定 | `Core/CalibrationFitter.*`、`Core/CalibrationModel.*`、`Core/FixtureTransform.*`, `UI/ImageViewer.*` |
 | P2-3 | SPC 与报表 | ✅ 均值、标准差、Cp/Cpk、测量项选择、统计窗口、趋势图和 CSV 导出 | `Core/ResultExporter.*`、`Core/InspectionHistory.*`、`UI/StatsWindow.*` |
-| P3-1 | 工具链体验 | ✅ 启用/禁用、Core 工具剪贴板复制粘贴、稳定 ID、运行前检查、依赖显示/循环校验、分组筛选及批量启用/标签/失败策略 | `Core/ToolChainPreflight.*`、`Core/ToolChainValidator.*`、`Core/ToolChainState.*`、`UI/ToolsWindow.*` |
+| P3-1 | 工具链体验 | ✅ 启用/禁用、Core 工具剪贴板复制粘贴、稳定 ID、运行前检查、依赖显示/循环校验、分组筛选、批量操作、公共表单对齐、PNG 图标和独立流程图窗口 | `Core/ToolChainPreflight.*`、`Core/ToolChainValidator.*`、`Core/ToolChainState.*`、`UI/ToolsWindow.*`、`Renderer/FontManager.*` |
 | P3-2 | 多任务配方 | ✅ 最多 16 个任务；任务级单图/文件夹、相机优先、全部/当前任务/单步、最多 4 任务并行及任务结果总览均已接入并回归 | `Core/ToolChainState.*`、`Core/ToolController.*`、`UI/ToolsWindow.cpp`、`UI/RunResultWindow.cpp` |
 | P4-1 | 工程发布 | ✅ GitHub clean runner 已完成主程序、回归工程、完整测试、运行包校验和 artifact 上传；Git LFS 与可迁移案例资源已验证 | `.github/workflows/`、`scripts/`、`docs/RELEASE.md` |
 | P4-2 | 设备平台化 | ✅ 通用途径已完成并接入主程序：OpenCV/UVC/RTSP 相机、TCP、Modbus TCP、Modbus PLC、OPC UA；Modbus IO 表支持 Trigger/Busy/Done/OK/NG/Error/Heartbeat/ACK、单任务拍照触发、单点/整套握手测试、超时报警和指数退避重连；厂商专用 SDK 由目标设备适配 | `Core/HardwareRuntimeService.*`、`Core/HardwareSettingsService.*`、`Core/ModbusTcpAdapter.*`、`UI/HardwareWindow.*` |
@@ -136,6 +136,7 @@ ToolRegistry::RegisterName(14, "XXXX");
 - cv::Rect 是否越界
 - ImGui Begin/End 是否成对
 - GPU 上传：`ImageState::SetDebugImage()`、`ImageLoadController::ProcessPendingUpload()`
+- 异步版本校验：`ImageState::Version()` 只随 `SetImage()` 的新源图递增；`SetDebugImage()` 只发布工具处理图，不得把同一轮异步结果误判为输入变化
 - 工具结果：`ResultPublisher → gContext.unifiedResults → ResultOverlayState`
 ```
 

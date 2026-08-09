@@ -1,12 +1,15 @@
 #include "RunResultWindow.h"
 
 #include "DockSpaceHost.h"
-#include "../Core/DX12Context.h"
+#include "RunResultLayout.h"
 #include "../Core/HardwareRuntimeService.h"
 #include "../Core/ImageState.h"
+#include "../Core/ResultOverlayState.h"
 #include "../Core/ThemeManager.h"
 #include "../Core/ToolChainState.h"
 #include "../Core/ToolController.h"
+#include "../Core/ToolResultUtils.h"
+#include "../Core/UiPreferencesService.h"
 #include "../Renderer/PreviewTextureCache.h"
 #include "../include/imgui/imgui.h"
 
@@ -14,7 +17,8 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
-#include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -31,6 +35,7 @@ namespace
         bool executed = false;
         float timeMs = 0.0f;
         std::string summary;
+        std::string details;
     };
 
     struct RunResultSnapshot
@@ -93,24 +98,12 @@ namespace
             return;
         g_autoShowPreferenceLoaded = true;
 
-        std::ifstream input("ui_preferences.cfg");
-        std::string key;
-        int value = 1;
-        while (input >> key >> value)
-        {
-            if (key == "auto_show_result")
-            {
-                g_autoShow = value != 0;
-                break;
-            }
-        }
+        g_autoShow = UiPreferencesService::LoadAutoShowResult(true);
     }
 
     void SaveAutoShowPreference()
     {
-        std::ofstream output("ui_preferences.cfg", std::ios::trunc);
-        if (output)
-            output << "auto_show_result " << (g_autoShow ? 1 : 0) << "\n";
+        UiPreferencesService::SaveAutoShowResult(g_autoShow);
     }
 
     const char* StatusText(ToolResultStatus status)
@@ -177,25 +170,134 @@ namespace
     {
         if (result.skipped)
             return result.message.empty() ? "已跳过" : result.message;
-        if (!result.statusReason.empty())
-            return result.statusReason;
-        if (!result.message.empty())
-            return result.message;
+        std::string summary = result.statusReason.empty()
+            ? result.message : result.statusReason;
+        auto AppendCount = [&summary](const char* name, std::size_t count)
+        {
+            if (count == 0)
+                return;
+            if (!summary.empty())
+                summary += " · ";
+            summary += name;
+            summary += " ";
+            summary += std::to_string(count);
+        };
+        AppendCount("检测", result.detections.size());
+        AppendCount("区域", result.regions.size());
+        AppendCount("线段", result.lines.size());
+        AppendCount("文本", result.texts.size());
+        AppendCount("测量", result.measurements.size());
+        if (!result.debugImage.empty() || result.timing.debugImageBytes > 0)
+            AppendCount("处理图", 1);
+        return summary.empty() ? "执行完成" : summary;
+    }
 
-        char text[128]{};
+    std::string ResultDetails(const ToolResult& result)
+    {
+        std::ostringstream details;
+        details << "状态: " << (result.skipped ? "跳过" : StatusText(result.status));
+        if (!result.statusReason.empty())
+            details << "\n原因: " << result.statusReason;
+        if (!result.message.empty() && result.message != result.statusReason)
+            details << "\n说明: " << result.message;
+
+        const float wallMs = result.timing.wallMs > 0.0f
+            ? result.timing.wallMs
+            : result.timing.prepareMs + result.timing.executeMs + result.timing.publishMs;
+        details << std::fixed << std::setprecision(3)
+            << "\n耗时: 总 " << wallMs << " ms｜准备 " << result.timing.prepareMs
+            << "｜执行 " << result.timing.executeMs << "｜发布 "
+            << result.timing.publishMs;
+
+        constexpr std::size_t kMaximumDetailItems = 12;
+        const auto AppendOmitted = [&details](std::size_t size)
+        {
+            if (size > kMaximumDetailItems)
+                details << "\n  …其余 " << size - kMaximumDetailItems << " 项";
+        };
+
         if (!result.detections.empty())
-            std::snprintf(text, sizeof(text), "%zu 个检测目标", result.detections.size());
-        else if (!result.texts.empty())
-            std::snprintf(text, sizeof(text), "%zu 条识别文本", result.texts.size());
-        else if (!result.regions.empty())
-            std::snprintf(text, sizeof(text), "%zu 个区域", result.regions.size());
-        else if (!result.measurements.empty())
-            std::snprintf(text, sizeof(text), "%zu 项测量", result.measurements.size());
-        else if (!result.lines.empty())
-            std::snprintf(text, sizeof(text), "%zu 条线段", result.lines.size());
-        else
-            std::snprintf(text, sizeof(text), "执行完成");
-        return text;
+        {
+            details << "\n检测框 (" << result.detections.size() << ")";
+            for (std::size_t index = 0;
+                index < (std::min)(result.detections.size(), kMaximumDetailItems); ++index)
+            {
+                const auto& item = result.detections[index];
+                details << "\n  " << index + 1 << ". "
+                    << (item.label.empty() ? "未分类" : item.label)
+                    << "｜类别 " << item.classId << "｜分数 " << item.score
+                    << "｜框 [" << item.box.x << ',' << item.box.y << ','
+                    << item.box.width << ',' << item.box.height << ']';
+            }
+            AppendOmitted(result.detections.size());
+        }
+        if (!result.regions.empty())
+        {
+            details << "\n区域 (" << result.regions.size() << ")";
+            for (std::size_t index = 0;
+                index < (std::min)(result.regions.size(), kMaximumDetailItems); ++index)
+            {
+                const auto& item = result.regions[index];
+                const cv::Point2f center = item.center != cv::Point2f()
+                    ? item.center
+                    : cv::Point2f(item.bbox.x + item.bbox.width * 0.5f,
+                        item.bbox.y + item.bbox.height * 0.5f);
+                details << "\n  " << index + 1 << ". "
+                    << (item.label.empty() ? "未命名" : item.label)
+                    << "｜中心 (" << center.x << ',' << center.y << ")｜面积 "
+                    << item.area << "｜分数 " << item.score << "｜角度 " << item.angle;
+            }
+            AppendOmitted(result.regions.size());
+        }
+        if (!result.lines.empty())
+        {
+            details << "\n线段 (" << result.lines.size() << ")";
+            for (std::size_t index = 0;
+                index < (std::min)(result.lines.size(), kMaximumDetailItems); ++index)
+            {
+                const auto& item = result.lines[index];
+                details << "\n  " << index + 1 << ". (" << item.p1.x << ',' << item.p1.y
+                    << ")->(" << item.p2.x << ',' << item.p2.y << ")｜长度 "
+                    << item.length << "｜角度 " << item.angle;
+            }
+            AppendOmitted(result.lines.size());
+        }
+        if (!result.texts.empty())
+        {
+            details << "\n文本 (" << result.texts.size() << ")";
+            for (std::size_t index = 0;
+                index < (std::min)(result.texts.size(), kMaximumDetailItems); ++index)
+            {
+                const auto& item = result.texts[index];
+                details << "\n  " << index + 1 << ". "
+                    << (item.text.empty() ? "<空文本>" : item.text)
+                    << "｜置信度 " << item.confidence << "｜框 ["
+                    << item.box.x << ',' << item.box.y << ',' << item.box.width
+                    << ',' << item.box.height << ']';
+            }
+            AppendOmitted(result.texts.size());
+        }
+        if (!result.measurements.empty())
+        {
+            details << "\n测量 (" << result.measurements.size() << ")";
+            for (std::size_t index = 0;
+                index < (std::min)(result.measurements.size(), kMaximumDetailItems); ++index)
+            {
+                const auto& item = result.measurements[index];
+                details << "\n  " << index + 1 << ". "
+                    << (item.name.empty() ? "数值" : item.name) << " = "
+                    << item.value;
+                if (!item.unit.empty())
+                    details << ' ' << item.unit;
+            }
+            AppendOmitted(result.measurements.size());
+        }
+        if (!result.debugImage.empty())
+        {
+            details << "\n处理图: " << result.debugImage.cols << 'x'
+                << result.debugImage.rows << "｜通道 " << result.debugImage.channels();
+        }
+        return details.str();
     }
 
     RunResultSnapshot BuildSnapshot(const std::string* groupFilter = nullptr)
@@ -256,6 +358,7 @@ namespace
                 row.status = tool.lastResult.status;
                 row.skipped = tool.lastResult.skipped;
                 row.summary = ResultSummary(tool.lastResult);
+                row.details = ResultDetails(tool.lastResult);
                 aggregateResults.push_back(tool.lastResult);
                 ToolResult overlayResult = tool.lastResult;
                 overlayResult.debugImage.release();
@@ -371,6 +474,20 @@ namespace
         DrawCenteredText(text, color);
     }
 
+    void DrawResultSummary(const RunResultRow& row)
+    {
+        DrawCenteredTableText(row.summary.c_str(),
+            ImGui::GetStyleColorVec4(ImGuiCol_Text));
+        if (ImGui::IsItemHovered() && !row.details.empty())
+        {
+            ImGui::BeginTooltip();
+            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 42.0f);
+            ImGui::TextUnformatted(row.details.c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
+    }
+
     void DrawMetricCard(const char* id, const char* label, const char* value, const ImVec4& valueColor)
     {
         ImGui::PushStyleColor(ImGuiCol_ChildBg,
@@ -391,6 +508,38 @@ namespace
         ImGui::TableNextColumn();
         DrawCenteredText(label, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
         DrawCenteredText(value, valueColor);
+    }
+
+    void DrawDurationBadge(const char* text, float badgeWidth, float headerHeight)
+    {
+        constexpr float horizontalPadding = 12.0f;
+        const ImVec2 cursor = ImGui::GetCursorScreenPos();
+        const ImVec2 badgeMin(cursor.x, cursor.y + 1.0f);
+        const float badgeHeight = (std::max)(1.0f, headerHeight - 2.0f);
+        ImGui::InvisibleButton("##run_result_duration_badge",
+            ImVec2(badgeWidth, headerHeight));
+        const ImVec2 badgeMax(badgeMin.x + badgeWidth,
+            badgeMin.y + badgeHeight);
+        const ImVec2 textSize = ImGui::CalcTextSize(text);
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        const bool isDark = g_CurrentTheme == 0;
+        drawList->AddRectFilled(badgeMin, badgeMax,
+            ImGui::ColorConvertFloat4ToU32(isDark
+                ? ImVec4(0.08f, 0.24f, 0.20f, 1.0f)
+                : ImVec4(0.82f, 0.94f, 0.87f, 1.0f)),
+            badgeHeight * 0.5f);
+        drawList->AddRect(badgeMin, badgeMax,
+            ImGui::ColorConvertFloat4ToU32(isDark
+                ? ImVec4(0.18f, 0.68f, 0.42f, 1.0f)
+                : ImVec4(0.12f, 0.56f, 0.30f, 1.0f)),
+            badgeHeight * 0.5f, 0, 1.0f);
+        drawList->AddText(
+            ImVec2(badgeMin.x + horizontalPadding,
+                badgeMin.y + (badgeHeight - textSize.y) * 0.5f),
+            ImGui::ColorConvertFloat4ToU32(isDark
+                ? ImVec4(0.46f, 0.96f, 0.66f, 1.0f)
+                : ImVec4(0.05f, 0.42f, 0.20f, 1.0f)),
+            text);
     }
 
     void DrawResultImageThumbnail(float height, const RunResultSnapshot& snapshot);
@@ -474,12 +623,12 @@ namespace
             char totalText[16]{};
             char passText[16]{};
             char issueText[16]{};
-            char timeText[24]{};
+            const std::string timeText =
+                RunResultLayout::FormatDuration(snapshot.totalTimeMs);
             const int issueCount = snapshot.failCount + snapshot.errorCount + snapshot.pendingCount;
             std::snprintf(totalText, sizeof(totalText), "%zu", snapshot.rows.size());
             std::snprintf(passText, sizeof(passText), "%d", snapshot.passCount);
             std::snprintf(issueText, sizeof(issueText), "%d", issueCount);
-            std::snprintf(timeText, sizeof(timeText), "%.1fms", snapshot.totalTimeMs);
             if (ImGui::BeginTable("##task_metrics", 4, ImGuiTableFlags_SizingStretchSame))
             {
                 DrawCompactMetric("工具", totalText, ImGui::GetStyleColorVec4(ImGuiCol_Text));
@@ -487,7 +636,7 @@ namespace
                 DrawCompactMetric("异常", issueText, issueCount > 0
                     ? StatusTextColor(ToolResultStatus::Fail, isDark)
                     : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-                DrawCompactMetric("耗时", timeText, ImGui::GetStyleColorVec4(ImGuiCol_Text));
+                DrawCompactMetric("耗时", timeText.c_str(), ImGui::GetStyleColorVec4(ImGuiCol_Text));
                 ImGui::EndTable();
             }
 
@@ -513,11 +662,32 @@ namespace
         const float controlWidth = allowGroupWindows
             ? buttonWidth * 2.0f + actionGap : buttonWidth;
         const float headerHeight = ImGui::GetFrameHeight();
+        const bool hasDuration = completedTotalTimeMs >= 0.0f;
+        const std::string totalTimeText = hasDuration
+            ? "本轮总耗时  " + RunResultLayout::FormatDuration(completedTotalTimeMs)
+            : std::string{};
+        constexpr float badgePadding = 24.0f;
+        const float badgeWidth = hasDuration
+            ? ImGui::CalcTextSize(totalTimeText.c_str()).x + badgePadding : 0.0f;
+        const float timeColumnWidth = hasDuration ? badgeWidth + actionGap : 0.0f;
+        const float fullSideWidth = controlWidth + timeColumnWidth;
+        constexpr float minimumTitleWidth = 180.0f;
+        const bool compactDuration = hasDuration &&
+            ImGui::GetContentRegionAvail().x < fullSideWidth * 2.0f + minimumTitleWidth;
+        const bool inlineDuration = hasDuration && !compactDuration;
+        const int columnCount = inlineDuration ? 4 : 3;
 
-        if (ImGui::BeginTable("##run_result_header", 3, ImGuiTableFlags_SizingFixedFit))
+        if (ImGui::BeginTable("##run_result_header", columnCount,
+            ImGuiTableFlags_SizingFixedFit))
         {
-            ImGui::TableSetupColumn("##header_left", ImGuiTableColumnFlags_WidthFixed, controlWidth);
+            ImGui::TableSetupColumn("##header_left", ImGuiTableColumnFlags_WidthFixed,
+                inlineDuration ? fullSideWidth : controlWidth);
             ImGui::TableSetupColumn("##header_title", ImGuiTableColumnFlags_WidthStretch);
+            if (inlineDuration)
+            {
+                ImGui::TableSetupColumn("##header_time",
+                    ImGuiTableColumnFlags_WidthFixed, timeColumnWidth);
+            }
             ImGui::TableSetupColumn("##header_action", ImGuiTableColumnFlags_WidthFixed, controlWidth);
 
             ImGui::TableNextColumn();
@@ -532,58 +702,17 @@ namespace
                 ImVec2(titleMin.x + (titleWidth - titleSize.x) * 0.5f,
                     titleMin.y + (headerHeight - titleSize.y) * 0.5f),
                 ImGui::GetColorU32(ImGuiCol_Text), title);
-            if (completedTotalTimeMs >= 0.0f)
-            {
-                char totalTimeText[64]{};
-                if (completedTotalTimeMs >= 1000.0f)
-                {
-                    std::snprintf(totalTimeText, sizeof(totalTimeText),
-                        "本轮总耗时  %.3f s", completedTotalTimeMs / 1000.0f);
-                }
-                else
-                {
-                    std::snprintf(totalTimeText, sizeof(totalTimeText),
-                        "本轮总耗时  %.1f ms", completedTotalTimeMs);
-                }
-
-                const ImVec2 timeTextSize = ImGui::CalcTextSize(totalTimeText);
-                const float horizontalPadding = 12.0f;
-                const float badgeWidth = timeTextSize.x + horizontalPadding * 2.0f;
-                const float badgeHeight = headerHeight - 2.0f;
-                const float badgeX = titleMin.x + titleWidth - badgeWidth - 8.0f;
-                const float centeredTitleRight = titleMin.x +
-                    (titleWidth + titleSize.x) * 0.5f;
-                if (badgeX > centeredTitleRight + 18.0f)
-                {
-                    const ImVec2 badgeMin(badgeX, titleMin.y + 1.0f);
-                    const ImVec2 badgeMax(badgeX + badgeWidth,
-                        badgeMin.y + badgeHeight);
-                    ImDrawList* drawList = ImGui::GetWindowDrawList();
-                    const bool isDark = g_CurrentTheme == 0;
-                    drawList->AddRectFilled(badgeMin, badgeMax,
-                        ImGui::ColorConvertFloat4ToU32(isDark
-                            ? ImVec4(0.08f, 0.24f, 0.20f, 1.0f)
-                            : ImVec4(0.82f, 0.94f, 0.87f, 1.0f)),
-                        badgeHeight * 0.5f);
-                    drawList->AddRect(badgeMin, badgeMax,
-                        ImGui::ColorConvertFloat4ToU32(isDark
-                            ? ImVec4(0.18f, 0.68f, 0.42f, 1.0f)
-                            : ImVec4(0.12f, 0.56f, 0.30f, 1.0f)),
-                        badgeHeight * 0.5f, 0, 1.0f);
-                    drawList->AddText(
-                        ImVec2(badgeMin.x + horizontalPadding,
-                            badgeMin.y + (badgeHeight - timeTextSize.y) * 0.5f),
-                        ImGui::ColorConvertFloat4ToU32(isDark
-                            ? ImVec4(0.46f, 0.96f, 0.66f, 1.0f)
-                            : ImVec4(0.05f, 0.42f, 0.20f, 1.0f)),
-                        totalTimeText);
-                }
-            }
             if (ImGui::IsItemHovered())
             {
                 ImGui::SetTooltip("双击最大化/还原");
                 if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
                     toggleMaximized = true;
+            }
+
+            if (inlineDuration)
+            {
+                ImGui::TableNextColumn();
+                DrawDurationBadge(totalTimeText.c_str(), badgeWidth, headerHeight);
             }
 
             ImGui::TableNextColumn();
@@ -598,6 +727,13 @@ namespace
                 toggleMaximized = true;
 
             ImGui::EndTable();
+        }
+        if (compactDuration)
+        {
+            const float availableWidth = ImGui::GetContentRegionAvail().x;
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
+                (std::max)(0.0f, (availableWidth - badgeWidth) * 0.5f));
+            DrawDurationBadge(totalTimeText.c_str(), badgeWidth, headerHeight);
         }
         return toggleMaximized;
     }
@@ -618,12 +754,6 @@ namespace
         return colors[index % IM_ARRAYSIZE(colors)];
     }
 
-    bool OverlayLabelRectsOverlap(const ImVec4& left, const ImVec4& right)
-    {
-        return left.x < right.z && left.z > right.x &&
-            left.y < right.w && left.w > right.y;
-    }
-
     std::string TruncateOverlayLabel(const char* text, std::size_t maxBytes = 52)
     {
         std::string value = text ? text : "";
@@ -640,57 +770,28 @@ namespace
 
     void DrawOverlayLabel(ImDrawList* drawList, const ImVec2& anchor,
         const char* text, ImU32 color, const ImVec2& imageMin, const ImVec2& imageMax,
-        std::vector<ImVec4>& occupiedLabels)
+        std::vector<RunResultLayout::Rect>& occupiedLabels)
     {
         if (!text || !*text)
             return;
 
         const std::string displayText = TruncateOverlayLabel(text);
         const ImVec2 textSize = ImGui::CalcTextSize(displayText.c_str());
-        constexpr float padX = 4.0f;
-        constexpr float padY = 2.0f;
-        const float rowHeight = textSize.y + padY * 2.0f + 4.0f;
-        ImVec2 position{};
-        ImVec4 labelRect{};
-        bool placed = false;
-        for (int attempt = 0; attempt < 10; ++attempt)
-        {
-            if (attempt == 0)
-                position = ImVec2(anchor.x + 2.0f,
-                    anchor.y - textSize.y - padY * 2.0f - 2.0f);
-            else if (attempt == 1)
-                position = ImVec2(anchor.x + 2.0f, anchor.y + 3.0f);
-            else
-                position = ImVec2(anchor.x + 2.0f,
-                    imageMin.y + 4.0f + (attempt - 2) * rowHeight);
-
-            position.x = (std::clamp)(position.x, imageMin.x + padX + 2.0f,
-                (std::max)(imageMin.x + padX + 2.0f,
-                    imageMax.x - textSize.x - padX - 2.0f));
-            position.y = (std::clamp)(position.y, imageMin.y + padY + 2.0f,
-                (std::max)(imageMin.y + padY + 2.0f,
-                    imageMax.y - textSize.y - padY - 2.0f));
-            labelRect = ImVec4(
-                position.x - padX, position.y - padY,
-                position.x + textSize.x + padX, position.y + textSize.y + padY);
-
-            const bool overlaps = std::any_of(occupiedLabels.begin(), occupiedLabels.end(),
-                [&labelRect](const ImVec4& occupied)
-                {
-                    return OverlayLabelRectsOverlap(labelRect, occupied);
-                });
-            if (!overlaps)
-            {
-                placed = true;
-                break;
-            }
-        }
-        if (!placed)
+        const RunResultLayout::LabelPlacement placement =
+            RunResultLayout::PlaceOverlayLabel(
+                {anchor.x, anchor.y}, {textSize.x, textSize.y},
+                {imageMin.x, imageMin.y, imageMax.x, imageMax.y},
+                occupiedLabels);
+        if (!placement.placed)
             return;
 
-        occupiedLabels.push_back(labelRect);
-        const ImVec2 backgroundMin(labelRect.x, labelRect.y);
-        const ImVec2 backgroundMax(labelRect.z, labelRect.w);
+        occupiedLabels.push_back(placement.bounds);
+        const ImVec2 position(
+            placement.textPosition.x, placement.textPosition.y);
+        const ImVec2 backgroundMin(
+            placement.bounds.left, placement.bounds.top);
+        const ImVec2 backgroundMax(
+            placement.bounds.right, placement.bounds.bottom);
         drawList->AddRectFilled(backgroundMin, backgroundMax, IM_COL32(15, 18, 22, 225), 3.0f);
         drawList->AddRect(backgroundMin, backgroundMax, color, 3.0f, 0, 1.0f);
         drawList->AddText(position, IM_COL32(255, 255, 255, 255), displayText.c_str());
@@ -710,7 +811,8 @@ namespace
         };
 
         int labelCount = 0;
-        std::vector<ImVec4> occupiedLabels;
+        const int maximumLabels = ResultOverlayState::MaxVisibleLabels();
+        std::vector<RunResultLayout::Rect> occupiedLabels;
         drawList->PushClipRect(imageMin, imageMax, true);
         for (std::size_t resultIndex = 0;
             resultIndex < snapshot.overlayResults.size(); ++resultIndex)
@@ -719,8 +821,11 @@ namespace
             if (result.skipped)
                 continue;
             const ImU32 color = ResultOverlayColor(result, resultIndex);
-            const bool showDetectionLabels = result.texts.empty();
-            const bool showRegionLabels = result.texts.empty() && result.detections.empty();
+            const bool showLabels = ResultOverlayState::ShouldDrawResultLabels(result) &&
+                maximumLabels > 0;
+            const bool showDetectionLabels = showLabels && result.texts.empty();
+            const bool showRegionLabels = showLabels && result.texts.empty() &&
+                result.detections.empty();
 
             for (const ToolResult::Detection& detection : result.detections)
             {
@@ -730,15 +835,18 @@ namespace
                     static_cast<float>(detection.box.x + detection.box.width),
                     static_cast<float>(detection.box.y + detection.box.height));
                 drawList->AddRect(boxMin, boxMax, color, 2.0f, 0, thickness);
-                if (showDetectionLabels && labelCount++ < 24)
+                if (showDetectionLabels && labelCount++ < maximumLabels)
                 {
                     char label[192]{};
                     const char* name = detection.label.empty()
                         ? result.toolName.c_str() : detection.label.c_str();
+                    const std::string displayName =
+                        ResultOverlayState::BuildLabel(result, name);
                     if (detection.score > 0.0f)
-                        std::snprintf(label, sizeof(label), "%s  %.2f", name, detection.score);
+                        std::snprintf(label, sizeof(label), "%s  %.2f",
+                            displayName.c_str(), detection.score);
                     else
-                        std::snprintf(label, sizeof(label), "%s", name);
+                        std::snprintf(label, sizeof(label), "%s", displayName.c_str());
                     DrawOverlayLabel(drawList, boxMin, label, color,
                         imageMin, imageMax, occupiedLabels);
                 }
@@ -764,15 +872,20 @@ namespace
                 }
                 // Keep the geometry from every result type, while assigning labels
                 // to the most informative type only: text, detection, then region.
-                if (showRegionLabels && labelCount++ < 24)
+                if (showRegionLabels &&
+                    ResultOverlayState::ShouldDrawRegionLabel(result, region.label) &&
+                    labelCount++ < maximumLabels)
                 {
                     char label[192]{};
                     const char* name = region.label.empty()
                         ? result.toolName.c_str() : region.label.c_str();
+                    const std::string displayName =
+                        ResultOverlayState::BuildLabel(result, name);
                     if (region.score > 0.0f)
-                        std::snprintf(label, sizeof(label), "%s  %.2f", name, region.score);
+                        std::snprintf(label, sizeof(label), "%s  %.2f",
+                            displayName.c_str(), region.score);
                     else
-                        std::snprintf(label, sizeof(label), "%s", name);
+                        std::snprintf(label, sizeof(label), "%s", displayName.c_str());
                     DrawOverlayLabel(drawList, boxMin, label, color,
                         imageMin, imageMax, occupiedLabels);
                 }
@@ -786,15 +899,18 @@ namespace
                     static_cast<float>(text.box.x + text.box.width),
                     static_cast<float>(text.box.y + text.box.height));
                 drawList->AddRect(boxMin, boxMax, color, 2.0f, 0, thickness);
-                if (labelCount++ < 24)
+                if (showLabels && labelCount++ < maximumLabels)
                 {
                     char label[256]{};
                     const char* recognized = text.text.empty()
                         ? result.toolName.c_str() : text.text.c_str();
+                    const std::string displayText =
+                        ResultOverlayState::BuildLabel(result, recognized);
                     if (text.confidence > 0.0f)
-                        std::snprintf(label, sizeof(label), "%s  %.2f", recognized, text.confidence);
+                        std::snprintf(label, sizeof(label), "%s  %.2f",
+                            displayText.c_str(), text.confidence);
                     else
-                        std::snprintf(label, sizeof(label), "%s", recognized);
+                        std::snprintf(label, sizeof(label), "%s", displayText.c_str());
                     DrawOverlayLabel(drawList, boxMin, label, color,
                         imageMin, imageMax, occupiedLabels);
                 }
@@ -807,9 +923,11 @@ namespace
                 const ImVec2 p1 = ToScreen(static_cast<float>(line.p1.x), static_cast<float>(line.p1.y));
                 const ImVec2 p2 = ToScreen(static_cast<float>(line.p2.x), static_cast<float>(line.p2.y));
                 drawList->AddLine(p1, p2, color, thickness);
-                if (!lineLabelDrawn && labelCount++ < 24)
+                if (showLabels && !lineLabelDrawn && labelCount++ < maximumLabels)
                 {
-                    DrawOverlayLabel(drawList, p1, result.toolName.c_str(),
+                    const std::string lineLabel =
+                        BuildToolResultLineOverlayLabel(result);
+                    DrawOverlayLabel(drawList, p1, lineLabel.c_str(),
                         color, imageMin, imageMax, occupiedLabels);
                     lineLabelDrawn = true;
                 }
@@ -821,7 +939,7 @@ namespace
     void DrawResultImageThumbnail(float height, const RunResultSnapshot& snapshot)
     {
         const PreviewTextureView texture = GetSnapshotTexture(snapshot, 1024);
-        const bool imageReady = texture.ready && texture.gpuHandle.ptr != 0 &&
+        const bool imageReady = texture.ready && texture.textureId != ImTextureID_Invalid &&
             !snapshot.resultImage.empty();
         const ImVec4 previewBackground = g_CurrentTheme == 0
             ? ImVec4(0.035f, 0.043f, 0.050f, 1.0f)
@@ -851,7 +969,7 @@ namespace
             const ImVec2 imageMax(imageMin.x + imageSize.x, imageMin.y + imageSize.y);
 
             drawList->PushClipRect(canvasMin, canvasMax, true);
-            drawList->AddImage((ImTextureID)texture.gpuHandle.ptr, imageMin, imageMax);
+            drawList->AddImage(texture.textureId, imageMin, imageMax);
             drawList->AddRect(imageMin, imageMax,
                 ImGui::ColorConvertFloat4ToU32(
                     g_CurrentTheme == 0 ? ImVec4(0.30f, 0.34f, 0.38f, 1.0f)
@@ -882,7 +1000,7 @@ namespace
         const PreviewTextureView texture = GetSnapshotTexture(snapshot, 2048);
         const int sourceWidth = snapshot.resultImage.cols;
         const int sourceHeight = snapshot.resultImage.rows;
-        const bool imageReady = texture.ready && texture.gpuHandle.ptr != 0 &&
+        const bool imageReady = texture.ready && texture.textureId != ImTextureID_Invalid &&
             sourceWidth > 0 && sourceHeight > 0;
         const ImVec4 previewBackground = g_CurrentTheme == 0
             ? ImVec4(0.055f, 0.065f, 0.075f, 1.0f)
@@ -1016,7 +1134,7 @@ namespace
 
             ImDrawList* drawList = ImGui::GetWindowDrawList();
             drawList->PushClipRect(canvasMin, canvasMax, true);
-            drawList->AddImage((ImTextureID)texture.gpuHandle.ptr, imageMin, imageMax);
+            drawList->AddImage(texture.textureId, imageMin, imageMax);
             drawList->AddRect(imageMin, imageMax,
                 ImGui::ColorConvertFloat4ToU32(
                     g_CurrentTheme == 0 ? ImVec4(0.30f, 0.34f, 0.38f, 1.0f)
@@ -1087,12 +1205,12 @@ namespace
         char totalText[24]{};
         char passText[24]{};
         char issueText[24]{};
-        char timeText[32]{};
+        const std::string timeText =
+            RunResultLayout::FormatDuration(snapshot.totalTimeMs);
         const int issueCount = snapshot.failCount + snapshot.errorCount + snapshot.pendingCount;
         std::snprintf(totalText, sizeof(totalText), "%zu", snapshot.rows.size());
         std::snprintf(passText, sizeof(passText), "%d", snapshot.passCount);
         std::snprintf(issueText, sizeof(issueText), "%d", issueCount);
-        std::snprintf(timeText, sizeof(timeText), "%.1f ms", snapshot.totalTimeMs);
         if (ImGui::BeginTable("##expanded_metrics", 4, ImGuiTableFlags_SizingStretchSame))
         {
             ImGui::TableNextColumn();
@@ -1106,7 +1224,7 @@ namespace
                 issueCount > 0 ? StatusTextColor(ToolResultStatus::Fail, isDark)
                                : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
             ImGui::TableNextColumn();
-            DrawMetricCard("##expanded_time", "总耗时", timeText,
+            DrawMetricCard("##expanded_time", "总耗时", timeText.c_str(),
                 ImGui::GetStyleColorVec4(ImGuiCol_Text));
             ImGui::EndTable();
         }
@@ -1157,11 +1275,12 @@ namespace
                     : StatusTextColor(row.status, isDark);
                 DrawCenteredTableText(resultText, resultColor);
                 ImGui::TableNextColumn();
-                char rowTimeText[32]{};
-                std::snprintf(rowTimeText, sizeof(rowTimeText), "%.2f ms", row.timeMs);
-                DrawCenteredTableText(rowTimeText, ImGui::GetStyleColorVec4(ImGuiCol_Text));
+                const std::string rowTimeText = row.executed && !row.skipped
+                    ? RunResultLayout::FormatDuration(row.timeMs, 2)
+                    : std::string("--");
+                DrawCenteredTableText(rowTimeText.c_str(), ImGui::GetStyleColorVec4(ImGuiCol_Text));
                 ImGui::TableNextColumn();
-                DrawCenteredTableText(row.summary.c_str(), ImGui::GetStyleColorVec4(ImGuiCol_Text));
+                DrawResultSummary(row);
             }
             ImGui::EndTable();
         }
@@ -1233,9 +1352,11 @@ namespace
             : std::string("任务结果总览");
 
         ImGuiViewport* viewport = ImGui::GetMainViewport();
+        const RunResultLayout::Size normalLayoutSize =
+            RunResultLayout::CalculateDashboardWindowSize(
+                viewport->WorkSize.x, viewport->WorkSize.y);
         const ImVec2 normalSize(
-            (std::clamp)(viewport->WorkSize.x * 0.96f, 900.0f, 1760.0f),
-            (std::clamp)(viewport->WorkSize.y * 0.92f, 620.0f, 1040.0f));
+            normalLayoutSize.width, normalLayoutSize.height);
         if (g_groupDashboardView.maximized)
         {
             ImGui::SetNextWindowPos(viewport->WorkPos, ImGuiCond_Always);
@@ -1326,19 +1447,19 @@ namespace
             }
             else
             {
-                const float availableWidth = ImGui::GetContentRegionAvail().x;
-                const int columns = visibleGroups.size() == 1 ? 1
-                    : (availableWidth >= 1080.0f ? 4 : 2);
-                // 卡片保持足够高度留给图像；任务较多时由外层区域纵向滚动。
-                // 不再为了把所有任务塞进一屏而压缩卡片内容。
-                constexpr float cardHeight = 360.0f;
-                if (ImGui::BeginTable("##task_dashboard_table", columns,
+                const float rowSpacing = ImGui::GetStyle().ItemSpacing.y;
+                const RunResultLayout::DashboardGrid layout =
+                    RunResultLayout::CalculateDashboardGrid(
+                        visibleGroups.size(), ImGui::GetContentRegionAvail().x,
+                        gridHeight, rowSpacing);
+                if (ImGui::BeginTable("##task_dashboard_table", layout.columns,
                     ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_PadOuterX))
                 {
                     for (GroupResultWindow* groupWindow : visibleGroups)
                     {
                         ImGui::TableNextColumn();
-                        if (DrawGroupSummaryCard(*groupWindow, cardHeight - 4.0f))
+                        if (DrawGroupSummaryCard(
+                            *groupWindow, layout.cardHeight - 4.0f))
                             g_expandedGroupId = groupWindow->id;
                     }
                     ImGui::EndTable();
@@ -1395,9 +1516,14 @@ void SetRunResultWindowVisible(bool visible)
 {
     if (visible && !g_snapshot.valid)
         return;
-    g_mainView.visible = visible;
     if (visible)
     {
+        if (!CollectTaskGroups().empty())
+        {
+            OpenGroupResultWindows();
+            return;
+        }
+        g_mainView.visible = true;
         g_expandedGroupId = 0;
         g_groupDashboardView.visible = false;
         for (GroupResultWindow& groupWindow : g_groupWindows)
@@ -1405,6 +1531,7 @@ void SetRunResultWindowVisible(bool visible)
     }
     else
     {
+        g_mainView.visible = false;
         g_expandedGroupId = 0;
         g_groupDashboardView.visible = false;
         for (GroupResultWindow& groupWindow : g_groupWindows)
@@ -1441,18 +1568,15 @@ void ShowRunResultWindow()
     {
         g_seenBatchSerial = completedSerial;
         CaptureSnapshots();
-        const bool groupModeVisible = g_groupDashboardView.visible ||
-            std::any_of(g_groupWindows.begin(), g_groupWindows.end(),
-                [](const GroupResultWindow& window) { return window.view.visible; });
         if (g_autoShow)
         {
-            const bool completedAllTasks = !ToolController::WasLastRunTaskGroup();
-            if (completedAllTasks && !CollectTaskGroups().empty())
+            if (!CollectTaskGroups().empty())
             {
-                // 分组配方执行全部后直接进入任务总览，省去中间汇总窗口。
+                // 只要配方存在任务，自动展示与菜单入口都直接进入任务总览。
+                // 单任务执行也不先打开“全部工具合成结果”。
                 OpenGroupResultWindows();
             }
-            else if (!groupModeVisible)
+            else
             {
                 g_mainView.visible = true;
             }
@@ -1579,12 +1703,12 @@ void ShowRunResultWindow()
 
     char passText[32]{};
     char failText[32]{};
-    char timeText[32]{};
+    const std::string timeText =
+        RunResultLayout::FormatDuration(snapshot.totalTimeMs);
     char totalText[32]{};
     std::snprintf(passText, sizeof(passText), "%d", snapshot.passCount);
     const int issueCount = snapshot.failCount + snapshot.errorCount + snapshot.pendingCount;
     std::snprintf(failText, sizeof(failText), "%d", issueCount);
-    std::snprintf(timeText, sizeof(timeText), "%.1f ms", snapshot.totalTimeMs);
     std::snprintf(totalText, sizeof(totalText), "%zu", snapshot.rows.size());
 
     if (ImGui::BeginTable("##run_result_metrics", 4, ImGuiTableFlags_SizingStretchSame))
@@ -1599,7 +1723,7 @@ void ShowRunResultWindow()
                 ? StatusTextColor(ToolResultStatus::Fail, isDark)
                 : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
         ImGui::TableNextColumn();
-        DrawMetricCard("##metric_time", "总耗时", timeText, ImGui::GetStyleColorVec4(ImGuiCol_Text));
+        DrawMetricCard("##metric_time", "总耗时", timeText.c_str(), ImGui::GetStyleColorVec4(ImGuiCol_Text));
         ImGui::EndTable();
     }
 
@@ -1647,11 +1771,12 @@ void ShowRunResultWindow()
             else
                 DrawCenteredTableText(StatusText(row.status), StatusTextColor(row.status, isDark));
             ImGui::TableNextColumn();
-            char rowTimeText[32]{};
-            std::snprintf(rowTimeText, sizeof(rowTimeText), "%.2f ms", row.timeMs);
-            DrawCenteredTableText(rowTimeText, ImGui::GetStyleColorVec4(ImGuiCol_Text));
+            const std::string rowTimeText = row.executed && !row.skipped
+                ? RunResultLayout::FormatDuration(row.timeMs, 2)
+                : std::string("--");
+            DrawCenteredTableText(rowTimeText.c_str(), ImGui::GetStyleColorVec4(ImGuiCol_Text));
             ImGui::TableNextColumn();
-            DrawCenteredTableText(row.summary.c_str(), ImGui::GetStyleColorVec4(ImGuiCol_Text));
+            DrawResultSummary(row);
         }
         ImGui::EndTable();
     }

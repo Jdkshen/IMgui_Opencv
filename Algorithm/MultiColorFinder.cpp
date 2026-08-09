@@ -4,6 +4,7 @@
 #include "../Core/ImageUtils.h"
 #include "../Core/VisionContext.h"
 #include "../Core/ImageState.h"
+#include "ToolImageUtils.h"
 #include <chrono>
 #include <algorithm>
 #include <cmath>
@@ -79,6 +80,11 @@ ToolResult MultiColorFinder::Execute(VisionContext& ctx)
         result.message = "请先加载图片";
         return result;
     }
+    if (!ToolImageUtils::ValidateAreaContext(ctx, useROI, result.message))
+    {
+        result.success = false;
+        return result;
+    }
 
     // ---- 主图 + 参考图预处理（灰度/二值化） ----
     cv::Mat refProc = refImage.clone();
@@ -125,18 +131,10 @@ ToolResult MultiColorFinder::Execute(VisionContext& ctx)
 
     auto t0 = std::chrono::high_resolution_clock::now();
 
-    // 确定搜索区域 — HasROI要求selectedROI>=0，未选中时自动用第一个ROI
-    cv::Rect searchRect(0, 0, src.cols, src.rows);
-    if (useROI)
-    {
-        if (ctx.HasROI())
-            searchRect = ctx.GetActiveROIRect() & cv::Rect(0, 0, src.cols, src.rows);
-        else if (!ctx.rois.empty())
-        {
-            // 有ROI但未选中：自动取第一个
-            searchRect = ctx.rois[0].ToCvRect() & cv::Rect(0, 0, src.cols, src.rows);
-        }
-    }
+    // Bound area ROI are represented by one crop/domain, including multi-ROI unions.
+    cv::Rect searchRect = ToolImageUtils::PrimaryContextRect(ctx, useROI);
+    if (searchRect.empty())
+        searchRect = cv::Rect(0, 0, src.cols, src.rows);
 
     // 计算所有点的包围盒，用于边界检查
     int minX = 0, maxX = 0, minY = 0, maxY = 0;
@@ -156,6 +154,14 @@ ToolResult MultiColorFinder::Execute(VisionContext& ctx)
     prepared.reserve(ptsProc.size());
     for (const auto& pt : ptsProc)
         prepared.push_back({pt.x, pt.y, pt.b, pt.g, pt.r, pt.tolerance});
+    // Search coordinates below are absolute image coordinates.
+    const cv::Mat domainMask = ToolImageUtils::FullContextMask(ctx, useROI);
+    auto isInDomain = [&](int x, int y)
+    {
+        return domainMask.empty() ||
+            ((unsigned)x < (unsigned)domainMask.cols &&
+             (unsigned)y < (unsigned)domainMask.rows && domainMask.at<uchar>(y, x) != 0);
+    };
 
     // 遍历搜索区域
     int startY = std::max(searchRect.y, searchRect.y - minY);
@@ -179,6 +185,8 @@ ToolResult MultiColorFinder::Execute(VisionContext& ctx)
                 const auto& pt = prepared[pi];
                 int px = x + pt.x, py = y + pt.y;
                 if ((unsigned)px >= (unsigned)src.cols || (unsigned)py >= (unsigned)src.rows)
+                    break;
+                if (!isInDomain(px, py))
                     break;
                 const uint8_t* pixel = src.ptr<uint8_t>(py) + (size_t)px * nc;
                 if (nc >= 3 ? IsColorMatchFast(pixel, pt) : std::abs((int)pixel[0] - pt.b) <= pt.tolerance)
@@ -204,6 +212,7 @@ ToolResult MultiColorFinder::Execute(VisionContext& ctx)
                     const auto& pt = prepared[pi];
                     int px = x + pt.x, py = y + pt.y;
                     if ((unsigned)px >= (unsigned)src.cols || (unsigned)py >= (unsigned)src.rows) continue;
+                    if (!isInDomain(px, py)) continue;
                     const uint8_t* pixel = src.ptr<uint8_t>(py) + (size_t)px * nc;
                     if (nc >= 3 ? IsColorMatchFast(pixel, pt) : std::abs((int)pixel[0] - pt.b) <= pt.tolerance) exact++;
                 }
@@ -276,6 +285,8 @@ ToolResult MultiColorFinder::Execute(VisionContext& ctx)
                 int px = anchor.x + pt.x, py = anchor.y + pt.y;
                 if ((unsigned)px < (unsigned)src.cols && (unsigned)py < (unsigned)src.rows)
                 {
+                    if (!isInDomain(px, py))
+                        continue;
                     const uint8_t* pixel = src.ptr<uint8_t>(py) + px * nc;
                     if (IsColorMatch(pixel, nc, pt)) { ptMask[pi] = true; matchedCnt++; }
                 }

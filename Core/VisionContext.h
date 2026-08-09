@@ -34,6 +34,11 @@ struct VisionContext
     // ---- ROI ----
     std::vector<ROI> rois;      // 本次执行的 ROI 快照
     int selectedROI = -1;       // 本次执行的选中 ROI 快照
+    // HALCON 风格定义域。非空时为 CV_8UC1，尺寸与 image 一致；0 表示域外。
+    // 图像矩阵尺寸保持不变，算法只在该定义域内产生有效结果。
+    cv::Mat domainMask;
+    int roiResultPolicy = 0;
+    float roiMinimumCoverage = 0.5f;
 
     // ---- 模板 ----
     cv::Mat frozenTemplate;     // 冻结模板（曾为 g_FrozenTemplate）
@@ -100,6 +105,9 @@ struct VisionContext
         immutableImageOwner.reset();
         immutableOriginalOwner.reset();
         frozenTemplate.release();
+        domainMask.release();
+        roiResultPolicy = 0;
+        roiMinimumCoverage = 0.5f;
         rois.clear();
         selectedROI = -1;
         ClearUnifiedResults();

@@ -1,0 +1,606 @@
+{
+    "version":  5,
+    "name":  "16任务中文完整案例",
+    "imagePath":  "../images/零件缺陷.jpg",
+    "runtime":  {
+                    "loopIntervalMs":  300
+                },
+    "rois":  [
+
+             ],
+    "taskGroups":  [
+                       {
+                           "name":  "任务01-原图预览",
+                           "enabled":  true,
+                           "imagePath":  "../images/零件缺陷.jpg",
+                           "imageFolderPath":  "",
+                           "imageFolderIndex":  -1,
+                           "imageFolderCount":  0,
+                           "cameraIndex":  -1,
+                           "cameraPreferred":  false
+                       },
+                       {
+                           "name":  "任务02-基础边缘",
+                           "enabled":  true,
+                           "imagePath":  "../images/零件缺陷.jpg",
+                           "imageFolderPath":  "",
+                           "imageFolderIndex":  -1,
+                           "imageFolderCount":  0,
+                           "cameraIndex":  -1,
+                           "cameraPreferred":  false
+                       },
+                       {
+                           "name":  "任务03-灰度阈值",
+                           "enabled":  true,
+                           "imagePath":  "../images/零件缺陷.jpg",
+                           "imageFolderPath":  "",
+                           "imageFolderIndex":  -1,
+                           "imageFolderCount":  0,
+                           "cameraIndex":  -1,
+                           "cameraPreferred":  false
+                       },
+                       {
+                           "name":  "任务04-清晰二维码",
+                           "enabled":  true,
+                           "imagePath":  "../images/清晰二维码.png",
+                           "imageFolderPath":  "",
+                           "imageFolderIndex":  -1,
+                           "imageFolderCount":  0,
+                           "cameraIndex":  -1,
+                           "cameraPreferred":  false
+                       },
+                       {
+                           "name":  "任务05-Blob区域",
+                           "enabled":  true,
+                           "imagePath":  "../images/零件缺陷.jpg",
+                           "imageFolderPath":  "",
+                           "imageFolderIndex":  -1,
+                           "imageFolderCount":  0,
+                           "cameraIndex":  -1,
+                           "cameraPreferred":  false
+                       },
+                       {
+                           "name":  "任务06-轮廓分析",
+                           "enabled":  true,
+                           "imagePath":  "../images/零件缺陷.jpg",
+                           "imageFolderPath":  "",
+                           "imageFolderIndex":  -1,
+                           "imageFolderCount":  0,
+                           "cameraIndex":  -1,
+                           "cameraPreferred":  false
+                       },
+                       {
+                           "name":  "任务07-形态学开运算",
+                           "enabled":  true,
+                           "imagePath":  "../images/零件缺陷.jpg",
+                           "imageFolderPath":  "",
+                           "imageFolderIndex":  -1,
+                           "imageFolderCount":  0,
+                           "cameraIndex":  -1,
+                           "cameraPreferred":  false
+                       },
+                       {
+                           "name":  "任务08-直线检测",
+                           "enabled":  true,
+                           "imagePath":  "../images/清晰二维码.png",
+                           "imageFolderPath":  "",
+                           "imageFolderIndex":  -1,
+                           "imageFolderCount":  0,
+                           "cameraIndex":  -1,
+                           "cameraPreferred":  false
+                       },
+                       {
+                           "name":  "任务09-颜色统计",
+                           "enabled":  true,
+                           "imagePath":  "../images/零件缺陷.jpg",
+                           "imageFolderPath":  "",
+                           "imageFolderIndex":  -1,
+                           "imageFolderCount":  0,
+                           "cameraIndex":  -1,
+                           "cameraPreferred":  false
+                       },
+                       {
+                           "name":  "任务10-中文OCR",
+                           "enabled":  true,
+                           "imagePath":  "../images/中文文字.jpg",
+                           "imageFolderPath":  "",
+                           "imageFolderIndex":  -1,
+                           "imageFolderCount":  0,
+                           "cameraIndex":  -1,
+                           "cameraPreferred":  false
+                       },
+                       {
+                           "name":  "任务11-复杂二维码",
+                           "enabled":  true,
+                           "imagePath":  "../images/复杂二维码.png",
+                           "imageFolderPath":  "",
+                           "imageFolderIndex":  -1,
+                           "imageFolderCount":  0,
+                           "cameraIndex":  -1,
+                           "cameraPreferred":  false
+                       },
+                       {
+                           "name":  "任务12-两点距离",
+                           "enabled":  true,
+                           "imagePath":  "../images/清晰二维码.png",
+                           "imageFolderPath":  "",
+                           "imageFolderIndex":  -1,
+                           "imageFolderCount":  0,
+                           "cameraIndex":  -1,
+                           "cameraPreferred":  false
+                       },
+                       {
+                           "name":  "任务13-线线角度",
+                           "enabled":  true,
+                           "imagePath":  "../images/清晰二维码.png",
+                           "imageFolderPath":  "",
+                           "imageFolderIndex":  -1,
+                           "imageFolderCount":  0,
+                           "cameraIndex":  -1,
+                           "cameraPreferred":  false
+                       },
+                       {
+                           "name":  "任务14-形态学闭运算",
+                           "enabled":  true,
+                           "imagePath":  "../images/零件缺陷.jpg",
+                           "imageFolderPath":  "",
+                           "imageFolderIndex":  -1,
+                           "imageFolderCount":  0,
+                           "cameraIndex":  -1,
+                           "cameraPreferred":  false
+                       },
+                       {
+                           "name":  "任务15-高阈值分割",
+                           "enabled":  true,
+                           "imagePath":  "../images/零件缺陷.jpg",
+                           "imageFolderPath":  "",
+                           "imageFolderIndex":  -1,
+                           "imageFolderCount":  0,
+                           "cameraIndex":  -1,
+                           "cameraPreferred":  false
+                       },
+                       {
+                           "name":  "任务16-强边缘",
+                           "enabled":  true,
+                           "imagePath":  "../images/零件缺陷.jpg",
+                           "imageFolderPath":  "",
+                           "imageFolderIndex":  -1,
+                           "imageFolderCount":  0,
+                           "cameraIndex":  -1,
+                           "cameraPreferred":  false
+                       }
+                   ],
+    "tools":  [
+                  {
+                      "type":  12,
+                      "toolId":  16001,
+                      "enabled":  true,
+                      "label":  "01-原图",
+                      "groupName":  "任务01-原图预览",
+                      "collapsed":  false,
+                      "inputSourceMode":  2,
+                      "showResultLabels":  true,
+                      "useSearchROI":  false,
+                      "searchROIs":  [
+
+                                     ],
+                      "judgement":  {
+                                        "enabled":  false,
+                                        "stopOnFailure":  false
+                                    }
+                  },
+                  {
+                      "type":  0,
+                      "toolId":  16002,
+                      "enabled":  true,
+                      "label":  "02-边缘检测",
+                      "groupName":  "任务02-基础边缘",
+                      "collapsed":  false,
+                      "inputSourceMode":  2,
+                      "showResultLabels":  true,
+                      "useSearchROI":  false,
+                      "searchROIs":  [
+
+                                     ],
+                      "judgement":  {
+                                        "enabled":  false,
+                                        "stopOnFailure":  false
+                                    },
+                      "cannyLow":  50,
+                      "edgeUseGray":  true,
+                      "cannyHigh":  150
+                  },
+                  {
+                      "type":  3,
+                      "toolId":  16003,
+                      "enabled":  true,
+                      "label":  "03-阈值调试",
+                      "groupName":  "任务03-灰度阈值",
+                      "collapsed":  false,
+                      "inputSourceMode":  2,
+                      "showResultLabels":  true,
+                      "useSearchROI":  false,
+                      "searchROIs":  [
+
+                                     ],
+                      "judgement":  {
+                                        "enabled":  false,
+                                        "stopOnFailure":  false
+                                    },
+                      "dbgEnableBlur":  true,
+                      "dbgEnableThresh":  true,
+                      "dbgUseGray":  true,
+                      "dbgBlurSize":  5,
+                      "dbgThreshold":  128
+                  },
+                  {
+                      "type":  14,
+                      "toolId":  16004,
+                      "enabled":  true,
+                      "label":  "04-二维码识别",
+                      "groupName":  "任务04-清晰二维码",
+                      "collapsed":  false,
+                      "inputSourceMode":  2,
+                      "showResultLabels":  true,
+                      "useSearchROI":  false,
+                      "searchROIs":  [
+
+                                     ],
+                      "judgement":  {
+                                        "enabled":  false,
+                                        "stopOnFailure":  false
+                                    },
+                      "qrUseROI":  false,
+                      "qrEngine":  0,
+                      "qrMinSize":  16,
+                      "qrFormatMask":  31,
+                      "qrFilterDuplicates":  true,
+                      "qrDetectMulti":  true,
+                      "qrEnhance":  true
+                  },
+                  {
+                      "type":  2,
+                      "toolId":  16005,
+                      "enabled":  true,
+                      "label":  "05-Blob分析",
+                      "groupName":  "任务05-Blob区域",
+                      "collapsed":  false,
+                      "inputSourceMode":  2,
+                      "showResultLabels":  true,
+                      "useSearchROI":  false,
+                      "searchROIs":  [
+
+                                     ],
+                      "judgement":  {
+                                        "enabled":  false,
+                                        "stopOnFailure":  false
+                                    },
+                      "blobThreshold":  128,
+                      "blobInvert":  false,
+                      "blobMinArea":  100,
+                      "blobThresholdMode":  0,
+                      "blobConnectivity":  8,
+                      "blobMaxArea":  500000
+                  },
+                  {
+                      "type":  5,
+                      "toolId":  16006,
+                      "enabled":  true,
+                      "label":  "06-轮廓分析",
+                      "groupName":  "任务06-轮廓分析",
+                      "collapsed":  false,
+                      "inputSourceMode":  2,
+                      "showResultLabels":  true,
+                      "useSearchROI":  false,
+                      "searchROIs":  [
+
+                                     ],
+                      "judgement":  {
+                                        "enabled":  false,
+                                        "stopOnFailure":  false
+                                    },
+                      "cntThreshMode":  0,
+                      "cntMinArea":  100,
+                      "cntUseGray":  true,
+                      "cntThreshValue":  128,
+                      "cntBlurSize":  5,
+                      "cntMaxContours":  100
+                  },
+                  {
+                      "type":  8,
+                      "toolId":  16007,
+                      "enabled":  true,
+                      "label":  "07-形态学",
+                      "groupName":  "任务07-形态学开运算",
+                      "collapsed":  false,
+                      "inputSourceMode":  2,
+                      "showResultLabels":  true,
+                      "useSearchROI":  false,
+                      "searchROIs":  [
+
+                                     ],
+                      "judgement":  {
+                                        "enabled":  false,
+                                        "stopOnFailure":  false
+                                    },
+                      "morphOpType":  2,
+                      "morphKernelShape":  0,
+                      "morphUseGray":  true,
+                      "morphIterations":  1,
+                      "morphKernelSize":  3
+                  },
+                  {
+                      "type":  7,
+                      "toolId":  16008,
+                      "enabled":  true,
+                      "label":  "08-直线检测",
+                      "groupName":  "任务08-直线检测",
+                      "collapsed":  false,
+                      "inputSourceMode":  2,
+                      "showResultLabels":  true,
+                      "useSearchROI":  false,
+                      "searchROIs":  [
+
+                                     ],
+                      "judgement":  {
+                                        "enabled":  false,
+                                        "stopOnFailure":  false
+                                    },
+                      "lineMaxAngle":  180,
+                      "lineMaxGap":  10,
+                      "lineMaxLines":  20,
+                      "lineMinAngle":  0,
+                      "lineCannyLow":  40,
+                      "lineMinLength":  40,
+                      "lineCannyHigh":  130,
+                      "lineUseROI":  false
+                  },
+                  {
+                      "type":  9,
+                      "toolId":  16009,
+                      "enabled":  true,
+                      "label":  "09-颜色分析",
+                      "groupName":  "任务09-颜色统计",
+                      "collapsed":  false,
+                      "inputSourceMode":  2,
+                      "showResultLabels":  true,
+                      "useSearchROI":  false,
+                      "searchROIs":  [
+
+                                     ],
+                      "judgement":  {
+                                        "enabled":  false,
+                                        "stopOnFailure":  false
+                                    },
+                      "colorShowHist":  true,
+                      "colorSpace":  0,
+                      "colorHistBins":  32,
+                      "colorUseROI":  false
+                  },
+                  {
+                      "type":  13,
+                      "toolId":  16010,
+                      "enabled":  true,
+                      "label":  "10-文字识别",
+                      "groupName":  "任务10-中文OCR",
+                      "collapsed":  false,
+                      "inputSourceMode":  2,
+                      "showResultLabels":  true,
+                      "useSearchROI":  false,
+                      "searchROIs":  [
+
+                                     ],
+                      "judgement":  {
+                                        "enabled":  false,
+                                        "stopOnFailure":  false
+                                    },
+                      "ocrDetectOnly":  false,
+                      "ocrRoiPadding":  16,
+                      "ocrInputSize":  640,
+                      "ocrFastMode":  true,
+                      "ocrRecParamPath":  "models/ppocrv6/PP_OCRv6_tiny_rec.ncnn.param",
+                      "ocrDetParamPath":  "models/ppocrv6/PP_OCRv6_tiny_det.ncnn.param",
+                      "ocrDetModelPath":  "models/ppocrv6/PP_OCRv6_tiny_det.ncnn.bin",
+                      "ocrMaxItems":  30,
+                      "ocrMaxCandidates":  320,
+                      "ocrUseROI":  false,
+                      "ocrDictionaryPath":  "models/ppocrv6/ppocr_keys_v6_tiny.txt",
+                      "ocrMinConfidence":  0.25,
+                      "ocrRecModelPath":  "models/ppocrv6/PP_OCRv6_tiny_rec.ncnn.bin"
+                  },
+                  {
+                      "type":  14,
+                      "toolId":  16011,
+                      "enabled":  true,
+                      "label":  "11-二维码识别",
+                      "groupName":  "任务11-复杂二维码",
+                      "collapsed":  false,
+                      "inputSourceMode":  2,
+                      "showResultLabels":  true,
+                      "useSearchROI":  false,
+                      "searchROIs":  [
+
+                                     ],
+                      "judgement":  {
+                                        "enabled":  false,
+                                        "stopOnFailure":  false
+                                    },
+                      "qrUseROI":  false,
+                      "qrEngine":  0,
+                      "qrMinSize":  12,
+                      "qrFormatMask":  31,
+                      "qrFilterDuplicates":  true,
+                      "qrDetectMulti":  true,
+                      "qrEnhance":  true
+                  },
+                  {
+                      "type":  15,
+                      "toolId":  16012,
+                      "enabled":  true,
+                      "label":  "12-工业测量",
+                      "groupName":  "任务12-两点距离",
+                      "collapsed":  false,
+                      "inputSourceMode":  2,
+                      "showResultLabels":  true,
+                      "useSearchROI":  true,
+                      "searchROIs":  [
+                                         {
+                                             "startX":  160,
+                                             "startY":  150,
+                                             "endX":  160,
+                                             "endY":  150,
+                                             "angle":  0,
+                                             "type":  1,
+                                             "locked":  false,
+                                             "visible":  true,
+                                             "constrainToImage":  true,
+                                             "points":  [
+
+                                                        ]
+                                         },
+                                         {
+                                             "startX":  470,
+                                             "startY":  150,
+                                             "endX":  470,
+                                             "endY":  150,
+                                             "angle":  0,
+                                             "type":  1,
+                                             "locked":  false,
+                                             "visible":  true,
+                                             "constrainToImage":  true,
+                                             "points":  [
+
+                                                        ]
+                                         }
+                                     ],
+                      "judgement":  {
+                                        "enabled":  false,
+                                        "stopOnFailure":  false
+                                    },
+                      "measureMode":  0,
+                      "measurement":  {
+                                          "mode":  0,
+                                          "calibrationEnabled":  false,
+                                          "toleranceEnabled":  false
+                                      }
+                  },
+                  {
+                      "type":  15,
+                      "toolId":  16013,
+                      "enabled":  true,
+                      "label":  "13-工业测量",
+                      "groupName":  "任务13-线线角度",
+                      "collapsed":  false,
+                      "inputSourceMode":  2,
+                      "showResultLabels":  true,
+                      "useSearchROI":  true,
+                      "searchROIs":  [
+                                         {
+                                             "startX":  120,
+                                             "startY":  220,
+                                             "endX":  510,
+                                             "endY":  220,
+                                             "angle":  0,
+                                             "type":  2,
+                                             "locked":  false,
+                                             "visible":  true,
+                                             "constrainToImage":  true,
+                                             "points":  [
+
+                                                        ]
+                                         },
+                                         {
+                                             "startX":  180,
+                                             "startY":  110,
+                                             "endX":  180,
+                                             "endY":  520,
+                                             "angle":  0,
+                                             "type":  2,
+                                             "locked":  false,
+                                             "visible":  true,
+                                             "constrainToImage":  true,
+                                             "points":  [
+
+                                                        ]
+                                         }
+                                     ],
+                      "judgement":  {
+                                        "enabled":  false,
+                                        "stopOnFailure":  false
+                                    },
+                      "measureMode":  2,
+                      "measurement":  {
+                                          "mode":  2,
+                                          "calibrationEnabled":  false,
+                                          "toleranceEnabled":  false
+                                      }
+                  },
+                  {
+                      "type":  8,
+                      "toolId":  16014,
+                      "enabled":  true,
+                      "label":  "14-形态学",
+                      "groupName":  "任务14-形态学闭运算",
+                      "collapsed":  false,
+                      "inputSourceMode":  2,
+                      "showResultLabels":  true,
+                      "useSearchROI":  false,
+                      "searchROIs":  [
+
+                                     ],
+                      "judgement":  {
+                                        "enabled":  false,
+                                        "stopOnFailure":  false
+                                    },
+                      "morphOpType":  3,
+                      "morphKernelShape":  1,
+                      "morphUseGray":  true,
+                      "morphIterations":  1,
+                      "morphKernelSize":  5
+                  },
+                  {
+                      "type":  3,
+                      "toolId":  16015,
+                      "enabled":  true,
+                      "label":  "15-阈值调试",
+                      "groupName":  "任务15-高阈值分割",
+                      "collapsed":  false,
+                      "inputSourceMode":  2,
+                      "showResultLabels":  true,
+                      "useSearchROI":  false,
+                      "searchROIs":  [
+
+                                     ],
+                      "judgement":  {
+                                        "enabled":  false,
+                                        "stopOnFailure":  false
+                                    },
+                      "dbgEnableBlur":  true,
+                      "dbgEnableThresh":  true,
+                      "dbgUseGray":  true,
+                      "dbgBlurSize":  3,
+                      "dbgThreshold":  180
+                  },
+                  {
+                      "type":  0,
+                      "toolId":  16016,
+                      "enabled":  true,
+                      "label":  "16-边缘检测",
+                      "groupName":  "任务16-强边缘",
+                      "collapsed":  false,
+                      "inputSourceMode":  2,
+                      "showResultLabels":  true,
+                      "useSearchROI":  false,
+                      "searchROIs":  [
+
+                                     ],
+                      "judgement":  {
+                                        "enabled":  false,
+                                        "stopOnFailure":  false
+                                    },
+                      "cannyLow":  100,
+                      "edgeUseGray":  true,
+                      "cannyHigh":  220
+                  }
+              ]
+}

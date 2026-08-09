@@ -290,7 +290,10 @@ void CleanupDeviceD3D()
         g_pSwapChain = nullptr;
     }
     if (g_hSwapChainWaitableObject != nullptr)
+    {
         CloseHandle(g_hSwapChainWaitableObject);
+        g_hSwapChainWaitableObject = nullptr;
+    }
 
     // 3. 释放飞行帧的命令分配器
     for (UINT i = 0; i < APP_NUM_FRAMES_IN_FLIGHT; i++)
@@ -299,6 +302,8 @@ void CleanupDeviceD3D()
             g_frameContext[i].CommandAllocator->Release();
             g_frameContext[i].CommandAllocator = nullptr;
         }
+    for (UINT i = 0; i < APP_NUM_FRAMES_IN_FLIGHT; i++)
+        g_frameContext[i].FenceValue = 0;
 
     // 4. 释放命令队列和命令列表
     if (g_pd3dCommandQueue)  { g_pd3dCommandQueue->Release(); g_pd3dCommandQueue = nullptr; }
@@ -306,6 +311,8 @@ void CleanupDeviceD3D()
 
     // 5. 释放描述符堆
     if (g_pd3dRtvDescHeap)   { g_pd3dRtvDescHeap->Release();  g_pd3dRtvDescHeap   = nullptr; }
+    if (g_pd3dSrvDescHeapAlloc.Heap)
+        g_pd3dSrvDescHeapAlloc.Destroy();
     if (g_pd3dSrvDescHeap)   { g_pd3dSrvDescHeap->Release();  g_pd3dSrvDescHeap   = nullptr; }
 
     // 6. 释放围栏和事件
@@ -314,6 +321,9 @@ void CleanupDeviceD3D()
 
     // 7. 最后释放设备
     if (g_pd3dDevice)        { g_pd3dDevice->Release();        g_pd3dDevice        = nullptr; }
+    g_frameIndex = 0;
+    g_fenceLastSignaledValue = 0;
+    g_SwapChainOccluded = false;
 
     // Debug 构建：报告未释放的 DXGI 对象（帮助定位资源泄漏）
 #ifdef DX12_ENABLE_DEBUG_LAYER
@@ -347,7 +357,11 @@ void CreateRenderTarget()
 // =========================
 void CleanupRenderTarget()
 {
-    WaitForPendingOperations();  // 确保 GPU 不再引用这些资源
+    bool hasRenderTarget = false;
+    for (UINT i = 0; i < APP_NUM_BACK_BUFFERS; i++)
+        hasRenderTarget |= g_mainRenderTargetResource[i] != nullptr;
+    if (hasRenderTarget)
+        WaitForPendingOperations();  // 确保 GPU 不再引用这些资源
     for (UINT i = 0; i < APP_NUM_BACK_BUFFERS; i++)
         if (g_mainRenderTargetResource[i])
         {
@@ -363,6 +377,8 @@ void CleanupRenderTarget()
 // =========================
 void WaitForPendingOperations()
 {
+    if (!g_pd3dCommandQueue || !g_fence || !g_fenceEvent)
+        return;
     g_pd3dCommandQueue->Signal(g_fence, ++g_fenceLastSignaledValue);  // 在队列中插入围栏信号
     g_fence->SetEventOnCompletion(g_fenceLastSignaledValue, g_fenceEvent); // 围栏到达时触发事件
     ::WaitForSingleObject(g_fenceEvent, INFINITE);                    // 阻塞等待 GPU 完成

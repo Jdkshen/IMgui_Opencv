@@ -40,20 +40,33 @@ cv::Mat ApplyEdgeToContextImage(const VisionContext& ctx, bool useGray, int cann
 
     cv::Mat out = ctx.image.clone();
     const cv::Rect roi = ToolImageUtils::PrimaryContextRect(ctx);
+    const cv::Mat domainMask = ToolImageUtils::PrimaryContextMask(ctx);
     cv::Mat dst = ApplyEdgeToMat(roi.empty() ? out : out(roi), useGray, cannyLow, cannyHigh);
     if (dst.empty())
         return {};
+    ToolImageUtils::ApplyDomainMask(dst, domainMask);
 
     if (!roi.empty())
     {
         cv::Mat converted;
         if (!ToolImageUtils::ConvertForCopyTo(dst, out.channels(), converted))
             return {};
-        converted.copyTo(out(roi));
+        if (domainMask.empty())
+            converted.copyTo(out(roi));
+        else
+            converted.copyTo(out(roi), domainMask);
     }
     else
     {
-        out = dst;
+        if (domainMask.empty())
+            out = dst;
+        else
+        {
+            cv::Mat converted;
+            if (!ToolImageUtils::ConvertForCopyTo(dst, out.channels(), converted))
+                return {};
+            converted.copyTo(out, domainMask);
+        }
     }
 
     return out;
@@ -76,9 +89,20 @@ ToolResult EdgeTool::Execute(VisionContext& ctx)
 {
     ToolResult r;
     r.toolName = GetName();
+    if (ctx.image.empty())
+    {
+        r.success = false;
+        r.message = "请先加载图片";
+        return r;
+    }
+    if (!ToolImageUtils::ValidateAreaContext(ctx, true, r.message))
+    {
+        r.success = false;
+        return r;
+    }
     r.debugImage = ApplyEdgeToContextImage(ctx, useGray, cannyLow, cannyHigh);
     r.success = !r.debugImage.empty();
     if (!r.success)
-        r.message = "请先加载图片";
+        r.message = "边缘处理失败";
     return r;
 }

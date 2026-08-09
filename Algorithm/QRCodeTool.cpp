@@ -166,15 +166,22 @@ ToolResult QRCodeTool::Execute(VisionContext& ctx)
         result.message = "请先加载图片";
         return result;
     }
-
-    cv::Rect roi;
-    if (useROI && !ctx.rois.empty())
+    if (!ToolImageUtils::ValidateAreaContext(ctx, useROI, result.message))
     {
-        const int roiIndex = ctx.HasROI() ? ctx.selectedROI : 0;
-        roi = ctx.rois[roiIndex].ToCvRect() & cv::Rect(0, 0, ctx.image.cols, ctx.image.rows);
+        result.success = false;
+        return result;
     }
 
-    const cv::Mat input = roi.empty() ? ctx.image : ctx.image(roi);
+    const cv::Rect roi = ToolImageUtils::PrimaryContextRect(ctx, useROI);
+
+    const cv::Mat inputView = roi.empty() ? ctx.image : ctx.image(roi);
+    cv::Mat input = inputView;
+    const cv::Mat domainMask = ToolImageUtils::PrimaryContextMask(ctx, useROI);
+    if (!domainMask.empty())
+    {
+        input = inputView.clone();
+        ToolImageUtils::ApplyDomainMask(input, domainMask);
+    }
     const cv::Point offset = roi.empty() ? cv::Point() : roi.tl();
     BarcodeBackendOptions options;
     options.tryHarder = enhance;
@@ -190,6 +197,11 @@ ToolResult QRCodeTool::Execute(VisionContext& ctx)
     {
         cv::Rect box = ToImageRect(item.bbox, attempt.imageScale, offset, ctx.image.size());
         if (box.width < minimumSize || box.height < minimumSize)
+            continue;
+        const cv::Point2f localCenter(
+            box.x - offset.x + box.width * 0.5f,
+            box.y - offset.y + box.height * 0.5f);
+        if (!ToolImageUtils::PointInDomain(domainMask, localCenter))
             continue;
         const std::string duplicateKey = item.format + "\n" + item.text;
         if (filterDuplicates && !decodedKeys.insert(duplicateKey).second)

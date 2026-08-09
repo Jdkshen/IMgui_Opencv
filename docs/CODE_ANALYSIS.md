@@ -1,11 +1,34 @@
 # Windows_imgui 代码解析
 
-> 文档同步日期：2026-07-27。入口、任务管理、图像/ROI 状态、PLC 硬件调度、结果发布和 type 0-17 已与当前实现同步。
+> 文档同步日期：2026-08-09。入口、DX12/DX11 双后端、任务管理、独立流程图窗口、工具 UI 资源、图像/ROI 状态、PLC 硬件调度、结果发布和 type 0-17 已与当前实现同步。
 
 
 ## 📖 项目概述
 
-这是一个基于 **Dear ImGui + DirectX 12 + OpenCV** 构建的 Windows 桌面视觉工具应用。用户可以导入单图、递归图片文件夹、视频或相机帧，创建最多 16 个独立任务，配置 type 0-17 工具链、ROI、Fixture 和判定条件，并在可停靠窗口中查看任务结果、耗时和叠加图。
+这是一个基于 **Dear ImGui + DirectX 12 / DirectX 11 + OpenCV** 构建的 Windows 桌面视觉工具应用。用户可以导入单图、递归图片文件夹、视频或相机帧，创建最多 16 个独立任务，配置 type 0-17 工具链、ROI、Fixture 和判定条件，并在可停靠窗口中查看任务结果、耗时和叠加图。
+
+### 2026-08-02 当前图形架构
+
+```text
+Windows_imgui.cpp / UI / 业务
+              ↓（只使用公共 API 与 ImTextureID）
+       GraphicsBackend 门面
+              ↓
+       IRenderBackend 契约
+          ┌───┴────────┐
+          ↓            ↓
+   DX12Backend     DX11Context
+          ↓
+   DX12Context（完整保留）
+```
+
+- `GraphicsBackend::Initialize()` 默认先尝试 DX12；失败时记录原因并自动回退 DX11。
+- `IRenderBackend` 统一初始化、清理、新帧、遮挡检测、窗口 Resize、渲染/Present、等待空闲和纹理生命周期。
+- `ImageLoadController`、`PreviewTextureCache` 和 UI 只操作 `RenderTextureHandle` / `ImTextureID`，不读取 D3D11/D3D12 资源类型。
+- 字体、布局、Docking、多视口、图片显示、缩放和最大化仍由同一套 ImGui/UI 代码驱动。
+- 环境变量 `IMGUI_OPENCV_RENDER_BACKEND=dx11` 只用于发布前强制覆盖与冒烟测试；默认选择策略不变。
+
+> 下文仍保留部分 DX12 内部数据结构和历史上传函数解析，用于维护 `DX12Context` 兼容实现；凡涉及当前主入口、纹理所有权或 UI 调用关系，以上述公共契约和当前源码为准。
 
 ---
 
@@ -20,14 +43,14 @@
            ┌───────────────┴───────────────┐
            ▼                               ▼
    ┌───────────────┐              ┌───────────────────┐
-   │ DX12 初始化    │              │  ImGui 初始化      │
-   │ CreateDeviceD3D│              │  ImGui_ImplDX12   │
+   │ 图形后端初始化 │              │  ImGui 初始化      │
+   │ DX12 → DX11    │              │  当前渲染后端      │
    └───────┬───────┘              │  ImGui_ImplWin32  │
            │                      └─────────┬─────────┘
            ▼                                ▼
    ┌───────────────┐              ┌───────────────────┐
-   │InitDX12Context│              │FontManager初始化   │
-   │ (辅助上下文)   │              │ (加载中文字体)     │
+   │GraphicsBackend│              │FontManager初始化   │
+   │ (统一门面)     │              │ (加载中文字体)     │
    └───────┬───────┘              └─────────┬─────────┘
            │                                │
            └───────────────┬────────────────┘
@@ -40,7 +63,7 @@
             ┌──────────────┼──────────────┐
             ▼              ▼              ▼
     ┌──────────────┐ ┌──────────┐ ┌──────────────┐
-    │ Windows消息   │ │ ImGui帧  │ │ DX12渲染     │
+    │ Windows消息   │ │ ImGui帧  │ │ 当前后端渲染 │
     │ PeekMessage  │ │ 开始     │ │ Present      │
     └──────────────┘ └────┬─────┘ └──────────────┘
                           ▼
@@ -73,17 +96,20 @@
 
 | 文件 | 用途 | 核心内容 |
 |------|------|----------|
-| `Windows_imgui.cpp` | **程序入口 + DX12管理 + 主循环** | `wWinMain()`, `CreateDeviceD3D()`, `WndProc()` |
+| `Windows_imgui.cpp` | **程序入口 + 统一后端主循环** | `wWinMain()`, `GraphicsBackend`, `WndProc()` |
 | `Windows_imgui.h` | **公共头文件** | 包含所有模块的头文件 |
-| `framework.h` | **系统包含文件** | Win32 / DX12 / OpenCV 基础库引用 |
-| `Core/DX12Context.h/cpp` | **DX12 全局变量 + 初始化** | `gDevice`, `gTexture`, `gSrvCpuHandle`, `InitDX12Context()` |
-| `Core/OpenCVTest.h/cpp` | **OpenCV图片读取 + GPU上传** | `TestReadImage()`, `UploadToDX12()`, 延迟释放队列 |
+| `framework.h` | **系统包含文件** | Win32 / DirectX / OpenCV 基础库引用 |
+| `Core/RenderBackend.h` | **公共渲染契约** | 后端种类、选择策略、通用纹理句柄与 `IRenderBackend` |
+| `Core/GraphicsBackend.h/cpp` | **图形后端门面** | DX12 优先、DX11 回退、统一渲染/Resize/纹理 API 与诊断日志 |
+| `Core/DX12Backend.h/cpp` | **DX12 适配器** | 复用保留的 `DX12Context` 并实现公共契约 |
+| `Core/DX12Context.h/cpp` | **DX12 保留实现** | DX12 设备、交换链、帧同步和描述符资源 |
+| `Core/DX11Context.h/cpp` | **独立 DX11 实现** | D3D11 设备、交换链、RenderTarget、ImGui 和纹理资源 |
 | `Core/AsyncImageLoader.h/cpp` | **异步图片加载** | `RequestLoad()`, `CheckAndProcess()` 后台解码+主线程回调 |
 | `Core/VideoCapture.h/cpp` | **视频/摄像头播放** | OpenCV cv::VideoCapture，播放/暂停/跳帧/FPS |
 | `Core/AudioPlayer.h/cpp` | **音频播放** | XAudio2 + Media Foundation，与视频同步 |
 | `Core/OpenFileDialog.h/cpp` | **文件选择对话框** | `OpenFileDialog()` `OpenFolderDialog()` `ScanImageFiles()` |
 | `Core/ThemeManager.h/cpp` | **主题管理** | 夜间/白天切换, theme.cfg 持久化 |
-| `Core/RecipeManager.h/cpp` | **配方系统** | version 4 JSON 保存/加载任务、工具参数、ROI 和资产，兼容旧版本 |
+| `Core/RecipeManager.h/cpp` | **配方系统** | version 5 JSON 保存/加载任务、工具参数、ROI 和资产，兼容旧版本 |
 | `Core/ImageState.h/cpp` | **图像状态** | 当前图、原图和图像版本状态收口 |
 | `Core/ROI.h` / `Core/ROIState.h/cpp` | **ROI 状态** | ROI 数据结构和当前选区状态 |
 | `Core/FrameSourceState.h/cpp` | **帧来源状态** | 单图、图片序列、视频、摄像头来源状态 |
@@ -95,17 +121,17 @@
 | `Core/ToolChainState.h/cpp` | **工具链状态** | 工具实例、任务定义、归属、顺序、启用和独立输入 |
 | `Core/ToolExecutor.h/cpp` | **统一工具执行器** | type 0-11、13-17 统一分发到 `RunViaITool()`，type 12 原图由 `ToolController` 特殊处理 |
 | `Core/ToolController.h/cpp` | **工具调度器** | queue 驱动 + Tick() 替代旧 ExecState 状态机 |
-| `Core/FrameRenderer.h/cpp` | **帧渲染提交** | 每帧渲染提交和渲染资源收尾 |
 | `UI/DockSpaceHost.h/cpp` | **主框架** | DockSpace 容器 + 菜单栏 + 配方菜单 |
 | `UI/LogWindow.h/cpp` | **日志窗口** | 带颜色分级和时间戳的日志列表 |
 | `UI/Sidebar.h/cpp` | **侧边栏** | ROI 类型切换、快捷操作、自定义日志 |
 | `UI/StatsWindow.h/cpp` | **性能统计窗口** | FPS、帧耗时、渲染信息 |
 | `UI/ToolsWindow.h/cpp` | **功能窗口** | 工具参数、任务管理、输入配置、全部/当前任务/单步/循环/并行入口 |
 | `UI/RunResultWindow.h/cpp` | **结果总览** | 任务卡片、详情、结果图、缩放/最大化和整轮耗时 |
+| `UI/RunResultLayout.h/cpp` | **结果布局策略** | 纯计算窗口尺寸、任务网格与覆盖标签避让，支持无渲染回归 |
 | `UI/ImageViewer.h/cpp` | **图像/视频显示** | 缩放/平移/图片列表导航/视频控制栏 |
 | `UI/ROIManager.h/cpp` | **ROI 交互管理** | 画框/拖拽/控制点/坐标转换 |
 | `Renderer/FontManager.h/cpp` | **字体管理** | 加载 simsun.ttc 中文字体 |
-| `Renderer/PreviewTextureCache.h/cpp` | **预览纹理缓存** | 缓存工具预览图和任务结果图对应的 DX12 纹理 |
+| `Renderer/PreviewTextureCache.h/cpp` | **预览纹理缓存** | 缓存工具预览图和任务结果图对应的通用后端纹理 |
 | `Log/LogSystem.h/cpp` | **线程安全日志系统** | 3级日志(INFO/WARN/ERROR), 颜色, 时间戳, 2000条上限 |
 | `Algorithm/ThresholdTool.h/cpp` | **图像处理管线** | 灰度→模糊→二值化/Canny→RGBA上传, 性能计时 |
 | `Algorithm/ThresholdITool.cpp` | **阈值工具适配** | 把阈值调试接入 ITool |
@@ -113,7 +139,7 @@
 | `Algorithm/BlobTool.h/cpp` | **Blob 分析工具** | Blob 分析 ITool |
 | `Algorithm/ToolImageUtils.h/cpp` | **工具图像辅助** | 输入图像准备和 ROI 裁剪 |
 | `Algorithm/FrameSource.h` | **统一帧包** | 单图/序列/视频/摄像头帧包定义 |
-| `Algorithm/TemplateMatch.h/cpp` | **模板匹配** | 多方法模板匹配、旋转匹配、结果绘制 |
+| `Algorithm/TemplateMatchingTool.h/cpp` | **模板匹配** | 每实例模板、预处理、旋转搜索、NMS 和结果发布 |
 | `Algorithm/YOLODetector.h/cpp` | **YOLO 目标检测** | ONNX Runtime 推理 YOLO11，ROI 限定区域，NMS 后处理 |
 | `Algorithm/OpenCVYoloDetector.h/cpp` | **OpenCV DNN YOLO** | OpenCV 5.0 DNN 实验后端 |
 | `Algorithm/ITool.h` / `Algorithm/ITool.cpp` | **工具接口** | 抽象基类 `ITool` + `ToolRegistry` 工厂 + 自动注册 |
@@ -347,7 +373,7 @@ void FlushPendingRelease() {
 | 变量 | 类型 | 默认 | 说明 |
 |------|------|------|------|
 | `g_ShowLog` | `bool` | `true` | 日志窗口 |
-| `g_ShowSidebar` | `bool` | `true` | 侧边栏 |
+| `g_ShowSidebar` | `bool` | `false` | ROI 侧边栏，默认不随程序启动，可从查看菜单打开 |
 | `g_ShowStats` | `bool` | `true` | 性能窗口 |
 | `g_ShowOpenCV` | `bool` | `true` | 图像窗口 |
 | `g_ShowTools` | `bool` | `true` | 工具窗口 |
@@ -860,8 +886,8 @@ HardwareWindow 配置
 | 操作系统 | Windows 10/11 |
 | 开发工具 | Visual Studio 2022 |
 | C++ 标准 | C++20 |
-| 图形 API | DirectX 12 |
-| 第三方依赖 | 全部包含在项目中（OpenCV / ONNX Runtime / ImGui / DX12 辅助头文件） |
+| 图形 API | DirectX 12 优先，失败自动回退 DirectX 11 |
+| 第三方依赖 | 全部包含在项目中（OpenCV / ONNX Runtime / ImGui / DirectX 辅助头文件） |
 
 ### 5.2 构建步骤
 
@@ -872,13 +898,14 @@ HardwareWindow 配置
 4. 按 F5 运行
 ```
 
-编译时 PostBuild 事件自动将 `assets/`、`imgui.ini`、`theme.cfg` 复制到输出目录。
+编译时 PostBuild 事件自动复制字体、`assets/icons/`、运行库、可用模型和 `theme.cfg`。`imgui.ini` 是本机运行状态，不作为固定构建资源复制。
 
 ### 5.3 运行时文件
 
 以下文件自动与 exe 同目录（无需手动拷贝）：
 
 - `simsun.ttc` — 中文字体（PostBuild 自动复制）
+- `assets/icons/app.ico` 与 `assets/icons/tool_*.png` — 应用/工具图标（PostBuild 自动复制；工具 PNG 在字体图集初始化时合并）
 - `opencv_world500*.dll`、`opencv_videoio_ffmpeg500_64.dll`、`opencv_videoio_msmf500_64.dll` — OpenCV 5.0 运行时
 - `onnxruntime*.dll` — ONNX Runtime 运行时
 - `yolo11n.onnx` — YOLO11 模型（PostBuild 自动复制到 models/）

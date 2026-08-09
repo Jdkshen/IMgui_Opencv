@@ -2,6 +2,7 @@
 
 #include "HardwareRuntimeService.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -13,8 +14,36 @@ struct HardwareTaskIdentity
     bool operator==(const HardwareTaskIdentity&) const = default;
 };
 
+inline constexpr std::size_t kHardwareCameraCount = 16;
+inline constexpr std::size_t kHardwareAuxiliaryOutputCount = 3;
+
+struct HardwareCameraSettings
+{
+    std::string address = "0";
+    std::string sourceName = "camera-01";
+    int backend = 0;
+    int orientation = 0;
+    int timeoutMs = 250;
+    int intervalMs = 33;
+    bool autoCapture = true;
+    bool runAfterCapture = true;
+    bool triggerBeforeRun = true;
+    bool autoExposure = true;
+    float exposure = -6.0f;
+    float gain = 0.0f;
+    int triggerMode = 0;
+    float triggerDelayMicroseconds = 0.0f;
+    int bufferPolicy = 0;
+    bool ptpEnabled = false;
+    bool autoReconnect = true;
+    int reconnectFailureThreshold = 3;
+    int reconnectInitialDelayMs = 250;
+    int reconnectMaxDelayMs = 5000;
+};
+
 struct HardwarePanelSettings
 {
+    // 旧字段保留用于兼容 version 2 配置；Normalize 会与 cameras[0] 同步。
     std::string cameraAddress = "0";
     std::string cameraSourceName = "industrial-camera";
     int cameraBackend = 0;
@@ -31,6 +60,8 @@ struct HardwarePanelSettings
     int cameraReconnectFailureThreshold = 3;
     int cameraReconnectInitialDelayMs = 250;
     int cameraReconnectMaxDelayMs = 5000;
+    std::vector<HardwareCameraSettings> cameras;
+    int activeCameraIndex = 0;
 
     int outputType = 0;
     std::string outputKey = "output-main";
@@ -69,6 +100,7 @@ struct HardwarePanelSettings
         {true, HardwareIoSignal::Heartbeat, HardwareIoDirection::Output, 6, false, 0, {}},
         {true, HardwareIoSignal::Acknowledge, HardwareIoDirection::Input, 7, false, 0, {}}
     };
+    std::vector<HardwareOutputConnectionConfig> auxiliaryOutputs;
 };
 
 namespace HardwareSettingsService
@@ -83,5 +115,6 @@ namespace HardwareSettingsService
     HardwarePanelSettings Load(const std::string& path = {});
     bool Save(const HardwarePanelSettings& settings, const std::string& path = {},
         std::string* error = nullptr);
+    bool RestoreLastValid(const std::string& path = {}, std::string* error = nullptr);
     std::string SettingsPath();
 }

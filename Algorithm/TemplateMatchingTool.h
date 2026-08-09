@@ -14,6 +14,7 @@ public:
     float matchThreshold = 0.7f;
     int maxImageDim = 1000;
     float nmsThreshold = 0.3f;
+    bool subpixelRefinement = true;
     bool tplGray = false;
     bool tplBinary = false;
     int tplBinThresh = 128;
@@ -34,4 +35,3 @@ public:
     nlohmann::json Save() const override;
     void Load(const nlohmann::json& j) override;
 };
-

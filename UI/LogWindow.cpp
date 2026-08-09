@@ -1,6 +1,7 @@
 #include "LogWindow.h"
 #include "DockSpaceHost.h"
 #include "../Core/ThemeManager.h"
+#include "../Core/OpenFileDialog.h"
 #include "../include/imgui/imgui.h"
 #include "../Log/LogSystem.h"
 
@@ -55,6 +56,21 @@ namespace UI
                 for (const auto& l : *logs)
                     all += l.displayText + "\n";
                 ImGui::SetClipboardText(all.c_str());
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("导出诊断包"))
+        {
+            const std::string path = SaveFileDialogWithFilter(
+                L"诊断包 (*.zip)\0*.zip\0所有文件 (*.*)\0*.*\0",
+                L"导出生产诊断包", L"zip");
+            if (!path.empty())
+            {
+                std::string error;
+                if (LogSystem::ExportDiagnosticPackage(path, &error))
+                    LogSystem::Add(LOG_INFO, "诊断包已导出：%s", path.c_str());
+                else
+                    LogSystem::Add(LOG_ERROR, "诊断包导出失败：%s", error.c_str());
             }
         }
 

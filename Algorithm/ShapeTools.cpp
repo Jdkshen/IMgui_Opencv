@@ -2,6 +2,8 @@
 #include "ContourDetector.h"
 #include "LineDetector.h"
 #include "ShapeMatcher.h"
+#include "ToolImageUtils.h"
+#include "../Core/RotatedROI.h"
 #include "../Core/VisionContext.h"
 #include <nlohmann/json.hpp>
 #include <opencv2/geometry/2d.hpp>
@@ -10,17 +12,7 @@ namespace
 {
     cv::Rect ActiveSearchRect(const VisionContext& ctx)
     {
-        if (ctx.image.empty())
-            return {};
-
-        cv::Rect roi;
-        if (ctx.HasROI())
-            roi = ctx.GetActiveROIRect();
-        else if (!ctx.rois.empty())
-            roi = ctx.rois[0].ToCvRect();
-
-        roi &= cv::Rect(0, 0, ctx.image.cols, ctx.image.rows);
-        return (roi.width > 0 && roi.height > 0) ? roi : cv::Rect();
+        return ToolImageUtils::PrimaryContextRect(ctx);
     }
 }
 
@@ -29,6 +21,17 @@ ToolResult ContourTool::Execute(VisionContext& ctx)
 {
     ToolResult r;
     r.toolName = "轮廓分析";
+    if (ctx.image.empty())
+    {
+        r.success = false;
+        r.message = "请先加载图片";
+        return r;
+    }
+    if (!ToolImageUtils::ValidateAreaContext(ctx, true, r.message))
+    {
+        r.success = false;
+        return r;
+    }
     ContourDetector::Params cp;
     cp.useGray = useGray;
     cp.blurSize = blurSize;
@@ -45,12 +48,30 @@ ToolResult ContourTool::Execute(VisionContext& ctx)
     cp.lineThickness = lineThick;
     cp.showLabels = showLabels;
     cp.fillContours = fillContours;
+    cp.normalizeDirection = normalizeDirection;
+    cp.subpixelBoundary = subpixelBoundary;
     cp.matchROI = matchROI;
     cp.matchThreshold = matchThresh;
 
-    cv::Rect roi = ActiveSearchRect(ctx);
+    cv::Rect roi;
+    if (matchROI && !ctx.rois.empty())
+    {
+        const int index = ctx.HasROI() ? ctx.selectedROI : 0;
+        const ROI& templateROI = ctx.rois[
+            std::clamp(index, 0, static_cast<int>(ctx.rois.size()) - 1)];
+        cp.matchRect = templateROI.ToCvRect() &
+            cv::Rect(0, 0, ctx.image.cols, ctx.image.rows);
+        cv::Mat fullMask = RotatedROI::BuildDomainMask(ctx.image.size(), {templateROI});
+        if (!fullMask.empty() && !cp.matchRect.empty())
+            cp.matchMask = fullMask(cp.matchRect);
+    }
+    else
+    {
+        roi = ActiveSearchRect(ctx);
+    }
     const cv::Mat input = roi.empty() ? ctx.image : ctx.image(roi);
-    auto cs = ContourDetector::Detect(input, cp);
+    auto cs = ContourDetector::Detect(input, cp,
+        matchROI ? cv::Mat() : ToolImageUtils::PrimaryContextMask(ctx));
     for (const auto &c : cs)
     {
         ToolResult::Region reg;
@@ -58,9 +79,32 @@ ToolResult ContourTool::Execute(VisionContext& ctx)
         reg.bbox.x += roi.x;
         reg.bbox.y += roi.y;
         reg.area = (float)c.area;
+        reg.contour.reserve(c.points.size());
+        for (const cv::Point& point : c.points)
+            reg.contour.emplace_back(point.x + roi.x, point.y + roi.y);
+        const cv::Moments moments = cv::moments(
+            c.subpixelPoints.empty() ? std::vector<cv::Point2f>(c.points.begin(), c.points.end())
+                                     : c.subpixelPoints);
+        reg.center = moments.m00 != 0.0
+            ? cv::Point2f(static_cast<float>(moments.m10 / moments.m00 + roi.x),
+                          static_cast<float>(moments.m01 / moments.m00 + roi.y))
+            : cv::Point2f(reg.bbox.x + reg.bbox.width * 0.5f,
+                          reg.bbox.y + reg.bbox.height * 0.5f);
         reg.score = (float)(1.0 - std::min(c.matchScore / 10.0, 0.999));
+        reg.angle = c.directionDegrees;
+        reg.width = static_cast<float>(reg.bbox.width);
+        reg.height = static_cast<float>(reg.bbox.height);
+        reg.circularity = static_cast<float>(c.circularity);
+        reg.aspectRatio = reg.bbox.height > 0
+            ? static_cast<float>(reg.bbox.width) / static_cast<float>(reg.bbox.height)
+            : 0.0f;
         reg.label = "Ctr " + std::to_string((int)c.area) + "px";
         r.regions.push_back(reg);
+        const std::string prefix = "Contour " + std::to_string(r.regions.size()) + " ";
+        r.measurements.push_back({prefix + "Direction", c.directionDegrees, "deg"});
+        r.measurements.push_back({prefix + "SignedArea", c.signedArea, "px2"});
+        r.measurements.push_back({prefix + "BoundaryPoints",
+            static_cast<double>(c.subpixelPoints.size()), "count"});
     }
     r.success = true;
     return r;
@@ -85,6 +129,8 @@ nlohmann::json ContourTool::Save() const
     j["lineThick"] = lineThick;
     j["showLabels"] = showLabels;
     j["fillContours"] = fillContours;
+    j["normalizeDirection"] = normalizeDirection;
+    j["subpixelBoundary"] = subpixelBoundary;
     j["matchROI"] = matchROI;
     j["matchThresh"] = matchThresh;
     return j;
@@ -106,6 +152,8 @@ void ContourTool::Load(const nlohmann::json &j)
     lineThick = j.value("lineThick", 2);
     showLabels = j.value("showLabels", true);
     fillContours = j.value("fillContours", false);
+    normalizeDirection = j.value("normalizeDirection", true);
+    subpixelBoundary = j.value("subpixelBoundary", true);
     matchROI = j.value("matchROI", false);
     matchThresh = j.value("matchThresh", 0.1f);
 }
@@ -115,6 +163,17 @@ ToolResult LineTool::Execute(VisionContext& ctx)
 {
     ToolResult r;
     r.toolName = "直线检测";
+    if (ctx.image.empty())
+    {
+        r.success = false;
+        r.message = "请先加载图片";
+        return r;
+    }
+    if (!ToolImageUtils::ValidateAreaContext(ctx, useROI, r.message))
+    {
+        r.success = false;
+        return r;
+    }
     LineDetector::Params lp;
     lp.cannyLow = cannyLow;
     lp.cannyHigh = cannyHigh;
@@ -125,10 +184,10 @@ ToolResult LineTool::Execute(VisionContext& ctx)
     lp.lineThickness = thickness;
     lp.maxLines = maxLines;
     lp.showLabels = showLabels;
-    if (useROI && ctx.HasROI())
-        lp.roi = ctx.GetActiveROIRect();
+    if (useROI)
+        lp.roi = ToolImageUtils::PrimaryContextRect(ctx);
 
-    auto lines = LineDetector::Detect(ctx.image, lp);
+    auto lines = LineDetector::Detect(ctx.image, lp, ctx.domainMask);
     for (const auto &l : lines)
     {
         ToolResult::Line rl;
@@ -215,6 +274,17 @@ ToolResult ShapeTool::Execute(VisionContext& ctx)
         r.message = "执行已取消";
         return r;
     }
+    if (ctx.image.empty())
+    {
+        r.success = false;
+        r.message = "请先加载图片";
+        return r;
+    }
+    if (!ToolImageUtils::ValidateAreaContext(ctx, true, r.message))
+    {
+        r.success = false;
+        return r;
+    }
     cv::Mat tpl = tplImage.empty() ? ctx.frozenTemplate : tplImage;
     if (tpl.empty())
     {
@@ -232,6 +302,10 @@ ToolResult ShapeTool::Execute(VisionContext& ctx)
     sp.lineThickness = lineThick;
     sp.showLabels = showLabels;
     sp.maxResults = maxResults;
+    sp.enableRotation = enableRotation;
+    sp.rotationStart = rotationStart;
+    sp.rotationEnd = rotationEnd;
+    sp.rotationStep = rotationStep;
     sp.shapeMethod = method;
     sp.tplGray = tplGray;
     sp.tplBinary = tplBinary;
@@ -272,8 +346,7 @@ ToolResult ShapeTool::Execute(VisionContext& ctx)
         reg.contour.reserve(m.points.size());
         for (const auto &pt : m.points)
             reg.contour.push_back(cv::Point(pt.x + m.bbox.x + roi.x, pt.y + m.bbox.y + roi.y));
-        if (reg.contour.size() >= 3)
-            reg.angle = cv::minAreaRect(reg.contour).angle;
+        reg.angle = m.angle;
         r.regions.push_back(reg);
     }
     r.success = true;
@@ -282,7 +355,7 @@ ToolResult ShapeTool::Execute(VisionContext& ctx)
 
 nlohmann::json ShapeTool::Save() const
 {
-    return {{"type", 6}, {"blurSize", blurSize}, {"tplRetr", tplRetr}, {"tplMinArea", tplMinArea}, {"minScore", minScore}, {"shapeScore", shapeScore}, {"lineThick", lineThick}, {"method", method}, {"showLabels", showLabels}, {"maxResults", maxResults}, {"tplGray", tplGray}, {"tplBinary", tplBinary}, {"tplBinThresh", tplBinThresh}, {"tplBlur", tplBlur}, {"tplBlurK", tplBlurK}, {"tplInvert", tplInvert}};
+    return {{"type", 6}, {"blurSize", blurSize}, {"tplRetr", tplRetr}, {"tplMinArea", tplMinArea}, {"minScore", minScore}, {"shapeScore", shapeScore}, {"lineThick", lineThick}, {"method", method}, {"showLabels", showLabels}, {"maxResults", maxResults}, {"enableRotation", enableRotation}, {"rotationStart", rotationStart}, {"rotationEnd", rotationEnd}, {"rotationStep", rotationStep}, {"tplGray", tplGray}, {"tplBinary", tplBinary}, {"tplBinThresh", tplBinThresh}, {"tplBlur", tplBlur}, {"tplBlurK", tplBlurK}, {"tplInvert", tplInvert}};
 }
 void ShapeTool::Load(const nlohmann::json &j)
 {
@@ -295,6 +368,10 @@ void ShapeTool::Load(const nlohmann::json &j)
     method = j.value("method", 0);
     showLabels = j.value("showLabels", true);
     maxResults = j.value("maxResults", 50);
+    enableRotation = j.value("enableRotation", false);
+    rotationStart = j.value("rotationStart", -45);
+    rotationEnd = j.value("rotationEnd", 45);
+    rotationStep = (std::max)(1, j.value("rotationStep", 5));
     tplGray = j.value("tplGray", false);
     tplBinary = j.value("tplBinary", false);
     tplBinThresh = j.value("tplBinThresh", 128);

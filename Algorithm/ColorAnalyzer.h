@@ -19,7 +19,8 @@ namespace ColorAnalyzer
         std::vector<float> hR, hG, hB;
         double meanR = 0, meanG = 0, meanB = 0, stdR = 0, stdG = 0, stdB = 0;
     };
-    ColorResult Analyze(const cv::Mat &, const Params &);
+    ColorResult Analyze(const cv::Mat &, const Params &,
+                        const cv::Mat &domainMask = cv::Mat());
     cv::Mat DrawHistogram(const cv::Mat &, const ColorResult &, const Params &);
     std::string Summary(const ColorResult &);
     extern float g_AnalyzeTimeMs;
@@ -31,7 +32,7 @@ class ColorAnalyzerITool final : public ITool
 public:
     ColorAnalyzer::Params params;
 
-    const char* GetName() const override { return "ColorAnalyzer"; }
+    const char* GetName() const override { return "颜色分析"; }
     int GetType() const override { return 9; }
     void DrawUI() override {}
     nlohmann::json Save() const override;

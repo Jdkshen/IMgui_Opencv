@@ -1,9 +1,9 @@
 # 项目架构性能审查
 
-> 文档性质：早期性能审查快照。2026-07-27 再次复核时保留其中旧代码片段作为历史对照；`gImage`、`gROIs` 等名称不代表当前架构。当前图像/ROI/执行状态以 `ImageState`、`ROIState`、`VisionContext` 和 `ToolController` 为准，硬件线程边界以 `HardwareRuntimeService` 为准。
+> 文档性质：早期性能审查快照。2026-08-02 再次复核时保留其中旧代码片段和旧行号作为历史对照；文中的 `TemplateMatch.*`、`OpenCVTest.*`、`gImage`、`gROIs` 已不是当前实现。模板匹配现位于 `TemplateMatchingTool.*`，图形上传走 `GraphicsBackend`/`PreviewTextureCache`，当前图像/ROI/执行状态以 `ImageState`、`ROIState`、`VisionContext` 和 `ToolController` 为准。
 
 
-> 对照当时的 OpenCV 性能建议逐条评估；当前算法说明见 `ALGORITHMS.md`
+> 对照当时的 OpenCV 性能建议逐条评估；当前算法说明见 `ALGORITHMS.md`。本文保留历史审查结论，旧版 `TemplateMatch.cpp` 引用对应当前 `TemplateMatchingTool.cpp`；具体优化须以当前源码和基准测试为准。
 >
 > 审查范围: `Core/` `Algorithm/` `UI/` 全部 .cpp 文件
 

@@ -12,7 +12,25 @@ namespace
     std::vector<ROI> s_rois;     // ROI 列表
     std::vector<ROI> s_queuedRestore;
     bool s_hasQueuedRestore = false;
+    struct Snapshot { std::vector<ROI> rois; int selected = -1; };
+    std::vector<Snapshot> s_undo;
+    std::vector<Snapshot> s_redo;
+    bool s_transactionActive = false;
+    Snapshot s_transactionBefore;
     int s_selectedROI = -1;      // 当前选中 ROI 索引（-1 = 无选中）
+    Snapshot CurrentSnapshot() { return {s_rois, s_selectedROI}; }
+    void PushUndo(Snapshot snapshot)
+    {
+        s_undo.push_back(std::move(snapshot));
+        if (s_undo.size() > 100)
+            s_undo.erase(s_undo.begin());
+        s_redo.clear();
+    }
+    void RecordBeforeMutation()
+    {
+        if (!s_transactionActive)
+            PushUndo(CurrentSnapshot());
+    }
 }
 
 const std::vector<ROI>& ReadOnlyItems()
@@ -42,6 +60,7 @@ const ROI* At(int index)
 
 int Add(ROI roi, bool select)
 {
+    RecordBeforeMutation();
     s_rois.push_back(std::move(roi));
     const int index = static_cast<int>(s_rois.size()) - 1;
     if (select)
@@ -51,6 +70,7 @@ int Add(ROI roi, bool select)
 
 int Insert(int index, ROI roi, bool select)
 {
+    RecordBeforeMutation();
     index = std::clamp(index, 0, static_cast<int>(s_rois.size()));
     s_rois.insert(s_rois.begin() + index, std::move(roi));
     if (select)
@@ -64,6 +84,7 @@ bool Update(int index, ROI roi)
 {
     if (!IsValidIndex(index))
         return false;
+    RecordBeforeMutation();
     s_rois[index] = std::move(roi);
     return true;
 }
@@ -73,6 +94,7 @@ bool RemoveAt(int index)
     if (!IsValidIndex(index))
         return false;
 
+    RecordBeforeMutation();
     s_rois.erase(s_rois.begin() + index);
     if (s_selectedROI == index)
         s_selectedROI = -1;
@@ -84,6 +106,9 @@ bool RemoveAt(int index)
 std::size_t RemoveByType(int type)
 {
     const std::size_t before = s_rois.size();
+    if (std::any_of(s_rois.begin(), s_rois.end(),
+        [type](const ROI& roi) { return roi.type == type; }))
+        RecordBeforeMutation();
     s_rois.erase(std::remove_if(s_rois.begin(), s_rois.end(),
         [type](const ROI& roi) { return roi.type == type; }), s_rois.end());
     s_selectedROI = -1;
@@ -92,6 +117,7 @@ std::size_t RemoveByType(int type)
 
 void ReplaceAll(std::vector<ROI> rois, int selectedIndex)
 {
+    RecordBeforeMutation();
     s_rois = std::move(rois);
     s_selectedROI = selectedIndex >= 0 && selectedIndex < static_cast<int>(s_rois.size())
         ? selectedIndex : -1;
@@ -99,6 +125,8 @@ void ReplaceAll(std::vector<ROI> rois, int selectedIndex)
 
 void Clear()
 {
+    if (!s_rois.empty())
+        RecordBeforeMutation();
     s_rois.clear();
     s_selectedROI = -1;
 }
@@ -153,8 +181,66 @@ bool HasQueuedRestore()
     return s_hasQueuedRestore;
 }
 
+bool CanUndo() { return !s_undo.empty(); }
+bool CanRedo() { return !s_redo.empty(); }
+
+bool Undo()
+{
+    if (s_undo.empty())
+        return false;
+    s_redo.push_back(CurrentSnapshot());
+    Snapshot snapshot = std::move(s_undo.back());
+    s_undo.pop_back();
+    s_rois = std::move(snapshot.rois);
+    s_selectedROI = snapshot.selected;
+    return true;
+}
+
+bool Redo()
+{
+    if (s_redo.empty())
+        return false;
+    s_undo.push_back(CurrentSnapshot());
+    Snapshot snapshot = std::move(s_redo.back());
+    s_redo.pop_back();
+    s_rois = std::move(snapshot.rois);
+    s_selectedROI = snapshot.selected;
+    return true;
+}
+
+void BeginHistoryTransaction()
+{
+    if (!s_transactionActive)
+    {
+        s_transactionBefore = CurrentSnapshot();
+        s_transactionActive = true;
+    }
+}
+
+void CommitHistoryTransaction()
+{
+    if (!s_transactionActive)
+        return;
+    s_transactionActive = false;
+    PushUndo(std::move(s_transactionBefore));
+}
+
+void CancelHistoryTransaction()
+{
+    s_transactionActive = false;
+    s_transactionBefore = {};
+}
+
+void ResetHistory()
+{
+    s_undo.clear();
+    s_redo.clear();
+    CancelHistoryTransaction();
+}
+
 void ClearInteraction()
 {
     Clear();
+    ResetHistory();
 }
 }

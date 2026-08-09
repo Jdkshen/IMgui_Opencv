@@ -2,6 +2,7 @@
 
 #include "../Core/VisionContext.h"
 #include "YOLODetector.h"
+#include "ToolImageUtils.h"
 
 #include <algorithm>
 #include <nlohmann/json.hpp>
@@ -14,6 +15,16 @@ ToolResult YOLOTool::Execute(VisionContext& ctx)
     if (ctx.IsCancellationRequested()) {
         result.success = false;
         result.message = "执行已取消";
+        return result;
+    }
+
+    if (ctx.image.empty()) {
+        result.success = false;
+        result.message = "请先加载图片";
+        return result;
+    }
+    if (!ToolImageUtils::ValidateAreaContext(ctx, useROI, result.message)) {
+        result.success = false;
         return result;
     }
 
@@ -32,11 +43,16 @@ ToolResult YOLOTool::Execute(VisionContext& ctx)
         return result;
     }
 
-    cv::Rect roi;
-    if (useROI && ctx.HasROI())
-        roi = ctx.GetActiveROIRect();
+    const cv::Rect roi = ToolImageUtils::PrimaryContextRect(ctx, useROI);
 
-    auto objs = YOLODetector::Detect(ctx.image, confThreshold, nmsThreshold, roi);
+    cv::Mat detectorImage = ctx.image;
+    const cv::Mat domainMask = ToolImageUtils::FullContextMask(ctx, useROI);
+    if (!domainMask.empty())
+    {
+        detectorImage = ctx.image.clone();
+        ToolImageUtils::ApplyDomainMask(detectorImage, domainMask);
+    }
+    auto objs = YOLODetector::Detect(detectorImage, confThreshold, nmsThreshold, roi);
     if (ctx.IsCancellationRequested()) {
         result.success = false;
         result.message = "执行已取消";

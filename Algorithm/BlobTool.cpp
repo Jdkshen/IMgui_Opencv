@@ -46,15 +46,24 @@ ToolResult BlobTool::Execute(VisionContext &ctx)
         result.message = "请先加载图片";
         return result;
     }
+    if (!ToolImageUtils::ValidateAreaContext(ctx, true, result.message))
+    {
+        result.success = false;
+        return result;
+    }
 
     const cv::Rect roi = ToolImageUtils::PrimaryContextRect(ctx);
     const cv::Mat input = roi.empty() ? ctx.image : ctx.image(roi);
     cv::Mat gray = ToolImageUtils::ToGray(input);
 
     cv::Mat bin;
+    const cv::Mat domainMask = ToolImageUtils::PrimaryContextMask(ctx);
     const int thresholdType = invert ? cv::THRESH_BINARY_INV : cv::THRESH_BINARY;
-    cv::threshold(gray, bin, threshold, 255,
-        thresholdMode == 0 ? thresholdType | cv::THRESH_OTSU : thresholdType);
+    const double appliedThreshold = thresholdMode == 0
+        ? ToolImageUtils::MaskedOtsuThreshold(gray, domainMask)
+        : static_cast<double>(threshold);
+    cv::threshold(gray, bin, appliedThreshold, 255, thresholdType);
+    ToolImageUtils::ApplyDomainMask(bin, domainMask);
     cv::Mat labels, stats, centroids;
     const int count = cv::connectedComponentsWithStats(bin, labels, stats, centroids,
         connectivity == 4 ? 4 : 8, CV_32S);

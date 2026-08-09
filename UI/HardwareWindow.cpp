@@ -11,6 +11,7 @@
 #include "../include/imgui/imgui.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -21,8 +22,6 @@
 
 namespace
 {
-bool s_focusHardwareWindow = false;
-
 const char* ConnectionStateName(DeviceConnectionState state)
 {
     switch (state)
@@ -120,6 +119,111 @@ float TwoColumnButtonWidth()
 
 constexpr float kActionButtonHeight = 28.0f;
 
+struct CameraUiState
+{
+    char address[256] = "0";
+    char sourceName[96] = "camera-01";
+    int backend = 0;
+    int orientation = 0;
+    int timeoutMs = 250;
+    int intervalMs = 33;
+    bool autoCapture = true;
+    bool runAfterCapture = true;
+    bool triggerBeforeRun = true;
+    bool autoExposure = true;
+    float exposure = -6.0f;
+    float gain = 0.0f;
+    int triggerMode = 0;
+    float triggerDelayMicroseconds = 0.0f;
+    int bufferPolicy = 0;
+    bool ptpEnabled = false;
+    bool autoReconnect = true;
+    int reconnectFailureThreshold = 3;
+    int reconnectInitialDelayMs = 250;
+    int reconnectMaxDelayMs = 5000;
+};
+
+struct AuxiliaryOutputUiState
+{
+    bool enabled = false;
+    int type = static_cast<int>(HardwareOutputAdapterType::TcpText);
+    char key[96] = {};
+    char address[256] = "127.0.0.1";
+    int port = 5001;
+    char resource[128] = {};
+    char target[256] = {};
+    int mappingAddress = 0;
+    int timeoutMs = 1500;
+    bool plcHoldingRegister = false;
+    char passText[128] = "PASS";
+    char failText[128] = "FAIL";
+    bool appendCrLf = true;
+    bool invert = false;
+    bool autoPublish = true;
+    int queueSize = 32;
+    int retryCount = 2;
+    int retryDelayMs = 150;
+    bool reconnectBeforeRetry = true;
+};
+
+void LoadAuxiliaryOutputUi(AuxiliaryOutputUiState& target,
+    const HardwareOutputConnectionConfig& source)
+{
+    target.enabled = source.enabled;
+    target.type = static_cast<int>(source.adapterType);
+    std::snprintf(target.key, sizeof(target.key), "%s",
+        source.binding.adapterKey.c_str());
+    std::snprintf(target.address, sizeof(target.address), "%s",
+        source.endpoint.address.c_str());
+    target.port = source.endpoint.port;
+    std::snprintf(target.resource, sizeof(target.resource), "%s",
+        source.endpoint.resource.c_str());
+    std::snprintf(target.target, sizeof(target.target), "%s",
+        source.binding.target.c_str());
+    target.mappingAddress = source.binding.address;
+    target.timeoutMs = source.endpoint.timeoutMs;
+    target.plcHoldingRegister = source.plcUseHoldingRegister;
+    std::snprintf(target.passText, sizeof(target.passText), "%s",
+        source.binding.passText.c_str());
+    std::snprintf(target.failText, sizeof(target.failText), "%s",
+        source.binding.failText.c_str());
+    target.appendCrLf = source.binding.appendCrLf;
+    target.invert = source.binding.invert;
+    target.autoPublish = source.autoPublish;
+    target.queueSize = source.maxQueueSize;
+    target.retryCount = source.retryCount;
+    target.retryDelayMs = source.retryDelayMs;
+    target.reconnectBeforeRetry = source.reconnectBeforeRetry;
+}
+
+HardwareOutputConnectionConfig BuildAuxiliaryOutputConfig(
+    const AuxiliaryOutputUiState& source)
+{
+    HardwareOutputConnectionConfig config;
+    config.enabled = source.enabled;
+    config.adapterType = static_cast<HardwareOutputAdapterType>(
+        std::clamp(source.type, 0, 3));
+    config.endpoint.address = source.address;
+    config.endpoint.port = ClampPort(source.port);
+    config.endpoint.resource = source.resource;
+    config.endpoint.timeoutMs = (std::max)(1, source.timeoutMs);
+    config.binding.adapterKey = source.key;
+    config.binding.target = source.target;
+    config.binding.address = ClampAddress(source.mappingAddress);
+    config.binding.passText = source.passText;
+    config.binding.failText = source.failText;
+    config.binding.appendCrLf = source.appendCrLf;
+    config.binding.invert = source.invert;
+    config.plcUseHoldingRegister = source.plcHoldingRegister;
+    config.autoPublish = source.autoPublish;
+    config.maxQueueSize = (std::max)(1, source.queueSize);
+    config.retryCount = std::clamp(source.retryCount, 0, 10);
+    config.retryDelayMs = (std::max)(1, source.retryDelayMs);
+    config.reconnectBeforeRetry = source.reconnectBeforeRetry;
+    config.handshake.enabled = false;
+    return config;
+}
+
 bool IsNarrowPanel()
 {
     return ImGui::GetContentRegionAvail().x < 260.0f;
@@ -141,13 +245,52 @@ const char* IoSignalName(HardwareIoSignal signal)
     }
 }
 
+bool DrawTaskSlotCombo(const char* id, std::string& selectedTask)
+{
+    if (!ImGui::BeginCombo(id, selectedTask.empty()
+        ? "选择任务" : selectedTask.c_str()))
+    {
+        return false;
+    }
+
+    bool changed = false;
+    const auto& taskGroups = ToolChainState::ReadOnlyTaskGroups();
+    for (int taskSlot = 0;
+        taskSlot < static_cast<int>(kHardwareCameraCount); ++taskSlot)
+    {
+        char slotName[32];
+        std::snprintf(slotName, sizeof(slotName), "任务%02d", taskSlot + 1);
+        if (taskSlot < static_cast<int>(taskGroups.size()))
+        {
+            const TaskGroupDefinition& group = taskGroups[taskSlot];
+            const std::string display = group.name == slotName
+                ? std::string(slotName)
+                : std::string(slotName) + " · " + group.name;
+            if (ImGui::Selectable(display.c_str(), selectedTask == group.name))
+            {
+                selectedTask = group.name;
+                changed = true;
+            }
+        }
+        else
+        {
+            ImGui::BeginDisabled();
+            ImGui::Selectable((std::string(slotName) + "（未创建）").c_str());
+            ImGui::EndDisabled();
+        }
+    }
+    ImGui::EndCombo();
+    return changed;
+}
+
 }
 
 namespace UI
 {
 void RequestHardwareWindowFocus()
 {
-    s_focusHardwareWindow = true;
+    g_ShowOpenCV = true;
+    g_ShowHardware = true;
 }
 
 void ShowHardwareWindow()
@@ -155,34 +298,102 @@ void ShowHardwareWindow()
     if (!g_ShowHardware)
         return;
 
-    if (s_focusHardwareWindow)
-        ImGui::SetNextWindowFocus();
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    // DockSpaceHost 的菜单栏使用 2px 的垂直 FramePadding。
+    const float menuBarHeight = ImGui::GetFontSize() + 4.0f;
+    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + menuBarHeight));
+    ImGui::SetNextWindowSize(ImVec2(viewport->Size.x,
+        (std::max)(1.0f, viewport->Size.y - menuBarHeight)));
+    ImGui::SetNextWindowViewport(viewport->ID);
 
-    if (ImGui::Begin("设备连接", &g_ShowHardware))
-        DrawHardwarePanel();
+    const ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoDocking |
+        ImGuiWindowFlags_NoTitleBar |
+        ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoSavedSettings;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 10.0f));
+    ImGui::Begin("##HardwareFullscreenWorkspace", nullptr, flags);
+
+    const bool isDark = g_CurrentTheme == 0;
+    const ImVec4 titleColor = isDark
+        ? ImVec4(0.42f, 0.78f, 0.84f, 1.0f)
+        : ImVec4(0.05f, 0.39f, 0.46f, 1.0f);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextColored(titleColor, "设备连接与 PLC 配置");
+
+    const char* backLabel = "返回图像";
+    const float backWidth = ImGui::CalcTextSize(backLabel).x +
+        ImGui::GetStyle().FramePadding.x * 2.0f;
+    ImGui::SameLine((std::max)(ImGui::GetCursorPosX(),
+        ImGui::GetWindowContentRegionMax().x - backWidth));
+    if (ImGui::Button(backLabel))
+        g_ShowHardware = false;
+
+    ImGui::Separator();
+    static int selectedPage = 0;
+    // 使用等宽导航按钮，让通讯页面在不同 DPI 下仍容易辨认。
+    const char* pageLabels[] = {
+        "1  工业相机", "2  实时保存", "3  PLC / TCP 连接", "4  PLC 握手"};
+    const ImVec4 selectedPageColor = isDark
+        ? ImVec4(0.08f, 0.40f, 0.46f, 1.0f)
+        : ImVec4(0.04f, 0.48f, 0.56f, 1.0f);
+    const ImVec4 selectedPageHovered = isDark
+        ? ImVec4(0.10f, 0.50f, 0.57f, 1.0f)
+        : ImVec4(0.05f, 0.56f, 0.64f, 1.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
+    if (ImGui::BeginTable("##HardwarePageNavigation", 4,
+        ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_PadOuterX))
+    {
+        for (int pageIndex = 0; pageIndex < 4; ++pageIndex)
+        {
+            ImGui::TableNextColumn();
+            ImGui::PushID(pageIndex);
+            const bool selected = selectedPage == pageIndex;
+            if (selected)
+            {
+                ImGui::PushStyleColor(ImGuiCol_Button, selectedPageColor);
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, selectedPageHovered);
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, selectedPageHovered);
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+            }
+            if (ImGui::Button(pageLabels[pageIndex], ImVec2(-1.0f, 36.0f)))
+                selectedPage = pageIndex;
+            if (selected)
+                ImGui::PopStyleColor(4);
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    ImGui::PopStyleVar(2);
+
+    ImGui::PushID(selectedPage);
+    ImGui::BeginChild("##HardwarePageContent", ImVec2(0.0f, 0.0f),
+        ImGuiChildFlags_None, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+    DrawHardwarePanel(selectedPage);
+    ImGui::EndChild();
+    ImGui::PopID();
+
     ImGui::End();
-
-    s_focusHardwareWindow = false;
+    ImGui::PopStyleVar(3);
 }
 
-void DrawHardwarePanel()
+void DrawHardwarePanel(int page)
 {
-    static char cameraAddress[256] = "0";
-    static char cameraSourceName[96] = "industrial-camera";
-    static int cameraBackend = 0;
-    static int cameraOrientation = 0;
-    static int cameraTimeoutMs = 250;
-    static int cameraIntervalMs = 33;
-    static bool cameraAutoCapture = true;
-    static bool cameraRunAfterCapture = true;
-    static bool cameraTriggerBeforeRun = true;
-    static bool cameraAutoExposure = true;
-    static float cameraExposure = -6.0f;
-    static float cameraGain = 0.0f;
-    static bool cameraAutoReconnect = true;
-    static int cameraReconnectFailureThreshold = 3;
-    static int cameraReconnectInitialDelayMs = 250;
-    static int cameraReconnectMaxDelayMs = 5000;
+    static std::array<CameraUiState, kHardwareCameraCount> cameraStates;
+    static int selectedCameraIndex = 0;
+    static int connectedCameraIndex = -1;
+    static CameraDiscoveryResult cameraDiscovery;
+    static int selectedDiscoveredCamera = -1;
+    static char forceIpAddress[32] = "192.168.1.64";
+    static char forceIpSubnet[32] = "255.255.255.0";
+    static char forceIpGateway[32] = "0.0.0.0";
+    static DeviceOperationResult forceIpOperation;
     static bool hardwareUiInitialized = false;
     static std::string hardwareSettingsError;
     static bool archiveUiInitialized = false;
@@ -217,8 +428,12 @@ void DrawHardwarePanel()
     static int outputReconnectInitialDelayMs = 250;
     static int outputReconnectMaxDelayMs = 5000;
     static std::vector<HardwareIoMapping> outputIoMappings;
+    static std::array<AuxiliaryOutputUiState,
+        kHardwareAuxiliaryOutputCount> auxiliaryOutputStates;
+    static std::array<DeviceOperationResult,
+        kHardwareAuxiliaryOutputCount> auxiliaryOutputOperations;
+    static int selectedAuxiliaryOutput = 0;
     static std::string manualTriggerTask;
-    static std::string scrollToTriggerTask;
     static std::string triggerSyncMessage;
     static std::vector<HardwareTaskIdentity> synchronizedTaskGroups;
     static bool outputConfigurationDirty = false;
@@ -226,22 +441,34 @@ void DrawHardwarePanel()
     if (!hardwareUiInitialized)
     {
         const HardwarePanelSettings settings = HardwareSettingsService::Load();
-        std::snprintf(cameraAddress, sizeof(cameraAddress), "%s", settings.cameraAddress.c_str());
-        std::snprintf(cameraSourceName, sizeof(cameraSourceName), "%s", settings.cameraSourceName.c_str());
-        cameraBackend = settings.cameraBackend;
-        cameraOrientation = settings.cameraOrientation;
-        cameraTimeoutMs = settings.cameraTimeoutMs;
-        cameraIntervalMs = settings.cameraIntervalMs;
-        cameraAutoCapture = settings.cameraAutoCapture;
-        cameraRunAfterCapture = settings.cameraRunAfterCapture;
-        cameraTriggerBeforeRun = settings.cameraTriggerBeforeRun;
-        cameraAutoExposure = settings.cameraAutoExposure;
-        cameraExposure = settings.cameraExposure;
-        cameraGain = settings.cameraGain;
-        cameraAutoReconnect = settings.cameraAutoReconnect;
-        cameraReconnectFailureThreshold = settings.cameraReconnectFailureThreshold;
-        cameraReconnectInitialDelayMs = settings.cameraReconnectInitialDelayMs;
-        cameraReconnectMaxDelayMs = settings.cameraReconnectMaxDelayMs;
+        selectedCameraIndex = std::clamp(settings.activeCameraIndex, 0,
+            static_cast<int>(kHardwareCameraCount) - 1);
+        for (std::size_t index = 0; index < cameraStates.size(); ++index)
+        {
+            const HardwareCameraSettings& source = settings.cameras[index];
+            CameraUiState& target = cameraStates[index];
+            std::snprintf(target.address, sizeof(target.address), "%s", source.address.c_str());
+            std::snprintf(target.sourceName, sizeof(target.sourceName), "%s",
+                source.sourceName.c_str());
+            target.backend = source.backend;
+            target.orientation = source.orientation;
+            target.timeoutMs = source.timeoutMs;
+            target.intervalMs = source.intervalMs;
+            target.autoCapture = source.autoCapture;
+            target.runAfterCapture = source.runAfterCapture;
+            target.triggerBeforeRun = source.triggerBeforeRun;
+            target.autoExposure = source.autoExposure;
+            target.exposure = source.exposure;
+            target.gain = source.gain;
+            target.triggerMode = source.triggerMode;
+            target.triggerDelayMicroseconds = source.triggerDelayMicroseconds;
+            target.bufferPolicy = source.bufferPolicy;
+            target.ptpEnabled = source.ptpEnabled;
+            target.autoReconnect = source.autoReconnect;
+            target.reconnectFailureThreshold = source.reconnectFailureThreshold;
+            target.reconnectInitialDelayMs = source.reconnectInitialDelayMs;
+            target.reconnectMaxDelayMs = source.reconnectMaxDelayMs;
+        }
 
         outputType = settings.outputType;
         std::snprintf(outputKey, sizeof(outputKey), "%s", settings.outputKey.c_str());
@@ -271,6 +498,9 @@ void DrawHardwarePanel()
         outputReconnectInitialDelayMs = settings.outputReconnectInitialDelayMs;
         outputReconnectMaxDelayMs = settings.outputReconnectMaxDelayMs;
         outputIoMappings = settings.outputIoMappings;
+        for (std::size_t index = 0; index < auxiliaryOutputStates.size(); ++index)
+            LoadAuxiliaryOutputUi(auxiliaryOutputStates[index],
+                settings.auxiliaryOutputs[index]);
         hardwareUiInitialized = true;
     }
 
@@ -283,7 +513,29 @@ void DrawHardwarePanel()
     }
 
     HardwareRuntimeSnapshot snapshot = HardwareRuntimeService::Snapshot();
+    connectedCameraIndex = snapshot.cameraSlotIndex;
     bool hardwareSettingsChanged = false;
+    CameraUiState& selectedCamera = cameraStates[static_cast<std::size_t>(selectedCameraIndex)];
+    auto& cameraAddress = selectedCamera.address;
+    auto& cameraSourceName = selectedCamera.sourceName;
+    int& cameraBackend = selectedCamera.backend;
+    int& cameraOrientation = selectedCamera.orientation;
+    int& cameraTimeoutMs = selectedCamera.timeoutMs;
+    int& cameraIntervalMs = selectedCamera.intervalMs;
+    bool& cameraAutoCapture = selectedCamera.autoCapture;
+    bool& cameraRunAfterCapture = selectedCamera.runAfterCapture;
+    bool& cameraTriggerBeforeRun = selectedCamera.triggerBeforeRun;
+    bool& cameraAutoExposure = selectedCamera.autoExposure;
+    float& cameraExposure = selectedCamera.exposure;
+    float& cameraGain = selectedCamera.gain;
+    int& cameraTriggerMode = selectedCamera.triggerMode;
+    float& cameraTriggerDelay = selectedCamera.triggerDelayMicroseconds;
+    int& cameraBufferPolicy = selectedCamera.bufferPolicy;
+    bool& cameraPtpEnabled = selectedCamera.ptpEnabled;
+    bool& cameraAutoReconnect = selectedCamera.autoReconnect;
+    int& cameraReconnectFailureThreshold = selectedCamera.reconnectFailureThreshold;
+    int& cameraReconnectInitialDelayMs = selectedCamera.reconnectInitialDelayMs;
+    int& cameraReconnectMaxDelayMs = selectedCamera.reconnectMaxDelayMs;
 
     std::vector<HardwareTaskIdentity> currentTaskGroups;
     std::vector<std::string> currentTaskGroupNames;
@@ -307,11 +559,66 @@ void DrawHardwarePanel()
         synchronizedTaskGroups = std::move(currentTaskGroups);
     }
 
-    DrawSectionTitle("工业相机");
-    ImGui::TextColored(ConnectionStateColor(snapshot.cameraState), "%s%s%s",
-        ConnectionStateName(snapshot.cameraState),
+    const bool showCamera = page == 0;
+    const bool showArchive = page == 1;
+    const bool showOutput = page == 2;
+    const bool showPlc = page == 3;
+    const bool narrowPanel = IsNarrowPanel();
+    const float twoButtonWidth = TwoColumnButtonWidth();
+    const bool outputConnected = snapshot.outputState == DeviceConnectionState::Connected;
+
+    if (showCamera)
+    {
+    if (snapshot.cameraState != DeviceConnectionState::Connected)
+        connectedCameraIndex = -1;
+    DrawSectionTitle("16 路工业相机");
+    const ImVec4 selectedSlotColor = g_CurrentTheme == 0
+        ? ImVec4(0.08f, 0.40f, 0.46f, 1.0f)
+        : ImVec4(0.04f, 0.48f, 0.56f, 1.0f);
+    if (ImGui::BeginTable("##camera_slots", 8,
+        ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_PadOuterX))
+    {
+        for (int index = 0; index < static_cast<int>(kHardwareCameraCount); ++index)
+        {
+            ImGui::TableNextColumn();
+            ImGui::PushID(index);
+            const bool selected = selectedCameraIndex == index;
+            if (selected)
+            {
+                ImGui::PushStyleColor(ImGuiCol_Button, selectedSlotColor);
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, selectedSlotColor);
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, selectedSlotColor);
+            }
+            char label[32];
+            std::snprintf(label, sizeof(label), "相机 %02d%s", index + 1,
+                connectedCameraIndex == index ? " · 在线" : "");
+            if (ImGui::Button(label, ImVec2(-1.0f, 30.0f)))
+            {
+                selectedCameraIndex = index;
+                hardwareSettingsChanged = true;
+            }
+            if (selected)
+                ImGui::PopStyleColor(3);
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+
+    const bool cameraConnected =
+        snapshot.cameraState == DeviceConnectionState::Connected &&
+        connectedCameraIndex == selectedCameraIndex;
+    ImGui::Text("当前配置：相机 %02d", selectedCameraIndex + 1);
+    ImGui::SameLine();
+    ImGui::TextColored(ConnectionStateColor(cameraConnected
+        ? DeviceConnectionState::Connected : DeviceConnectionState::Disconnected), "%s%s%s",
+        cameraConnected ? "已连接" : "未连接",
         snapshot.cameraAdapterName.empty() ? "" : " · ",
         snapshot.cameraAdapterName.c_str());
+    if (connectedCameraIndex >= 0 && connectedCameraIndex != selectedCameraIndex)
+    {
+        ImGui::SameLine();
+        ImGui::TextDisabled("（当前在线：相机 %02d）", connectedCameraIndex + 1);
+    }
     ImGui::SameLine();
     ImGui::TextDisabled("帧 %d%s", snapshot.cameraFrameIndex,
         snapshot.cameraCapturePending ? " · 抓取中" : "");
@@ -323,16 +630,134 @@ void DrawHardwarePanel()
             snapshot.cameraReconnecting ? " · 重连中" : "");
     }
 
-    const char* cameraBackends[] = {"自动", "DirectShow", "Media Foundation", "FFmpeg", "GStreamer"};
+    const char* cameraBackends[] = {"自动", "DirectShow", "Media Foundation", "FFmpeg", "GStreamer", "海康机器人 MVS", "华睿 iRAYPLE"};
+    if (cameraConnected)
+    {
+        ImGui::TextDisabled(
+            "采集统计：接收 %llu · 丢帧 %llu · 不完整 %llu · 队列 %u",
+            static_cast<unsigned long long>(snapshot.cameraStatistics.receivedFrames),
+            static_cast<unsigned long long>(snapshot.cameraStatistics.droppedFrames),
+            static_cast<unsigned long long>(snapshot.cameraStatistics.incompleteFrames),
+            snapshot.cameraStatistics.queuedFrames);
+        if (snapshot.cameraCapabilities.hardwareTimestamp)
+            ImGui::TextDisabled("硬件时间戳：支持");
+        const CameraFrameMetadata& frameMetadata = snapshot.cameraFrameMetadata;
+        if (!frameMetadata.sourcePixelFormatName.empty())
+        {
+            ImGui::TextDisabled("源像素格式：%s · %d bit%s · 0x%08X",
+                frameMetadata.sourcePixelFormatName.c_str(),
+                frameMetadata.sourceBitDepth,
+                frameMetadata.sourceIsBayer ? " · Bayer" : "",
+                frameMetadata.sourcePixelFormat);
+            ImGui::TextDisabled("显示转换：%s%s",
+                frameMetadata.conversionPath.empty()
+                    ? "未知" : frameMetadata.conversionPath.c_str(),
+                frameMetadata.convertedToDisplay ? " · 已转换" : "");
+        }
+    }
     if (BeginPropertyTable("##camera_properties"))
     {
+        PropertyRow("设备扫描");
+        ImGui::BeginDisabled(cameraBackend < 5);
+        if (ImGui::Button("扫描设备##camera_scan"))
+        {
+            const char* discoveryBackends[] = {
+                "", "", "", "", "", "mvs", "huaray"
+            };
+            cameraDiscovery = HardwareRuntimeService::DiscoverCameras(
+                discoveryBackends[std::clamp(cameraBackend, 0, 6)]);
+            selectedDiscoveredCamera = -1;
+        }
+        if (!cameraDiscovery.operation.message.empty())
+            ImGui::TextWrapped("%s", cameraDiscovery.operation.message.c_str());
+        if (!cameraDiscovery.devices.empty())
+        {
+            const char* preview = selectedDiscoveredCamera >= 0 &&
+                selectedDiscoveredCamera < static_cast<int>(cameraDiscovery.devices.size())
+                ? cameraDiscovery.devices[static_cast<std::size_t>(selectedDiscoveredCamera)].selector.c_str()
+                : "选择已发现相机";
+            ImGui::SetNextItemWidth(-1.0f);
+            if (ImGui::BeginCombo("##camera_discovered_devices", preview))
+            {
+                for (int index = 0;
+                    index < static_cast<int>(cameraDiscovery.devices.size()); ++index)
+                {
+                    const CameraDeviceInfo& device =
+                        cameraDiscovery.devices[static_cast<std::size_t>(index)];
+                    const std::string label = device.model + " | " +
+                        device.serialNumber + " | " + device.ipAddress +
+                        " | " + device.status;
+                    if (ImGui::Selectable(label.c_str(), selectedDiscoveredCamera == index))
+                    {
+                        selectedDiscoveredCamera = index;
+                        std::snprintf(cameraAddress, sizeof(selectedCamera.address),
+                            "%s", device.selector.c_str());
+                        hardwareSettingsChanged = true;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            const CameraDeviceInfo& first = cameraDiscovery.devices.front();
+            if (!first.runtimePath.empty())
+                ImGui::TextWrapped("SDK: %s", first.runtimePath.c_str());
+            if (!first.runtimeVersion.empty())
+                ImGui::TextWrapped("SDK Version: %s", first.runtimeVersion.c_str());
+
+            if ((cameraBackend == 5 || cameraBackend == 6) &&
+                selectedDiscoveredCamera >= 0 &&
+                selectedDiscoveredCamera < static_cast<int>(cameraDiscovery.devices.size()))
+            {
+                const CameraDeviceInfo& selectedDevice = cameraDiscovery.devices[
+                    static_cast<std::size_t>(selectedDiscoveredCamera)];
+                if (selectedDevice.transport == "GigE")
+                {
+                    ImGui::SeparatorText("GigE ForceIP");
+                    ImGui::SetNextItemWidth(-1.0f);
+                    ImGui::InputText("##force_ip_address", forceIpAddress,
+                        sizeof(forceIpAddress));
+                    ImGui::SetNextItemWidth(-1.0f);
+                    ImGui::InputText("##force_ip_subnet", forceIpSubnet,
+                        sizeof(forceIpSubnet));
+                    ImGui::SetNextItemWidth(-1.0f);
+                    ImGui::InputText("##force_ip_gateway", forceIpGateway,
+                        sizeof(forceIpGateway));
+                    if (ImGui::Button("Apply ForceIP##camera_force_ip"))
+                    {
+                        forceIpOperation = HardwareRuntimeService::ForceCameraIp(
+                            cameraBackend == 5 ? "mvs" : "huaray",
+                            selectedDevice.selector, forceIpAddress,
+                            forceIpSubnet, forceIpGateway);
+                        if (forceIpOperation.success)
+                        {
+                            cameraDiscovery = HardwareRuntimeService::DiscoverCameras(
+                                cameraBackend == 5 ? "mvs" : "huaray");
+                            selectedDiscoveredCamera = -1;
+                        }
+                    }
+                    if (!forceIpOperation.message.empty())
+                        ImGui::TextWrapped("%s", forceIpOperation.message.c_str());
+                }
+            }
+        }
+        ImGui::EndDisabled();
         PropertyRow("相机地址");
         hardwareSettingsChanged |= ImGui::InputText("##camera_address", cameraAddress, sizeof(cameraAddress));
-        ImGui::SetItemTooltip("相机索引（例如 0）或 RTSP/HTTP 视频流 URL");
+        ImGui::SetItemTooltip(cameraBackend >= 5
+            ? (cameraBackend == 6
+                ? "华睿相机 IP、用户 ID、枚举序号，或 key:厂商:序列号"
+                : "海康 GigE 相机 IP、序列号、用户名称或枚举序号")
+            : "相机索引（例如 0）或 RTSP/HTTP 视频流 URL");
 
         PropertyRow("采集后端");
-        hardwareSettingsChanged |= ImGui::Combo("##camera_backend", &cameraBackend, cameraBackends,
-            static_cast<int>(std::size(cameraBackends)));
+        if (ImGui::Combo("##camera_backend", &cameraBackend, cameraBackends,
+            static_cast<int>(std::size(cameraBackends))))
+        {
+            hardwareSettingsChanged = true;
+            if (cameraBackend >= 5 && cameraExposure < 1.0f)
+                cameraExposure = 10000.0f;
+            else if (cameraBackend < 5 && cameraExposure > 5.0f)
+                cameraExposure = -6.0f;
+        }
 
         PropertyRow("图像方向");
         const char* cameraOrientations[] = {
@@ -341,7 +766,8 @@ void DrawHardwarePanel()
             cameraOrientations, static_cast<int>(std::size(cameraOrientations))))
         {
             hardwareSettingsChanged = true;
-            HardwareRuntimeService::SetCameraOrientation(cameraOrientation);
+            if (cameraConnected)
+                HardwareRuntimeService::SetCameraOrientation(cameraOrientation);
         }
 
         PropertyRow("来源名称");
@@ -359,16 +785,25 @@ void DrawHardwarePanel()
         if (ImGui::Checkbox("自动曝光##camera_auto_exposure", &cameraAutoExposure))
         {
             hardwareSettingsChanged = true;
-            HardwareRuntimeService::SetCameraControl(
-                CameraControl::AutoExposure, cameraAutoExposure ? 1.0 : 0.0);
+            if (cameraConnected)
+            {
+                HardwareRuntimeService::SetCameraControl(
+                    CameraControl::AutoExposure, cameraAutoExposure ? 1.0 : 0.0);
+            }
         }
 
         PropertyRow("曝光值");
         ImGui::BeginDisabled(cameraAutoExposure);
-        if (ImGui::DragFloat("##camera_exposure", &cameraExposure, 0.1f, -13.0f, 5.0f, "%.2f"))
+        const bool vendorCamera = cameraBackend >= 5;
+        if (ImGui::DragFloat("##camera_exposure", &cameraExposure,
+            vendorCamera ? 100.0f : 0.1f,
+            vendorCamera ? 1.0f : -13.0f,
+            vendorCamera ? 1000000.0f : 5.0f,
+            vendorCamera ? "%.0f us" : "%.2f"))
         {
             hardwareSettingsChanged = true;
-            HardwareRuntimeService::SetCameraControl(CameraControl::Exposure, cameraExposure);
+            if (cameraConnected)
+                HardwareRuntimeService::SetCameraControl(CameraControl::Exposure, cameraExposure);
         }
         ImGui::EndDisabled();
 
@@ -376,15 +811,77 @@ void DrawHardwarePanel()
         if (ImGui::DragFloat("##camera_gain", &cameraGain, 0.5f, 0.0f, 100.0f, "%.1f"))
         {
             hardwareSettingsChanged = true;
-            HardwareRuntimeService::SetCameraControl(CameraControl::Gain, cameraGain);
+            if (cameraConnected)
+                HardwareRuntimeService::SetCameraControl(CameraControl::Gain, cameraGain);
+        }
+
+        PropertyRow("触发模式");
+        if (ImGui::Checkbox("PTP 时间同步##camera_ptp", &cameraPtpEnabled))
+        {
+            hardwareSettingsChanged = true;
+            if (cameraConnected)
+            {
+                LogOperation("相机 PTP 配置",
+                    HardwareRuntimeService::ConfigureCameraPtp(cameraPtpEnabled));
+            }
+        }
+        ImGui::SetItemTooltip("GigE IEEE 1588 精密时间协议；需要相机和网卡支持");
+        const char* triggerModes[] = {"连续采集", "软件触发", "Line1", "Line2"};
+        if (ImGui::Combo("##camera_trigger_mode", &cameraTriggerMode,
+            triggerModes, static_cast<int>(std::size(triggerModes))))
+        {
+            hardwareSettingsChanged = true;
+            if (cameraConnected)
+            {
+                CameraTriggerConfig trigger;
+                trigger.mode = static_cast<CameraTriggerMode>(
+                    std::clamp(cameraTriggerMode, 0, 3));
+                trigger.delayMicroseconds = cameraTriggerDelay;
+                LogOperation("相机触发配置",
+                    HardwareRuntimeService::ConfigureCameraTrigger(trigger));
+            }
+        }
+
+        PropertyRow("触发延时");
+        if (ImGui::DragFloat("##camera_trigger_delay", &cameraTriggerDelay,
+            1.0f, 0.0f, 1000000.0f, "%.0f us"))
+        {
+            hardwareSettingsChanged = true;
+            if (cameraConnected)
+            {
+                CameraTriggerConfig trigger;
+                trigger.mode = static_cast<CameraTriggerMode>(
+                    std::clamp(cameraTriggerMode, 0, 3));
+                trigger.delayMicroseconds = cameraTriggerDelay;
+                LogOperation("相机触发配置",
+                    HardwareRuntimeService::ConfigureCameraTrigger(trigger));
+            }
         }
 
         PropertyRow("采集模式");
         if (ImGui::Checkbox("自动抓帧##camera_auto_capture", &cameraAutoCapture))
         {
             hardwareSettingsChanged = true;
-            HardwareRuntimeService::SetCameraAutoCapture(cameraAutoCapture);
+            if (cameraConnected)
+                HardwareRuntimeService::SetCameraAutoCapture(cameraAutoCapture);
         }
+
+        PropertyRow("帧缓存策略");
+        const char* bufferPolicies[] = {"顺序帧", "仅最新帧"};
+        ImGui::BeginDisabled(cameraBackend != 5);
+        if (ImGui::Combo("##camera_buffer_policy", &cameraBufferPolicy,
+            bufferPolicies, static_cast<int>(std::size(bufferPolicies))))
+        {
+            hardwareSettingsChanged = true;
+            if (cameraConnected)
+            {
+                LogOperation("相机帧缓存策略",
+                    HardwareRuntimeService::ConfigureCameraBufferPolicy(
+                        static_cast<CameraBufferPolicy>(
+                            std::clamp(cameraBufferPolicy, 0, 1))));
+            }
+        }
+        ImGui::EndDisabled();
 
         PropertyRow("执行联动");
         hardwareSettingsChanged |= ImGui::Checkbox("抓帧后执行##camera_run_after", &cameraRunAfterCapture);
@@ -393,7 +890,8 @@ void DrawHardwarePanel()
         if (ImGui::Checkbox("执行前触发##camera_trigger_before", &cameraTriggerBeforeRun))
         {
             hardwareSettingsChanged = true;
-            HardwareRuntimeService::SetCameraTriggerOnInspection(cameraTriggerBeforeRun);
+            if (cameraConnected)
+                HardwareRuntimeService::SetCameraTriggerOnInspection(cameraTriggerBeforeRun);
         }
 
         PropertyRow("断线重连");
@@ -417,17 +915,15 @@ void DrawHardwarePanel()
         ImGui::EndTable();
     }
 
-    const bool narrowPanel = IsNarrowPanel();
-    const float twoButtonWidth = TwoColumnButtonWidth();
     const float cameraButtonWidth = narrowPanel ? -1.0f : twoButtonWidth;
-    const bool cameraConnected = snapshot.cameraState == DeviceConnectionState::Connected;
     if (ImGui::Button(cameraConnected ? "重新连接" : "连接相机",
         ImVec2(cameraButtonWidth, kActionButtonHeight)))
     {
-        static const char* backendValues[] = {"", "dshow", "msmf", "ffmpeg", "gstreamer"};
+        static const char* backendValues[] = {"", "dshow", "msmf", "ffmpeg", "gstreamer", "mvs", "huaray"};
         HardwareCameraConnectionConfig config;
+        config.slotIndex = selectedCameraIndex;
         config.endpoint.address = cameraAddress;
-        config.endpoint.resource = backendValues[std::clamp(cameraBackend, 0, 4)];
+        config.endpoint.resource = backendValues[std::clamp(cameraBackend, 0, 6)];
         config.endpoint.timeoutMs = std::max(1, cameraTimeoutMs);
         config.sourceName = cameraSourceName;
         config.grabTimeoutMs = std::max(1, cameraTimeoutMs);
@@ -438,11 +934,20 @@ void DrawHardwarePanel()
         config.autoExposure = cameraAutoExposure;
         config.exposure = cameraExposure;
         config.gain = cameraGain;
+        config.trigger.mode = static_cast<CameraTriggerMode>(
+            std::clamp(cameraTriggerMode, 0, 3));
+        config.trigger.delayMicroseconds = cameraTriggerDelay;
+        config.bufferPolicy = static_cast<CameraBufferPolicy>(
+            std::clamp(cameraBufferPolicy, 0, 1));
+        config.ptpEnabled = cameraPtpEnabled;
         config.autoReconnect = cameraAutoReconnect;
         config.reconnectFailureThreshold = cameraReconnectFailureThreshold;
         config.reconnectInitialDelayMs = cameraReconnectInitialDelayMs;
         config.reconnectMaxDelayMs = cameraReconnectMaxDelayMs;
-        LogOperation("工业相机连接", HardwareRuntimeService::ConnectCamera(config));
+        const DeviceOperationResult result = HardwareRuntimeService::ConnectCamera(config);
+        if (result.success)
+            connectedCameraIndex = selectedCameraIndex;
+        LogOperation("工业相机连接", result);
     }
     if (!narrowPanel)
         ImGui::SameLine();
@@ -455,10 +960,16 @@ void DrawHardwarePanel()
     ImGui::EndDisabled();
     ImGui::BeginDisabled(!cameraConnected);
     if (ImGui::Button("断开相机", ImVec2(-1.0f, kActionButtonHeight)))
+    {
         HardwareRuntimeService::DisconnectCamera();
+        connectedCameraIndex = -1;
+    }
     ImGui::EndDisabled();
     DrawOperationMessage(snapshot.lastCameraOperation);
+    }
 
+    if (showArchive)
+    {
     DrawSectionTitle("实时保存");
     bool archiveChanged = false;
     if (BeginPropertyTable("##archive_properties"))
@@ -531,8 +1042,11 @@ void DrawHardwarePanel()
     }
     ImGui::TextDisabled("设置文件");
     ImGui::TextWrapped("%s", FrameArchiveService::SettingsPath().c_str());
+    }
 
-    DrawSectionTitle("检测结果输出");
+    if (showOutput)
+    {
+    DrawSectionTitle("主输出通道（唯一可启用 PLC 握手）");
     ImGui::TextColored(ConnectionStateColor(snapshot.outputState), "%s%s%s",
         ConnectionStateName(snapshot.outputState),
         snapshot.outputAdapterName.empty() ? "" : " · ",
@@ -593,13 +1107,25 @@ void DrawHardwarePanel()
     }
 
     const char* outputTypes[] = {
-        "Modbus TCP 线圈", "Modbus PLC 标签", "OPC UA NodeId", "TCP 文本"};
+        "Modbus TCP｜线圈 IO（支持 PLC 握手）",
+        "Modbus TCP｜标签映射（单结果输出）",
+        "OPC UA｜NodeId 节点（单结果输出）",
+        "TCP Socket｜PASS / FAIL 文本"};
+    const char* outputTypeDescriptions[] = {
+        "多信号模式：支持每个任务独立的 Trigger、OK、NG，以及公共 Busy、Done、Error、Heartbeat、ACK。",
+        "单结果模式：将检测结果写入一个逻辑标签，底层可使用线圈或保持寄存器；不支持多信号握手。",
+        "单结果模式：将检测结果写入指定 OPC UA NodeId；不支持 PLC IO 握手。",
+        "文本模式：向 TCP Server 发送 PASS / FAIL 字符串；不支持 PLC IO 握手。"};
     const int previousOutputType = outputType;
     if (BeginPropertyTable("##output_properties"))
     {
         PropertyRow("输出类型");
         hardwareSettingsChanged |= ImGui::Combo("##output_type", &outputType, outputTypes,
             static_cast<int>(std::size(outputTypes)));
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored(ImVec4(0.38f, 0.72f, 0.78f, 1.0f), "用途：%s",
+            outputTypeDescriptions[std::clamp(outputType, 0, 3)]);
+        ImGui::PopTextWrapPos();
         if (outputType != previousOutputType)
         {
             if (outputType == 2 && outputPort == 502)
@@ -697,7 +1223,179 @@ void DrawHardwarePanel()
         ImGui::EndTable();
     }
 
-    const bool outputConnected = snapshot.outputState == DeviceConnectionState::Connected;
+    DrawSectionTitle("辅助结果输出（3 路可同时在线）");
+    ImGui::TextDisabled(
+        "辅助通道不接收 Trigger/ACK，只在批次完成后同步发送 PASS/FAIL；主握手通道保持独立。" );
+    const std::vector<HardwareAuxiliaryOutputSnapshot> auxiliarySnapshots =
+        HardwareRuntimeService::AuxiliaryOutputSnapshots();
+    auto auxiliarySnapshotFor = [&auxiliarySnapshots](const char* key)
+        -> const HardwareAuxiliaryOutputSnapshot*
+    {
+        const auto found = std::find_if(auxiliarySnapshots.begin(),
+            auxiliarySnapshots.end(), [key](const HardwareAuxiliaryOutputSnapshot& item)
+            {
+                return item.adapterKey == key;
+            });
+        return found == auxiliarySnapshots.end() ? nullptr : &*found;
+    };
+
+    if (ImGui::BeginTable("##auxiliary_output_slots", 3,
+        ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_PadOuterX))
+    {
+        for (int index = 0; index < static_cast<int>(auxiliaryOutputStates.size()); ++index)
+        {
+            ImGui::TableNextColumn();
+            ImGui::PushID(index);
+            const AuxiliaryOutputUiState& item = auxiliaryOutputStates[index];
+            const HardwareAuxiliaryOutputSnapshot* state =
+                auxiliarySnapshotFor(item.key);
+            const bool online = state &&
+                state->state == DeviceConnectionState::Connected;
+            if (selectedAuxiliaryOutput == index)
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                    ImVec4(0.08f, 0.40f, 0.46f, 1.0f));
+            char label[64];
+            std::snprintf(label, sizeof(label), "辅助通道 %d%s", index + 1,
+                online ? " · 在线" : (item.enabled ? " · 已启用" : " · 停用"));
+            if (ImGui::Button(label, ImVec2(-1.0f, 32.0f)))
+                selectedAuxiliaryOutput = index;
+            if (selectedAuxiliaryOutput == index)
+                ImGui::PopStyleColor();
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+
+    AuxiliaryOutputUiState& auxiliary = auxiliaryOutputStates[
+        static_cast<std::size_t>(selectedAuxiliaryOutput)];
+    const HardwareAuxiliaryOutputSnapshot* auxiliarySnapshot =
+        auxiliarySnapshotFor(auxiliary.key);
+    const bool auxiliaryConnected = auxiliarySnapshot &&
+        auxiliarySnapshot->state == DeviceConnectionState::Connected;
+    ImGui::TextColored(ConnectionStateColor(auxiliaryConnected
+        ? DeviceConnectionState::Connected : DeviceConnectionState::Disconnected),
+        "辅助通道 %d：%s", selectedAuxiliaryOutput + 1,
+        auxiliaryConnected ? "已连接" : "未连接");
+
+    const char* auxiliaryTypes[] = {
+        "Modbus TCP｜单线圈结果",
+        "Modbus TCP｜标签映射结果",
+        "OPC UA｜NodeId 结果",
+        "TCP Socket｜PASS / FAIL 文本"};
+    if (BeginPropertyTable("##auxiliary_output_properties"))
+    {
+        PropertyRow("启用通道");
+        if (ImGui::Checkbox("启用并参与同步输出##aux_enabled", &auxiliary.enabled))
+        {
+            hardwareSettingsChanged = true;
+            if (!auxiliary.enabled && auxiliaryConnected)
+                HardwareRuntimeService::DisconnectAuxiliaryOutput(auxiliary.key);
+        }
+
+        PropertyRow("输出类型");
+        hardwareSettingsChanged |= ImGui::Combo("##aux_type", &auxiliary.type,
+            auxiliaryTypes, static_cast<int>(std::size(auxiliaryTypes)));
+
+        PropertyRow("适配器标识");
+        ImGui::BeginDisabled(auxiliaryConnected);
+        hardwareSettingsChanged |= ImGui::InputText(
+            "##aux_key", auxiliary.key, sizeof(auxiliary.key));
+        ImGui::EndDisabled();
+        if (auxiliaryConnected)
+            ImGui::SetItemTooltip("请先断开该辅助通道再修改标识");
+
+        PropertyRow("主机地址");
+        hardwareSettingsChanged |= ImGui::InputText(
+            "##aux_address", auxiliary.address, sizeof(auxiliary.address));
+
+        PropertyRow("端口");
+        hardwareSettingsChanged |= ImGui::DragInt(
+            "##aux_port", &auxiliary.port, 1.0f, 0, 65535);
+
+        if (auxiliary.type == 0 || auxiliary.type == 1)
+        {
+            PropertyRow("Unit ID");
+            hardwareSettingsChanged |= ImGui::InputText(
+                "##aux_resource", auxiliary.resource, sizeof(auxiliary.resource));
+        }
+        if (auxiliary.type == 1 || auxiliary.type == 2)
+        {
+            PropertyRow(auxiliary.type == 1 ? "PLC 标签" : "NodeId");
+            hardwareSettingsChanged |= ImGui::InputText(
+                "##aux_target", auxiliary.target, sizeof(auxiliary.target));
+        }
+        if (auxiliary.type == 0 || auxiliary.type == 1)
+        {
+            PropertyRow(auxiliary.type == 0 ? "线圈地址" : "映射地址");
+            hardwareSettingsChanged |= ImGui::DragInt(
+                "##aux_mapping_address", &auxiliary.mappingAddress,
+                1.0f, 0, 65535);
+        }
+        if (auxiliary.type == 3)
+        {
+            PropertyRow("Pass 文本");
+            hardwareSettingsChanged |= ImGui::InputText(
+                "##aux_pass", auxiliary.passText, sizeof(auxiliary.passText));
+            PropertyRow("Fail 文本");
+            hardwareSettingsChanged |= ImGui::InputText(
+                "##aux_fail", auxiliary.failText, sizeof(auxiliary.failText));
+        }
+
+        PropertyRow("连接超时");
+        hardwareSettingsChanged |= ImGui::DragInt(
+            "##aux_timeout", &auxiliary.timeoutMs, 10.0f, 1, 60000, "%d ms");
+
+        PropertyRow("输出选项");
+        if (auxiliary.type == 1)
+        {
+            hardwareSettingsChanged |= ImGui::Checkbox(
+                "保持寄存器##aux_holding", &auxiliary.plcHoldingRegister);
+            ImGui::SameLine();
+        }
+        if (auxiliary.type == 3)
+        {
+            hardwareSettingsChanged |= ImGui::Checkbox(
+                "追加 CRLF##aux_crlf", &auxiliary.appendCrLf);
+            ImGui::SameLine();
+        }
+        hardwareSettingsChanged |= ImGui::Checkbox(
+            "反相##aux_invert", &auxiliary.invert);
+        ImGui::SameLine();
+        hardwareSettingsChanged |= ImGui::Checkbox(
+            "批次完成后同步发送##aux_publish", &auxiliary.autoPublish);
+        ImGui::EndTable();
+    }
+
+    ImGui::BeginDisabled(!auxiliary.enabled);
+    if (ImGui::Button(auxiliaryConnected ? "重新连接辅助通道" : "连接辅助通道",
+        ImVec2(twoButtonWidth, kActionButtonHeight)))
+    {
+        DeviceOperationResult result = HardwareRuntimeService::ConnectAuxiliaryOutput(
+            BuildAuxiliaryOutputConfig(auxiliary));
+        auxiliaryOutputOperations[static_cast<std::size_t>(
+            selectedAuxiliaryOutput)] = result;
+        LogOperation("辅助输出连接", result);
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!auxiliaryConnected);
+    if (ImGui::Button("断开辅助通道", ImVec2(-1.0f, kActionButtonHeight)))
+    {
+        HardwareRuntimeService::DisconnectAuxiliaryOutput(auxiliary.key);
+        auxiliaryOutputOperations[static_cast<std::size_t>(
+            selectedAuxiliaryOutput)] = {true, "辅助输出已断开"};
+    }
+    ImGui::EndDisabled();
+    if (auxiliarySnapshot && !auxiliarySnapshot->lastOperation.message.empty())
+        DrawOperationMessage(auxiliarySnapshot->lastOperation);
+    else
+        DrawOperationMessage(auxiliaryOutputOperations[static_cast<std::size_t>(
+            selectedAuxiliaryOutput)]);
+
+    }
+
+    if (showPlc)
+    {
     if (outputType == 0)
     {
         DrawSectionTitle("PLC IO 映射与握手");
@@ -766,21 +1464,42 @@ void DrawHardwarePanel()
         {
             manualTriggerTask = currentTaskGroupNames.front();
         }
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("当前任务");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(220.0f);
+        DrawTaskSlotCombo("##plc_mapping_task_filter", manualTriggerTask);
+        ImGui::SameLine();
+        ImGui::TextDisabled("下方分别显示任务独立信号和公共握手信号");
+
+        const auto isTaskScopedMapping = [](const HardwareIoMapping& mapping)
+        {
+            return mapping.signal == HardwareIoSignal::Trigger ||
+                mapping.signal == HardwareIoSignal::Ok ||
+                mapping.signal == HardwareIoSignal::Ng;
+        };
         int removeMapping = -1;
-        if (ImGui::BeginTable("##plc_io_mapping", 9,
+        for (int mappingSection = 0; mappingSection < 2; ++mappingSection)
+        {
+        const bool showTaskMappings = mappingSection == 0;
+        ImGui::SeparatorText(showTaskMappings
+            ? "当前任务信号" : "公共握手信号");
+        const char* tableId = showTaskMappings
+            ? "##plc_task_io_mapping" : "##plc_common_io_mapping";
+        const float tableHeight = showTaskMappings ? 190.0f : 240.0f;
+        if (ImGui::BeginTable(tableId, 9,
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
             ImGuiTableFlags_ScrollX | ImGuiTableFlags_SizingFixedFit,
-            ImVec2(0.0f, (std::min)(280.0f,
-                58.0f + outputIoMappings.size() * 30.0f))))
+            ImVec2(0.0f, tableHeight)))
         {
             ImGui::TableSetupColumn("启用", ImGuiTableColumnFlags_WidthFixed, 44.0f);
-            ImGui::TableSetupColumn("信号", ImGuiTableColumnFlags_WidthFixed, 118.0f);
-            ImGui::TableSetupColumn("方向", ImGuiTableColumnFlags_WidthFixed, 98.0f);
+            ImGui::TableSetupColumn("信号", ImGuiTableColumnFlags_WidthFixed, 140.0f);
+            ImGui::TableSetupColumn("方向", ImGuiTableColumnFlags_WidthFixed, 132.0f);
             ImGui::TableSetupColumn("地址", ImGuiTableColumnFlags_WidthFixed, 72.0f);
             ImGui::TableSetupColumn("反相", ImGuiTableColumnFlags_WidthFixed, 44.0f);
             ImGui::TableSetupColumn("脉冲", ImGuiTableColumnFlags_WidthFixed, 82.0f);
-            ImGui::TableSetupColumn("任务", ImGuiTableColumnFlags_WidthFixed, 120.0f);
-            ImGui::TableSetupColumn("单点测试", ImGuiTableColumnFlags_WidthFixed, 104.0f);
+            ImGui::TableSetupColumn("任务", ImGuiTableColumnFlags_WidthFixed, 132.0f);
+            ImGui::TableSetupColumn("单点测试", ImGuiTableColumnFlags_WidthFixed, 112.0f);
             ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 34.0f);
             ImGui::TableHeadersRow();
 
@@ -791,6 +1510,13 @@ void DrawHardwarePanel()
             for (std::size_t index = 0; index < outputIoMappings.size(); ++index)
             {
                 HardwareIoMapping& mapping = outputIoMappings[index];
+                const bool taskScoped = isTaskScopedMapping(mapping);
+                if ((showTaskMappings && (!taskScoped ||
+                    mapping.taskGroupName != manualTriggerTask)) ||
+                    (!showTaskMappings && taskScoped))
+                {
+                    continue;
+                }
                 ImGui::PushID(static_cast<int>(index));
                 ImGui::TableNextRow();
 
@@ -812,6 +1538,13 @@ void DrawHardwarePanel()
                     else
                     {
                         mapping.direction = HardwareIoDirection::Output;
+                    }
+                    if ((mapping.signal == HardwareIoSignal::Trigger ||
+                        mapping.signal == HardwareIoSignal::Ok ||
+                        mapping.signal == HardwareIoSignal::Ng) &&
+                        mapping.taskGroupName.empty())
+                    {
+                        mapping.taskGroupName = manualTriggerTask;
                     }
                     handshakeSettingsChanged = true;
                 }
@@ -846,28 +1579,14 @@ void DrawHardwarePanel()
                 ImGui::EndDisabled();
 
                 ImGui::TableSetColumnIndex(6);
-                if (mapping.signal == HardwareIoSignal::Trigger)
+                const bool taskScopedMapping = isTaskScopedMapping(mapping);
+                if (taskScopedMapping)
                 {
-                    ImGui::SetNextItemWidth(-1.0f);
-                    if (ImGui::BeginCombo("##task", mapping.taskGroupName.empty()
-                        ? "选择任务" : mapping.taskGroupName.c_str()))
-                    {
-                        for (const TaskGroupDefinition& group :
-                            ToolChainState::ReadOnlyTaskGroups())
-                        {
-                            if (ImGui::Selectable(group.name.c_str(),
-                                mapping.taskGroupName == group.name))
-                            {
-                                mapping.taskGroupName = group.name;
-                                handshakeSettingsChanged = true;
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
+                    ImGui::TextUnformatted(mapping.taskGroupName.c_str());
                 }
                 else
                 {
-                    ImGui::TextDisabled("—");
+                    ImGui::TextDisabled("公共");
                 }
 
                 ImGui::TableSetColumnIndex(7);
@@ -900,16 +1619,10 @@ void DrawHardwarePanel()
                     ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
                         ImGui::GetColorU32(ImVec4(0.10f, 0.38f, 0.42f, 0.42f)));
                 }
-                if (!scrollToTriggerTask.empty() &&
-                    mapping.signal == HardwareIoSignal::Trigger &&
-                    mapping.taskGroupName == scrollToTriggerTask)
-                {
-                    ImGui::SetScrollHereY(0.25f);
-                    scrollToTriggerTask.clear();
-                }
                 ImGui::PopID();
             }
             ImGui::EndTable();
+        }
         }
         if (removeMapping >= 0)
         {
@@ -926,8 +1639,7 @@ void DrawHardwarePanel()
                         (mapping.address < 65535 ? 1 : 0)));
             HardwareIoMapping mapping;
             mapping.address = nextAddress;
-            if (!ToolChainState::ReadOnlyTaskGroups().empty())
-                mapping.taskGroupName = ToolChainState::ReadOnlyTaskGroups().front().name;
+            mapping.taskGroupName = manualTriggerTask;
             outputIoMappings.push_back(std::move(mapping));
             handshakeSettingsChanged = true;
         }
@@ -959,22 +1671,6 @@ void DrawHardwarePanel()
         }
         if (!triggerSyncMessage.empty())
             ImGui::TextDisabled("%s", triggerSyncMessage.c_str());
-        ImGui::SetNextItemWidth(180.0f);
-        if (ImGui::BeginCombo("##manual_plc_task", manualTriggerTask.empty()
-            ? "选择测试任务" : manualTriggerTask.c_str()))
-        {
-            for (const TaskGroupDefinition& group : ToolChainState::ReadOnlyTaskGroups())
-            {
-                if (ImGui::Selectable(group.name.c_str(),
-                    manualTriggerTask == group.name))
-                {
-                    manualTriggerTask = group.name;
-                    scrollToTriggerTask = group.name;
-                }
-            }
-            ImGui::EndCombo();
-        }
-        ImGui::SameLine();
         ImGui::BeginDisabled(!outputConnected || !outputHandshakeEnabled ||
             manualTriggerTask.empty() || outputConfigurationDirty ||
             handshakeSettingsChanged);
@@ -1015,7 +1711,17 @@ void DrawHardwarePanel()
         ImGui::TextDisabled(
             "单任务触发：仅空闲时接受；Busy/等待 ACK 期间忽略新 Trigger，不排队补跑。无相机时文件夹每轮推进一张。");
     }
+    else
+    {
+        DrawSectionTitle("PLC IO 映射与握手");
+        ImGui::TextDisabled("当前输出类型不是 Modbus TCP 线圈，请先在“检测结果输出”中切换输出类型。");
+    }
+    }
 
+    if (showOutput || showPlc)
+    {
+    if (showOutput)
+        ImGui::SeparatorText("主输出通道连接与测试");
     if (ImGui::Button(outputConnected ? "重新连接输出" : "连接输出",
         ImVec2(narrowPanel ? -1.0f : twoButtonWidth, kActionButtonHeight)))
     {
@@ -1073,26 +1779,38 @@ void DrawHardwarePanel()
         LogOperation("测试 Fail 输出", HardwareRuntimeService::PublishConfiguredStatus(ToolResultStatus::Fail));
     ImGui::EndDisabled();
     DrawOperationMessage(snapshot.lastOutputOperation);
+    }
 
     if (hardwareSettingsChanged)
     {
         HardwarePanelSettings settings;
-        settings.cameraAddress = cameraAddress;
-        settings.cameraSourceName = cameraSourceName;
-        settings.cameraBackend = cameraBackend;
-        settings.cameraOrientation = cameraOrientation;
-        settings.cameraTimeoutMs = cameraTimeoutMs;
-        settings.cameraIntervalMs = cameraIntervalMs;
-        settings.cameraAutoCapture = cameraAutoCapture;
-        settings.cameraRunAfterCapture = cameraRunAfterCapture;
-        settings.cameraTriggerBeforeRun = cameraTriggerBeforeRun;
-        settings.cameraAutoExposure = cameraAutoExposure;
-        settings.cameraExposure = cameraExposure;
-        settings.cameraGain = cameraGain;
-        settings.cameraAutoReconnect = cameraAutoReconnect;
-        settings.cameraReconnectFailureThreshold = cameraReconnectFailureThreshold;
-        settings.cameraReconnectInitialDelayMs = cameraReconnectInitialDelayMs;
-        settings.cameraReconnectMaxDelayMs = cameraReconnectMaxDelayMs;
+        settings.activeCameraIndex = selectedCameraIndex;
+        settings.cameras.resize(kHardwareCameraCount);
+        for (std::size_t index = 0; index < cameraStates.size(); ++index)
+        {
+            const CameraUiState& source = cameraStates[index];
+            HardwareCameraSettings& target = settings.cameras[index];
+            target.address = source.address;
+            target.sourceName = source.sourceName;
+            target.backend = source.backend;
+            target.orientation = source.orientation;
+            target.timeoutMs = source.timeoutMs;
+            target.intervalMs = source.intervalMs;
+            target.autoCapture = source.autoCapture;
+            target.runAfterCapture = source.runAfterCapture;
+            target.triggerBeforeRun = source.triggerBeforeRun;
+            target.autoExposure = source.autoExposure;
+            target.exposure = source.exposure;
+            target.gain = source.gain;
+            target.triggerMode = source.triggerMode;
+            target.triggerDelayMicroseconds = source.triggerDelayMicroseconds;
+            target.bufferPolicy = source.bufferPolicy;
+            target.ptpEnabled = source.ptpEnabled;
+            target.autoReconnect = source.autoReconnect;
+            target.reconnectFailureThreshold = source.reconnectFailureThreshold;
+            target.reconnectInitialDelayMs = source.reconnectInitialDelayMs;
+            target.reconnectMaxDelayMs = source.reconnectMaxDelayMs;
+        }
         settings.outputType = outputType;
         settings.outputKey = outputKey;
         settings.outputAddress = outputAddress;
@@ -1124,7 +1842,19 @@ void DrawHardwarePanel()
             outputReconnectInitialDelayMs;
         settings.outputReconnectMaxDelayMs = outputReconnectMaxDelayMs;
         settings.outputIoMappings = outputIoMappings;
-        HardwareSettingsService::Save(settings, {}, &hardwareSettingsError);
+        settings.auxiliaryOutputs.clear();
+        settings.auxiliaryOutputs.reserve(auxiliaryOutputStates.size());
+        for (const AuxiliaryOutputUiState& auxiliary : auxiliaryOutputStates)
+            settings.auxiliaryOutputs.push_back(
+                BuildAuxiliaryOutputConfig(auxiliary));
+        if (HardwareSettingsService::Save(settings, {}, &hardwareSettingsError))
+            LogSystem::Add(LOG_INFO,
+                "event=config_modified subsystem=hardware path=%s",
+                HardwareSettingsService::SettingsPath().c_str());
+        else
+            LogSystem::Add(LOG_ERROR,
+                "event=config_save_failed subsystem=hardware error=%s",
+                hardwareSettingsError.c_str());
     }
 
     ImGui::Spacing();
@@ -1133,6 +1863,22 @@ void DrawHardwarePanel()
     if (!hardwareSettingsError.empty())
         ImGui::TextColored(ImVec4(0.95f, 0.38f, 0.32f, 1.0f),
             "保存失败：%s", hardwareSettingsError.c_str());
+    if (ImGui::Button("恢复上次有效配置"))
+    {
+        if (HardwareSettingsService::RestoreLastValid({}, &hardwareSettingsError))
+        {
+            hardwareUiInitialized = false;
+            LogSystem::Add(LOG_WARN,
+                "event=config_restored subsystem=hardware path=%s",
+                HardwareSettingsService::SettingsPath().c_str());
+        }
+        else
+        {
+            LogSystem::Add(LOG_ERROR,
+                "event=config_restore_failed subsystem=hardware error=%s",
+                hardwareSettingsError.c_str());
+        }
+    }
 
 }
 }

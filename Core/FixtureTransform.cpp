@@ -20,44 +20,83 @@ ImVec2 ToImVec(cv::Point2f point)
 
 namespace FixtureTransform
 {
-bool TryExtractPose(const ToolResult& result, int resultIndex, FixturePose& pose)
+bool TryExtractPose(const ToolResult& result, int resultIndex, FixturePose& pose,
+    ToolSpatialResultChannel channel)
 {
     pose = {};
-    if (resultIndex < 0)
+    if (resultIndex < 0 || !IsValidSpatialResultChannel(static_cast<int>(channel)))
         return false;
 
-    if (resultIndex < static_cast<int>(result.regions.size()))
+    int remaining = resultIndex;
+    const auto selectChannel = [channel](ToolSpatialResultChannel candidate)
     {
-        const auto& region = result.regions[resultIndex];
-        pose.origin = {
-            region.bbox.x + region.bbox.width * 0.5f,
-            region.bbox.y + region.bbox.height * 0.5f,
-        };
-        pose.angleDegrees = region.angle;
-        pose.valid = region.bbox.width > 0 && region.bbox.height > 0;
-        return pose.valid;
+        return channel == ToolSpatialResultChannel::Auto || channel == candidate;
+    };
+
+    if (selectChannel(ToolSpatialResultChannel::Detections))
+    {
+        if (remaining < static_cast<int>(result.detections.size()))
+        {
+            const auto& detection = result.detections[remaining];
+            pose.origin = {
+                detection.box.x + detection.box.width * 0.5f,
+                detection.box.y + detection.box.height * 0.5f,
+            };
+            pose.valid = detection.box.width > 0 && detection.box.height > 0;
+            return pose.valid;
+        }
+        if (channel != ToolSpatialResultChannel::Auto)
+            return false;
+        remaining -= static_cast<int>(result.detections.size());
     }
 
-    if (resultIndex < static_cast<int>(result.detections.size()))
+    if (selectChannel(ToolSpatialResultChannel::Regions))
     {
-        const auto& detection = result.detections[resultIndex];
-        pose.origin = {
-            detection.box.x + detection.box.width * 0.5f,
-            detection.box.y + detection.box.height * 0.5f,
-        };
-        pose.valid = detection.box.width > 0 && detection.box.height > 0;
-        return pose.valid;
+        if (remaining < static_cast<int>(result.regions.size()))
+        {
+            const auto& region = result.regions[remaining];
+            pose.origin = {
+                region.bbox.x + region.bbox.width * 0.5f,
+                region.bbox.y + region.bbox.height * 0.5f,
+            };
+            pose.angleDegrees = region.angle;
+            pose.valid = region.bbox.width > 0 && region.bbox.height > 0;
+            return pose.valid;
+        }
+        if (channel != ToolSpatialResultChannel::Auto)
+            return false;
+        remaining -= static_cast<int>(result.regions.size());
     }
 
-    if (resultIndex < static_cast<int>(result.lines.size()))
+    if (selectChannel(ToolSpatialResultChannel::Lines))
     {
-        const auto& line = result.lines[resultIndex];
-        pose.origin = cv::Point2f(
-            (line.p1.x + line.p2.x) * 0.5f,
-            (line.p1.y + line.p2.y) * 0.5f);
-        pose.angleDegrees = line.angle;
-        pose.valid = line.p1 != line.p2;
-        return pose.valid;
+        if (remaining < static_cast<int>(result.lines.size()))
+        {
+            const auto& line = result.lines[remaining];
+            pose.origin = cv::Point2f(
+                (line.p1.x + line.p2.x) * 0.5f,
+                (line.p1.y + line.p2.y) * 0.5f);
+            pose.angleDegrees = line.angle;
+            pose.valid = line.p1 != line.p2;
+            return pose.valid;
+        }
+        if (channel != ToolSpatialResultChannel::Auto)
+            return false;
+        remaining -= static_cast<int>(result.lines.size());
+    }
+
+    if (selectChannel(ToolSpatialResultChannel::Texts))
+    {
+        if (remaining < static_cast<int>(result.texts.size()))
+        {
+            const auto& text = result.texts[remaining];
+            pose.origin = {
+                text.box.x + text.box.width * 0.5f,
+                text.box.y + text.box.height * 0.5f,
+            };
+            pose.valid = text.box.width > 0 && text.box.height > 0;
+            return pose.valid;
+        }
     }
     return false;
 }

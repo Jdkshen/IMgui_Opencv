@@ -4,6 +4,7 @@
 #include "ROIManager.h"
 #include "../Core/ThemeManager.h"
 #include "../Core/ROIState.h"
+#include "../Core/ImageState.h"
 #include "../include/imgui/imgui.h"
 #include "../Log/LogSystem.h"
 
@@ -62,20 +63,172 @@ namespace UI
             ImGui::EndCombo();
         }
         ImGui::PopItemWidth();
-        ImGui::SetItemTooltip("右键画框时将创建此类型的ROI");
+        ImGui::SetItemTooltip(
+            "右键创建：矩形/线/圆拖动，点单击，多边形逐点单击并用双击、Enter或首点闭合。\n"
+            "左键选择和编辑，Delete/Backspace删除，Esc取消当前绘制。");
+
+        SectionTitle("ROI 专业编辑");
+        ImGui::BeginDisabled(!ROIState::CanUndo());
+        if (ImGui::Button("撤销 Ctrl+Z", ImVec2((ImGui::GetContentRegionAvail().x - 5.0f) * 0.5f, 0)))
+        {
+            if (ROIState::Undo()) MarkCurrentRecipeDirty();
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!ROIState::CanRedo());
+        if (ImGui::Button("重做 Ctrl+Y", ImVec2(-1, 0)))
+        {
+            if (ROIState::Redo()) MarkCurrentRecipeDirty();
+        }
+        ImGui::EndDisabled();
+        if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z) && ROIState::Undo())
+            MarkCurrentRecipeDirty();
+        if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y) && ROIState::Redo())
+            MarkCurrentRecipeDirty();
+
+        const int professionalIndex = ROIState::SelectedIndex();
+        const ROI* professionalROI = ROIState::At(professionalIndex);
+        if (professionalROI)
+        {
+            ROI edited = *professionalROI;
+            bool flagsChanged = false;
+            flagsChanged |= ImGui::Checkbox("锁定##roi_locked", &edited.locked);
+            ImGui::SameLine();
+            flagsChanged |= ImGui::Checkbox("显示##roi_visible", &edited.visible);
+            ImGui::SameLine();
+            flagsChanged |= ImGui::Checkbox("限制在图像内##roi_constrain", &edited.constrainToImage);
+            if (flagsChanged)
+            {
+                edited.ClampToImage(ImageState::Current().size());
+                ROIState::Update(professionalIndex, edited);
+                MarkCurrentRecipeDirty();
+            }
+
+            bool numericChanged = false;
+            bool numericActivated = false;
+            bool numericCommitted = false;
+            bool numericDeactivated = false;
+            auto DragValue = [&](const char* label, float* value, float speed = 0.1f)
+            {
+                const bool changed = ImGui::DragFloat(label, value, speed, -1000000.0f,
+                    1000000.0f, "%.3f");
+                numericChanged |= changed;
+                numericActivated |= ImGui::IsItemActivated();
+                numericCommitted |= ImGui::IsItemDeactivatedAfterEdit();
+                numericDeactivated |= ImGui::IsItemDeactivated();
+            };
+
+            ImGui::BeginDisabled(edited.locked);
+            if (edited.type == ROI_TYPE_RECT)
+            {
+                float row = edited.HalconRow();
+                float column = edited.HalconColumn();
+                float phiDegrees = ROI::NormalizeRectangle2AngleDegrees(edited.angle);
+                float length1 = edited.HalconLength1();
+                float length2 = edited.HalconLength2();
+                DragValue("Row##roi_row", &row);
+                DragValue("Column##roi_column", &column);
+                DragValue("Phi (deg)##roi_phi", &phiDegrees);
+                DragValue("Length1##roi_length1", &length1);
+                DragValue("Length2##roi_length2", &length2);
+                if (numericChanged)
+                {
+                    length1 = (std::max)(0.5f, length1);
+                    length2 = (std::max)(0.5f, length2);
+                    edited.start = ImVec2(column - length1, row - length2);
+                    edited.end = ImVec2(column + length1, row + length2);
+                    edited.angle = ROI::NormalizeRectangle2AngleDegrees(phiDegrees);
+                }
+            }
+            else if (edited.type == ROI_TYPE_CIRCLE)
+            {
+                float row = edited.start.y;
+                float column = edited.start.x;
+                float radius = edited.CircleRadius();
+                DragValue("Row##circle_row", &row);
+                DragValue("Column##circle_column", &column);
+                DragValue("Radius##circle_radius", &radius);
+                if (numericChanged)
+                {
+                    radius = (std::max)(0.5f, radius);
+                    edited.start = ImVec2(column, row);
+                    edited.end = ImVec2(column + radius, row);
+                }
+            }
+            else if (edited.type == ROI_TYPE_POINT)
+            {
+                DragValue("Row##point_row", &edited.start.y);
+                DragValue("Column##point_column", &edited.start.x);
+            }
+            else if (edited.type == ROI_TYPE_LINE)
+            {
+                DragValue("Row1##line_row1", &edited.start.y);
+                DragValue("Column1##line_column1", &edited.start.x);
+                DragValue("Row2##line_row2", &edited.end.y);
+                DragValue("Column2##line_column2", &edited.end.x);
+            }
+            else if (edited.type == ROI_TYPE_POLYGON)
+            {
+                for (std::size_t pointIndex = 0; pointIndex < edited.points.size(); ++pointIndex)
+                {
+                    ImGui::PushID(static_cast<int>(pointIndex));
+                    char label[32];
+                    snprintf(label, sizeof(label), "P%zu (Column,Row)", pointIndex + 1);
+                    numericChanged |= ImGui::DragFloat2(label, &edited.points[pointIndex].x,
+                        0.1f, -1000000.0f, 1000000.0f, "%.3f");
+                    numericActivated |= ImGui::IsItemActivated();
+                    numericCommitted |= ImGui::IsItemDeactivatedAfterEdit();
+                    numericDeactivated |= ImGui::IsItemDeactivated();
+                    ImGui::PopID();
+                }
+            }
+            ImGui::EndDisabled();
+            if (numericActivated)
+                ROIState::BeginHistoryTransaction();
+            if (numericChanged)
+            {
+                edited.ClampToImage(ImageState::Current().size());
+                ROIState::Update(professionalIndex, edited);
+                MarkCurrentRecipeDirty();
+            }
+            if (numericCommitted)
+                ROIState::CommitHistoryTransaction();
+            else if (numericDeactivated)
+                ROIState::CancelHistoryTransaction();
+
+            ImGui::BeginDisabled(edited.locked);
+            if (ImGui::Button("复制 ROI", ImVec2((ImGui::GetContentRegionAvail().x - 5.0f) * 0.5f, 0)))
+            {
+                ROI duplicate = edited;
+                duplicate.runtimeId = 0;
+                duplicate.locked = false;
+                duplicate.start.x += 10.0f; duplicate.start.y += 10.0f;
+                duplicate.end.x += 10.0f; duplicate.end.y += 10.0f;
+                for (ImVec2& point : duplicate.points) { point.x += 10.0f; point.y += 10.0f; }
+                duplicate.ClampToImage(ImageState::Current().size());
+                EnsureROIRuntimeId(duplicate);
+                ROIState::Add(std::move(duplicate), true);
+                MarkCurrentRecipeDirty();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("删除 ROI", ImVec2(-1, 0)))
+            {
+                if (ROIState::RemoveAt(professionalIndex)) MarkCurrentRecipeDirty();
+            }
+            ImGui::EndDisabled();
+        }
 
         const int selectedROIIndex = ROIState::SelectedIndex();
         const ROI* selectedROI = ROIState::At(selectedROIIndex);
-        if (selectedROI && selectedROI->type == ROI_TYPE_RECT)
+        if (selectedROI && selectedROI->type == ROI_TYPE_RECT && !selectedROI->locked)
         {
             ROI editedROI = *selectedROI;
             ImGui::TextDisabled("矩形角度");
             ImGui::SetNextItemWidth(-52.0f);
             if (ImGui::DragFloat("##roi_angle", &editedROI.angle, 0.1f,
-                                 -180.0f, 180.0f, "%.2f deg"))
+                                 -90.0f, 90.0f, "%.2f deg"))
             {
-                while (editedROI.angle > 180.0f) editedROI.angle -= 360.0f;
-                while (editedROI.angle <= -180.0f) editedROI.angle += 360.0f;
+                editedROI.angle = ROI::NormalizeRectangle2AngleDegrees(editedROI.angle);
                 ROIState::Update(selectedROIIndex, editedROI);
                 MarkCurrentRecipeDirty();
             }

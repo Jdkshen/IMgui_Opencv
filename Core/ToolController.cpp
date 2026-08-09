@@ -9,6 +9,7 @@
 #include "TemplateState.h"
 #include "ToolChainState.h"
 #include "RealtimeDetectionState.h"
+#include "ResultROIResolver.h"
 #include "ToolChainPreflight.h"
 #include "ToolExecutionGraph.h"
 #include "ToolJudgement.h"
@@ -150,14 +151,22 @@ namespace ToolController
         return !s_runTaskGroup || tool.groupName == s_runTaskGroupName;
     }
 
-    static bool TaskGroupPrefersCamera(const std::string& groupName)
+    static int TaskGroupCameraIndex(const std::string& groupName)
     {
         if (groupName.empty())
-            return false;
+            return -1;
         const int groupIndex = ToolChainState::TaskGroupIndexByName(groupName);
-        return groupIndex >= 0 &&
-            ToolChainState::ReadOnlyTaskGroups()[groupIndex].enabled &&
-            ToolChainState::ReadOnlyTaskGroups()[groupIndex].cameraPreferred;
+        if (groupIndex < 0 || !ToolChainState::ReadOnlyTaskGroups()[groupIndex].enabled)
+            return -1;
+        const TaskGroupDefinition& group =
+            ToolChainState::ReadOnlyTaskGroups()[groupIndex];
+        return group.cameraIndex >= 0
+            ? group.cameraIndex : (group.cameraPreferred ? 0 : -1);
+    }
+
+    static bool TaskGroupPrefersCamera(const std::string& groupName)
+    {
+        return TaskGroupCameraIndex(groupName) >= 0;
     }
 
     static int EnabledTaskGroupCount()
@@ -171,15 +180,33 @@ namespace ToolController
             }));
     }
 
+    static int RunScopeCameraIndex()
+    {
+        int cameraIndex = -1;
+        for (const ToolInstance& tool : ToolChainState::ReadOnlyTools())
+        {
+            if (!tool.enabled || !MatchesRunScope(tool))
+                continue;
+            const int toolCameraIndex = TaskGroupCameraIndex(tool.groupName);
+            if (toolCameraIndex < 0)
+                continue;
+            if (cameraIndex < 0)
+                cameraIndex = toolCameraIndex;
+            else if (cameraIndex != toolCameraIndex)
+            {
+                return -2;
+            }
+        }
+        return cameraIndex;
+    }
+
     static bool RunScopePrefersCamera()
     {
-        return std::any_of(ToolChainState::ReadOnlyTools().begin(),
-            ToolChainState::ReadOnlyTools().end(),
-            [](const ToolInstance& tool)
-            {
-                return tool.enabled && MatchesRunScope(tool) &&
-                    TaskGroupPrefersCamera(tool.groupName);
-            });
+        const int cameraIndex = RunScopeCameraIndex();
+        const HardwareRuntimeSnapshot hardware = HardwareRuntimeService::Snapshot();
+        return cameraIndex >= 0 &&
+            hardware.cameraState == DeviceConnectionState::Connected &&
+            hardware.cameraSlotIndex == cameraIndex;
     }
 
     static void BuildBatchExecutionOrder()
@@ -675,6 +702,17 @@ namespace ToolController
              toolId, index, imageVersion, parameterRevision, cacheKey, batch,
              completionPromise = std::move(completionPromise)](std::stop_token stopToken) mutable
             {
+                LogContext logContext;
+                logContext.taskId = std::to_string(toolId);
+                logContext.batchNumber = std::to_string(generation);
+                if (!context.frame.sourcePath.empty())
+                {
+                    const std::size_t separator = context.frame.sourcePath.find_last_of("/\\");
+                    logContext.imageName = separator == std::string::npos
+                        ? context.frame.sourcePath
+                        : context.frame.sourcePath.substr(separator + 1);
+                }
+                ScopedLogContext scopedLogContext(std::move(logContext));
                 AsyncCompletion completion;
                 completion.generation = generation;
                 completion.toolId = toolId;
@@ -702,6 +740,9 @@ namespace ToolController
                 {
                     completion.error = "未知后台执行异常";
                 }
+                if (!completion.error.empty())
+                    LogSystem::Add(LOG_ERROR, "event=algorithm_exception error=%s",
+                        completion.error.c_str());
                 completionPromise.set_value(std::move(completion));
             });
         return true;
@@ -742,6 +783,12 @@ namespace ToolController
             if (tool.resultRoiMode != 0 &&
                 sourceGroup(tool.resultRoiSourceTool, tool.resultRoiSourceToolId,
                     tool.groupName))
+            {
+                return true;
+            }
+            if (tool.resultRoiMode == static_cast<int>(ResultROIMode::SelectedPair) &&
+                sourceGroup(tool.resultRoiSecondSourceTool,
+                    tool.resultRoiSecondSourceToolId, tool.groupName))
             {
                 return true;
             }
@@ -818,19 +865,28 @@ namespace ToolController
 
                 ToolInstance snapshot;
                 VisionContext context;
+                ToolExecutor::ToolPreparationFailure preparationFailure;
                 if (!ToolExecutor::PrepareDetachedSnapshot(tool, selectedInput,
                     original, sourceIndex, input.tools, input.toolIndices,
                     input.visibleROIs, input.selectedROI, input.frozenTemplate,
-                    snapshot, context))
+                    snapshot, context, &preparationFailure))
                 {
                     output.completed = true;
                     output.result.toolName = ToolInstanceLogName(
                         ToolRegistry::GetName(tool.type), tool.label);
                     output.result.sourceToolIndex = sourceIndex;
                     output.result.sourceToolId = tool.toolId;
-                    output.result.success = false;
-                    output.result.status = ToolResultStatus::Error;
-                    output.result.message = "任务并行上下文准备失败";
+                    const bool dependencyFailure = !preparationFailure.reason.empty();
+                    output.result.success = dependencyFailure;
+                    output.result.skipped = dependencyFailure && preparationFailure.skip;
+                    output.result.status = dependencyFailure
+                        ? (preparationFailure.skip ? ToolResultStatus::Pass : ToolResultStatus::Fail)
+                        : ToolResultStatus::Error;
+                    output.result.message = dependencyFailure
+                        ? (preparationFailure.skip
+                            ? "已跳过: " + preparationFailure.reason
+                            : preparationFailure.reason)
+                        : "任务并行上下文准备失败";
                     output.result.statusReason = output.result.message;
                 }
                 else
@@ -1383,8 +1439,27 @@ namespace ToolController
         const bool force = s_forceNextRunAll;
         s_forceNextRunAll = false;
         s_activeRunForce = force;
+        const int boundCameraIndex = RunScopeCameraIndex();
+        if (triggerCamera && boundCameraIndex >= 0)
+        {
+            const DeviceOperationResult activation =
+                HardwareRuntimeService::ActivateCameraSlot(boundCameraIndex);
+            if (!activation.success)
+            {
+                LogSystem::Add(LOG_WARN,
+                    "绑定相机 %02d 自动连接失败，将使用任务图片: %s",
+                    boundCameraIndex + 1, activation.message.c_str());
+            }
+        }
+        else if (triggerCamera && boundCameraIndex == -2)
+        {
+            LogSystem::Add(LOG_WARN,
+                "全部执行包含多个不同的相机绑定，本轮不共享相机帧；请单独触发对应任务");
+        }
         const HardwareRuntimeSnapshot hardware = HardwareRuntimeService::Snapshot();
-        const bool taskCameraPreferred = RunScopePrefersCamera();
+        const bool taskCameraPreferred = boundCameraIndex >= 0 &&
+            hardware.cameraState == DeviceConnectionState::Connected &&
+            hardware.cameraSlotIndex == boundCameraIndex;
         if (triggerCamera)
         {
             s_cameraFrameAvailableForRun = false;
@@ -1393,7 +1468,8 @@ namespace ToolController
         const bool requestTaskCamera = triggerCamera &&
             (taskCameraPreferred || (forceTaskCameraCapture && s_runTaskGroup)) &&
             hardware.cameraState == DeviceConnectionState::Connected;
-        const bool requestLegacyCamera = triggerCamera && !taskCameraPreferred &&
+        const bool requestLegacyCamera = triggerCamera && !s_runTaskGroup &&
+            !taskCameraPreferred &&
             !RunScopeHasTaskImages() &&
             hardware.cameraState == DeviceConnectionState::Connected &&
             HardwareRuntimeService::CameraTriggerOnInspectionEnabled();
@@ -1729,7 +1805,7 @@ namespace ToolController
             FrameNavigation::FitImageToWindow();
             s_mode = Mode::Idle;
         }
-        else if (s_loop && s_taskRunImages.empty() &&
+        else if (s_loop && !s_runTaskGroup && s_taskRunImages.empty() &&
             HardwareRuntimeService::Snapshot().cameraState == DeviceConnectionState::Connected &&
             HardwareRuntimeService::CameraTriggerOnInspectionEnabled())
         {

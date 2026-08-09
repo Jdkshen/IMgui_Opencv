@@ -11,7 +11,7 @@ namespace ColorAnalyzer
 {
     float g_AnalyzeTimeMs = 0;
     ColorResult g_LastResult;
-    ColorResult Analyze(const cv::Mat &img, const Params &p)
+    ColorResult Analyze(const cv::Mat &img, const Params &p, const cv::Mat &domainMask)
     {
         ColorResult r;
         if (img.empty())
@@ -20,7 +20,11 @@ namespace ColorAnalyzer
         cv::Mat src;
         int colorSpace = std::clamp(p.colorSpace, 0, 4);
         int histBins = std::clamp(p.histBins, 1, 256);
-        if (colorSpace == 0 || colorSpace == 4 || img.channels() == 1)
+        if (colorSpace == 4)
+        {
+            src = ToolImageUtils::ToGray(img);
+        }
+        else if (colorSpace == 0 || img.channels() == 1)
         {
             src = img.clone();
         }
@@ -35,21 +39,28 @@ namespace ColorAnalyzer
             std::vector<float> hist(histBins, 0), &out = (ch == 0 ? r.hR : ch == 1 ? r.hG
                                                                                    : r.hB);
             double sum = 0, sum2 = 0;
-            int total = src.rows * src.cols;
+            int total = 0;
             for (int y = 0; y < src.rows; y++)
             {
                 const uchar *row = src.ptr<uchar>(y);
+                const uchar *maskRow = !domainMask.empty() && domainMask.type() == CV_8UC1 &&
+                                       domainMask.size() == src.size()
+                    ? domainMask.ptr<uchar>(y) : nullptr;
                 for (int x = 0; x < src.cols; x++)
                 {
+                    if (maskRow && maskRow[x] == 0)
+                        continue;
                     uchar v = row[x * nc + ch];
                     int bin = v * histBins / 256;
                     hist[bin]++;
                     sum += v;
                     sum2 += v * v;
+                    ++total;
                 }
             }
-            double mean = sum / total;
-            double std = std::sqrt(sum2 / total - mean * mean);
+            double mean = total > 0 ? sum / total : 0.0;
+            double variance = total > 0 ? sum2 / total - mean * mean : 0.0;
+            double std = std::sqrt((std::max)(0.0, variance));
             (ch == 0 ? r.meanR : ch == 1 ? r.meanG
                                          : r.meanB) = mean;
             (ch == 0 ? r.stdR : ch == 1 ? r.stdG
@@ -123,10 +134,16 @@ ToolResult ColorAnalyzerITool::Execute(VisionContext &ctx)
         r.message = "请先加载图片";
         return r;
     }
+    if (!ToolImageUtils::ValidateAreaContext(ctx, params.useROI, r.message))
+    {
+        r.success = false;
+        return r;
+    }
 
     const cv::Rect roi = ToolImageUtils::PrimaryContextRect(ctx, params.useROI);
     const cv::Mat input = roi.empty() ? ctx.image : ctx.image(roi);
-    auto cr = ColorAnalyzer::Analyze(input, params);
+    auto cr = ColorAnalyzer::Analyze(input, params,
+        ToolImageUtils::PrimaryContextMask(ctx, params.useROI));
     r.measurements.push_back({"meanR", cr.meanR, ""});
     r.measurements.push_back({"meanG", cr.meanG, ""});
     r.measurements.push_back({"meanB", cr.meanB, ""});

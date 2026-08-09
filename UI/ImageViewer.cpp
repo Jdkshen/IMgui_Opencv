@@ -1,18 +1,18 @@
 #include "../framework.h"
 #include "../imgui/imgui.h"
-#include "../imgui/imgui_impl_dx12.h"
 #include "ImageViewer.h"
 #include "ToolsWindow.h"
 #include "GeometryDrawEditor.h"
 #include "ROIManager.h"
 #include "../Core/OpenFileDialog.h"
-#include "../Core/DX12Context.h"
+#include "../Core/GraphicsBackend.h"
 #include "../Core/FrameNavigation.h"
 #include "../Core/ImageState.h"
 #include "../Core/ImageViewState.h"
 #include "../Core/ImageLoadController.h"
 #include "../Core/ImageImportService.h"
 #include "../Core/ResultOverlayState.h"
+#include "../Core/ToolResultUtils.h"
 #include "../Core/ThemeManager.h"
 #include "../Algorithm/ITool.h"
 #include "../Log/LogSystem.h"
@@ -101,11 +101,18 @@ static bool DrawReadableLabel(ImDrawList* dl, ImVec2 anchor, ImU32 accent, const
     const float padX = 4.0f;
     const float padY = 2.0f;
     const float fontH = ImGui::GetFontSize();
-    const float topLimit = ImGui::GetWindowPos().y + 2.0f;
     const float rowH = textSize.y + padY * 2.0f + 3.0f;
+    const ImVec2 rawImageMin = UI::ImageToScreenPos(ImVec2(0.0f, 0.0f));
+    const ImVec2 rawImageMax = UI::ImageToScreenPos(ImVec2(
+        static_cast<float>(ImageState::Width()),
+        static_cast<float>(ImageState::Height())));
+    const ImVec2 imageMin((std::min)(rawImageMin.x, rawImageMax.x),
+        (std::min)(rawImageMin.y, rawImageMax.y));
+    const ImVec2 imageMax((std::max)(rawImageMin.x, rawImageMax.x),
+        (std::max)(rawImageMin.y, rawImageMax.y));
 
     ImVec2 pos(anchor.x + 2.0f, anchor.y - fontH - padY * 2.0f - 2.0f);
-    if (pos.y < topLimit)
+    if (pos.y < imageMin.y + 2.0f)
         pos.y = anchor.y + 2.0f;
 
     OverlayLabelRect rect{};
@@ -114,6 +121,14 @@ static bool DrawReadableLabel(ImDrawList* dl, ImVec2 anchor, ImU32 accent, const
     for (int i = 0; i < attempts; ++i)
     {
         ImVec2 candidate = ImVec2(pos.x, pos.y + rowH * i);
+        candidate.x = (std::clamp)(candidate.x,
+            imageMin.x + padX,
+            (std::max)(imageMin.x + padX,
+                imageMax.x - textSize.x - padX));
+        candidate.y = (std::clamp)(candidate.y,
+            imageMin.y + padY,
+            (std::max)(imageMin.y + padY,
+                imageMax.y - textSize.y - padY));
         rect.min = ImVec2(candidate.x - padX, candidate.y - padY);
         rect.max = ImVec2(candidate.x + textSize.x + padX, candidate.y + textSize.y + padY);
 
@@ -163,8 +178,14 @@ static void DrawUnifiedResults(ImDrawList* dl)
     for (size_t i = 0; i < results.size(); i++)
     {
         const auto& r = results[i];
-        if (!r.success) continue;
+        // Failed judgements can still carry useful geometry. Keep the main
+        // viewer consistent with the run-result preview: only skipped results
+        // are intentionally hidden.
+        if (r.skipped) continue;
         const bool drawLabels = ResultOverlayState::ShouldDrawResultLabels(r);
+        const bool drawDetectionLabels = drawLabels && r.texts.empty();
+        const bool drawRegionLabels = drawLabels && r.texts.empty() &&
+            r.detections.empty();
         float t = std::max(2.0f, 3.0f * gZoom);
 
         // 检测框
@@ -172,15 +193,16 @@ static void DrawUnifiedResults(ImDrawList* dl)
             auto p1 = UI::ImageToScreenPos(ImVec2((float)d.box.x, (float)d.box.y));
             auto p2 = UI::ImageToScreenPos(ImVec2((float)(d.box.x+d.box.width), (float)(d.box.y+d.box.height)));
             dl->AddRect(p1, p2, cols[i % nCol], 0, 0, t);
-            if (drawLabels && !d.label.empty()) {
-                const std::string label = ResultOverlayState::BuildLabel(r, d.label);
+            if (drawDetectionLabels) {
+                const std::string label = ResultOverlayState::BuildLabel(
+                    r, d.label.empty() ? r.toolName : d.label);
                 char buf[160]; snprintf(buf, sizeof(buf), "%s %.2f", label.c_str(), d.score);
                 DrawReadableLabel(dl, p1, cols[i % nCol], buf, labelState);
             }
         }
 
         // 区域（轮廓多边形 + 顶点圆点）
-        if (r.texts.empty()) for (const auto& reg : r.regions) {
+        for (const auto& reg : r.regions) {
             auto p1 = UI::ImageToScreenPos(ImVec2((float)reg.bbox.x, (float)reg.bbox.y));
             auto p2 = UI::ImageToScreenPos(ImVec2((float)(reg.bbox.x+reg.bbox.width), (float)(reg.bbox.y+reg.bbox.height)));
 
@@ -195,7 +217,8 @@ static void DrawUnifiedResults(ImDrawList* dl)
             if (!isPartial)
             {
                 dl->AddRect(p1, p2, rectColor, 0, 0, t);
-                if (ResultOverlayState::ShouldDrawRegionLabel(r, reg.label)) {
+                if (drawRegionLabels &&
+                    ResultOverlayState::ShouldDrawRegionLabel(r, reg.label)) {
                     const std::string label = ResultOverlayState::BuildLabel(r, reg.label);
                     DrawReadableLabel(dl, p1, rectColor, label.c_str(), labelState);
                 }
@@ -220,16 +243,15 @@ static void DrawUnifiedResults(ImDrawList* dl)
         }
 
         // 线段
-        bool lineLabelDrawn = false;
+        bool lineLabelDrawn = !r.detections.empty() || !r.regions.empty() ||
+            !r.texts.empty();
         for (const auto& l : r.lines) {
             auto p1 = UI::ImageToScreenPos(ImVec2((float)l.p1.x, (float)l.p1.y));
             auto p2 = UI::ImageToScreenPos(ImVec2((float)l.p2.x, (float)l.p2.y));
             dl->AddLine(p1, p2, cols[i % nCol], t);
             if (drawLabels && !lineLabelDrawn)
             {
-                std::string label = r.toolName;
-                if (!r.message.empty() && label.find(r.message) == std::string::npos)
-                    label += " " + r.message;
+                const std::string label = BuildToolResultLineOverlayLabel(r);
                 DrawReadableLabel(dl, p1, cols[i % nCol], label.c_str(), labelState);
                 lineLabelDrawn = true;
             }
@@ -242,7 +264,9 @@ static void DrawUnifiedResults(ImDrawList* dl)
 	            ImU32 boxColor = IM_COL32(0, 220, 120, 255);
 	            dl->AddRect(p1, p2, boxColor, 0, 0, t);
 		            if (drawLabels && !text.text.empty()) {
-		                std::string preview = TruncateUtf8Label(text.text, 48);
+		                std::string preview = TruncateUtf8Label(
+                            ResultOverlayState::BuildLabel(
+                                r, text.text.empty() ? r.toolName : text.text), 48);
 		                char buf[192];
 		                snprintf(buf, sizeof(buf), "%s %.2f", preview.c_str(), text.confidence);
 		                DrawReadableLabel(dl, p1, boxColor, buf, labelState);
@@ -550,15 +574,16 @@ namespace UI
 			gPan.y += delta.y;
 		}
 
-		// 绘制DX12纹理（图片显示）
-		if (gTexture && gSrvGpuHandle.ptr != 0)
+		// 绘制统一后端纹理（DX12 / DX11 使用同一 UI 路径）
+		const ImTextureID mainTexture = GraphicsBackend::MainTextureId();
+		if (GraphicsBackend::HasMainTexture() && mainTexture != ImTextureID_Invalid)
 		{
 			float drawW = ImageState::Width() * gZoom;
 			float drawH = ImageState::Height() * gZoom;
 			imageScreenPos = ImGui::GetCursorScreenPos();
 			ImVec2 drawPos = ImVec2(imageScreenPos.x + gPan.x, imageScreenPos.y + gPan.y);
 			ImGui::SetCursorScreenPos(drawPos);
-			ImGui::Image((ImTextureID)gSrvGpuHandle.ptr, ImVec2(drawW, drawH));
+			ImGui::Image(mainTexture, ImVec2(drawW, drawH));
 
 			// 像素网格：fmodf 模式，跟随平移（参照 ImGui Demo）
 			if (g_ShowPixelGrid && gZoom >= 3.0f)
@@ -660,7 +685,7 @@ namespace UI
 			}
 		}
 
-		if (!gTexture || ImageState::Width() <= 0 || ImageState::Height() <= 0)
+		if (!GraphicsBackend::HasMainTexture() || ImageState::Width() <= 0 || ImageState::Height() <= 0)
 		{
 			ImVec2 avail = ImGui::GetContentRegionAvail();
 			ImVec2 textSize = ImGui::CalcTextSize("暂无图片");

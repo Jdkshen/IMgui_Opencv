@@ -32,9 +32,16 @@ public:
     std::string LastError() const override;
 
     DeviceOperationResult GrabFrame(cv::Mat& frame, int timeoutMs) override;
+    DeviceOperationResult GrabFrame(cv::Mat& frame, CameraFrameMetadata& metadata,
+        int timeoutMs) override;
     DeviceOperationResult StartStream() override;
     void StopStream() override;
     DeviceOperationResult SetControl(CameraControl control, double value) override;
+    CameraCapabilities Capabilities() const override;
+    DeviceOperationResult ConfigureTrigger(const CameraTriggerConfig& config) override;
+    DeviceOperationResult ExecuteSoftwareTrigger() override;
+    DeviceOperationResult FlushQueue() override;
+    CameraStatistics Statistics() const override;
 
     bool IsStreaming() const;
 
@@ -46,4 +53,7 @@ private:
     DeviceConnectionState state_ = DeviceConnectionState::Disconnected;
     std::string lastError_;
     bool streaming_ = false;
+    CameraTriggerConfig triggerConfig_;
+    CameraStatistics statistics_;
+    bool softwareTriggerPending_ = false;
 };

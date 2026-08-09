@@ -1,6 +1,7 @@
 #include "OCRTool.h"
 
 #include "WindowsPPOCREngine.h"
+#include "ToolImageUtils.h"
 #include "../Core/VisionContext.h"
 
 #include <algorithm>
@@ -13,17 +14,7 @@ namespace
 {
 cv::Rect SelectOCRRect(const VisionContext& ctx, bool useROI)
 {
-    if (!useROI || ctx.image.empty())
-        return {};
-
-    cv::Rect rect;
-    if (ctx.HasROI())
-        rect = ctx.GetActiveROIRect();
-    else if (!ctx.rois.empty())
-        rect = ctx.rois.front().ToCvRect();
-
-    rect &= cv::Rect(0, 0, ctx.image.cols, ctx.image.rows);
-    return rect.width > 0 && rect.height > 0 ? rect : cv::Rect();
+    return ToolImageUtils::PrimaryContextRect(ctx, useROI);
 }
 
 cv::Rect ExpandOCRRect(const cv::Rect& rect, int padding, const cv::Size& imageSize)
@@ -129,10 +120,25 @@ ToolResult OCRTool::Execute(VisionContext& ctx)
         result.message = "请先加载图片";
         return result;
     }
+    if (!ToolImageUtils::ValidateAreaContext(ctx, useROI, result.message))
+    {
+        result.success = false;
+        return result;
+    }
 
     const cv::Rect roi = SelectOCRRect(ctx, useROI);
     const cv::Rect inputRect = roi.empty() ? cv::Rect() : ExpandOCRRect(roi, roiPadding, ctx.image.size());
-    const cv::Mat input = inputRect.empty() ? ctx.image : ctx.image(inputRect);
+    const cv::Mat inputView = inputRect.empty() ? ctx.image : ctx.image(inputRect);
+    cv::Mat input = inputView;
+    // Padding changes the crop origin and size, so the mask must use the same
+    // expanded coordinate system as the OCR input.
+    const cv::Mat domainMask = ToolImageUtils::ContextMaskForRect(
+        ctx, inputRect, useROI);
+    if (!domainMask.empty())
+    {
+        input = inputView.clone();
+        ToolImageUtils::ApplyDomainMask(input, domainMask);
+    }
     if (input.empty())
     {
         result.success = false;
@@ -219,6 +225,10 @@ ToolResult OCRTool::Execute(VisionContext& ctx)
         item.text = text.text;
         item.box = text.box + offset;
         item.confidence = text.confidence;
+        const cv::Point2f localCenter(text.box.x + text.box.width * 0.5f,
+                                      text.box.y + text.box.height * 0.5f);
+        if (!ToolImageUtils::PointInDomain(domainMask, localCenter))
+            continue;
         result.texts.push_back(item);
     }
 

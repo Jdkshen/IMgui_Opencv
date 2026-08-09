@@ -1,6 +1,6 @@
 # 视觉算法与工具说明
 
-> 文档同步日期：2026-07-27。本文以当前 type 0-17、`VisionContext`、`ITool`、`ToolResult` 和任务执行链为准；硬件触发只改变任务选择与输入来源，不改变算法契约。
+> 文档同步日期：2026-08-09。本文以当前 type 0-17、`VisionContext`、`ITool`、`ToolResult` 和任务执行链为准；18 类工具的结果能力、结果 ROI、Fixture 和统一显示已按当前代码复核。
 
 ## 1. 统一执行契约
 
@@ -78,12 +78,12 @@ public:
 
 | type | 工具 | 实现 | 主要输出 |
 | ---: | --- | --- | --- |
-| 0 | 边缘检测 | `EdgeTool` | `debugImage`、测量项 |
-| 1 | 模板匹配 | `TemplateMatchITool` | `regions` |
+| 0 | 边缘检测 | `EdgeTool` | `debugImage` |
+| 1 | 模板匹配 | `TemplateMatchingTool` | `regions`、`measurements` |
 | 2 | Blob 分析 | `BlobTool` | `regions`、`measurements` |
 | 3 | 阈值调试 | `ThresholdITool` | `debugImage` |
 | 4 | YOLO 检测 | `YOLOTool` / ONNX Runtime | `detections` |
-| 5 | 轮廓分析 | `ContourTool` | `regions` |
+| 5 | 轮廓分析 | `ContourTool` | `regions`、`measurements` |
 | 6 | 形状匹配 | `ShapeTool` | `regions` |
 | 7 | 直线检测 | `LineTool` | `lines` |
 | 8 | 形态学 | `MorphologyITool` | `debugImage` |
@@ -92,12 +92,24 @@ public:
 | 11 | YOLO OpenCV 5.0 | `OpenCVYoloITool` | `detections`、后端耗时 |
 | 12 | 原图 | `ToolController` 特殊节点 | 恢复本轮原图 |
 | 13 | 文字识别 | `OCRTool` / PP-OCRv6 tiny + NCNN | `texts`、`measurements` |
-| 14 | 二维码/条码识别 | `QRCodeTool` | `texts`、`regions` |
+| 14 | 二维码/条码识别 | `QRCodeTool` | `texts`、`regions`、`measurements` |
 | 15 | 工业测量 | `MeasurementTool` / `CaliperOperators` | `measurements`、`lines`、`regions` |
 | 16 | 图像差分 | `DifferenceTool` | `regions`、`measurements`、`debugImage` |
-| 17 | 几何绘制 | `GeometryDrawTool` | 几何图元结果 |
+| 17 | 几何绘制 | `GeometryDrawTool` | `regions`、`lines`、`texts`、`measurements`、`debugImage` |
 
 新增工具从 type 18 开始。
+
+“添加工具”目录按使用目的归类，type 编号和配方兼容性不受分类调整影响：
+
+| 界面分类 | 工具 |
+| --- | --- |
+| 输入与预处理 | 原图、阈值调试、形态学、边缘检测 |
+| 定位与识别 | 模板匹配、YOLO 检测、形状匹配、文字识别、二维码/条码识别 |
+| 区域与几何 | Blob 分析、轮廓分析、直线检测、几何绘制 |
+| 分析与测量 | 颜色分析、多点找色、图像差分、工业测量 |
+| 实验工具 | YOLO OpenCV 5.0 |
+
+目录支持按工具名称或用途说明搜索。常用的前两类默认展开，其他分类保持可见并可按需展开，避免 18 个工具同时铺开造成长列表难以浏览。
 
 ## 5. 基础处理工具
 
@@ -141,7 +153,7 @@ ctx.image
     → ToolResult.regions（含中心、分数和角度）
 ```
 
-`Algorithm/TemplateMatch.*` 只保留无 UI 的兼容辅助；工具链主入口是 `TemplateMatchITool`。
+`TemplateMatchingTool` 是工具链唯一的模板匹配实现，模板资产由 `ToolAssetService` 管理。
 
 ### 6.2 YOLO（type 4 / type 11）
 
@@ -187,6 +199,10 @@ PP-OCRv6 tiny NCNN 流程包括文本检测、候选框过滤、文本识别和�
 
 标定支持 X/Y 比例、单应矩阵、相机内参与畸变参数；公差、有效卡尺数和可信度可直接影响 Pass/Fail。详见 `INSPECTION_PIPELINE_2026.md`。
 
+点点距离从结果 ROI 获取输入时执行几何适配：区域、检测框和文本框取中心点，线段保留端点；“上游全部结果”按筛选和排序后的前两个点测量。“选择两个结果”允许 A、B 使用同一上游的不同结果，或分别使用两个上游；结果通过描述性下拉框选择，不直接编辑数字序号。下拉内容与解析器使用同一套过滤和排序，并显示类型、标签/文字、中心坐标或端点及分数。默认的其他下游工具仍接收空间结果的包围矩形。工具卡片中的“查找 ROI 筛选”描述的是检测结果是否落在搜索 ROI 内，不是结果输出形状。
+
+双结果模式同时用于线线角度、点线距离和线线距离。线输入槽只列出能力表中声明 `lines` 的上游；点线距离的 A 为结果中心点、B 为原线段。UI 过滤与 `ToolChainValidator` 的拒绝规则一致。
+
 ### 7.3 几何绘制（type 17）
 
 把线、矩形、圆等几何图元作为工具实例数据保存，用于结果标注和配方复现，不替代检测算法。
@@ -200,11 +216,21 @@ PP-OCRv6 tiny NCNN 流程包括文本检测、候选框过滤、文本识别和�
 每个工具可以使用：
 
 - 自身保存的搜索 ROI；
-- 上游工具的第 N 个结果或全部结果转成运行 ROI；
-- 上游模板/形状定位结果建立 Fixture 坐标系；
+- 上游工具的第 N 个空间结果或全部空间结果转成运行 ROI；
+- 上游空间结果建立 Fixture 坐标系；
 - 上游结果缺失时跳过或判定失败。
 
+ROI 输入遵循显式绑定规则：`ToolInstance.searchROIs` 为空时，普通执行、任务并行快照和实时 YOLO 都按整图运行，不读取 `ROIState` 中仅用于画布显示/编辑的 ROI。只有在工具卡片点击“添加 ROI”并确认绑定后，搜索 ROI 才进入 `VisionContext.rois`。结果 ROI 与 Fixture 生成的运行 ROI 不受此规则影响。工业测量需要明确的测量 ROI；未绑定时应预检失败或返回缺少 ROI，而不是借用画布 ROI。
+
 工具依赖优先使用稳定的 `toolId/sourceToolId`，旧配方中的索引仍可兼容解析。检测到跨任务结果 ROI 或 Fixture 依赖时，“执行全部”的任务并行会自动回退顺序执行。
+
+结果 ROI 与 Fixture 共用 `Core/ToolResultCapabilities.h` 的能力表。只有能输出 `detections`、`regions`、`texts` 或 `lines` 的前置工具会出现在来源下拉框中；边缘、阈值、形态学、颜色分析和原图等仅输出图像/测量值的工具不能作为空间来源。运行前校验使用同一能力表，旧配方若保存了不兼容来源会明确报错；结果 ROI 未启用时会忽略遗留的来源字段。
+
+`Core/ResultROIResolver` 的默认输出几何是包围矩形；消费工具可以声明专用几何。当前工业测量模式 0 声明“区域取中心点、线段保留端点”，双结果模式则把 A、B 分别解析为一个中心点。普通执行、分离执行和任务并行快照共用同一规则；执行图和运行前校验同时登记 A、B 两条依赖。
+
+工业测量的主测量值统一写入 `measurements[name="value"]`。叠加层从该结构化字段生成“工具名 + 三位小数 + 单位”的线段标签，避免只显示工具名或依赖自由文本 `message`。
+
+空间结果解析顺序为检测框 → 区域 → 文本框 → 线段。文本使用文字框，线段使用两个端点的最小包围矩形；Fixture 的位姿解析覆盖区域、检测框、线段和文本框，其中无角度字段的检测框/文本框按 0° 处理。
 
 ## 9. 工具链图像传递
 
@@ -216,7 +242,7 @@ PP-OCRv6 tiny NCNN 流程包括文本检测、候选框过滤、文本识别和�
 | 1 | 上一步处理图 | 使用上一个工具产生的处理图 |
 | 2 | 原图工具输出 | 使用最近一次原图节点恢复的图；没有节点时回退本轮输入 |
 
-处理类工具的 `debugImage` 可成为后续链路图像。主线程显示图由 `ImageState` 管理，DX12 上传状态也封装在 `ImageState` 内，不允许算法直接写 GPU 全局状态。
+处理类工具的 `debugImage` 可成为后续链路图像。主线程显示图由 `ImageState` 管理，并由 `GraphicsBackend` 上传到当前 DX12/DX11 后端；算法不允许直接写 GPU 资源或图形后端状态。
 
 ## 10. 添加新工具
 
@@ -256,7 +282,7 @@ ToolResult MyTool::Execute(VisionContext& ctx) {
 - ImGui 的 `Begin/End`、`BeginChild/EndChild` 必须成对，OpenCV 异常不能跳过结束调用。
 - 算法返回 `ToolResult`，不要新增独立的全局结果容器。
 - 模型、模板或参考图缺失时返回明确状态，不允许静默使用无效内存。
-- 并行任务只使用快照，不从工作线程写 `ImageState`、ImGui 或 DX12 资源。
+- 并行任务只使用快照，不从工作线程写 `ImageState`、ImGui 或 DX11/DX12 资源。
 
 ## 12. 验证
 

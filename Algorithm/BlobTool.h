@@ -17,7 +17,7 @@ public:
     float maxAspectRatio = 100.0f;
     bool showLabels = true;
 
-    const char *GetName() const override { return "Blob"; }
+    const char *GetName() const override { return "Blob分析"; }
     int GetType() const override { return 2; }
     void DrawUI() override {}
     nlohmann::json Save() const override;

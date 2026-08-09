@@ -1,6 +1,6 @@
 # 视频播放 & 音频模块开发记录
 
-> 文档性质：2026-05-28 至 2026-05-29 的开发记录；2026-07-27 已核对模块仍在使用。当前图像状态通过 `FrameNavigation` / `ImageState` 进入显示链，任务相机输入见 `TASK_GROUPS.md`，PLC 拍照触发见 `HARDWARE_INTEGRATION.md`。
+> 文档性质：2026-05-28 至 2026-05-29 的开发记录；2026-08-02 已再次核对模块仍在使用。当前图像状态通过 `FrameNavigation` / `ImageState` 进入显示链，任务相机输入见 `TASK_GROUPS.md`，PLC 拍照触发见 `HARDWARE_INTEGRATION.md`。
 
 
 > 日期：2026-05-28 ~ 2026-05-29
@@ -47,7 +47,7 @@ Close() → 释放 cv::VideoCapture + 清空画面
 
 ```
 视频文件
-  ├─→ cv::VideoCapture → OpenCV → 视频帧 → DX12 纹理 → ImGui 显示
+  ├─→ cv::VideoCapture → OpenCV → 视频帧 → 当前后端纹理 → ImGui 显示
   └─→ IMFSourceReader → PCM 采样 → XAudio2 → 扬声器
        (Media Foundation)            (DirectX)
 ```

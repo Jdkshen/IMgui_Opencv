@@ -60,12 +60,20 @@ void ApplySearchROI(ToolInstance& tool, const ROI& roi)
 bool SameGeometry(const ROI& first, const ROI& second)
 {
     constexpr float epsilon = 0.01f;
-    return first.type == second.type &&
-        std::abs(first.start.x - second.start.x) <= epsilon &&
-        std::abs(first.start.y - second.start.y) <= epsilon &&
-        std::abs(first.end.x - second.end.x) <= epsilon &&
-        std::abs(first.end.y - second.end.y) <= epsilon &&
-        std::abs(first.angle - second.angle) <= epsilon;
+    if (first.type != second.type || first.points.size() != second.points.size() ||
+        std::abs(first.start.x - second.start.x) > epsilon ||
+        std::abs(first.start.y - second.start.y) > epsilon ||
+        std::abs(first.end.x - second.end.x) > epsilon ||
+        std::abs(first.end.y - second.end.y) > epsilon ||
+        std::abs(first.angle - second.angle) > epsilon)
+        return false;
+    for (std::size_t index = 0; index < first.points.size(); ++index)
+    {
+        if (std::abs(first.points[index].x - second.points[index].x) > epsilon ||
+            std::abs(first.points[index].y - second.points[index].y) > epsilon)
+            return false;
+    }
+    return true;
 }
 
 int FindMeasurementROIIndex(const ROI& boundROI)

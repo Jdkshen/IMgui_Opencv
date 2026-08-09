@@ -9,8 +9,10 @@ ImVec2 s_drawStart;
 bool s_dragging = false;
 ImVec2 s_lastMousePosition;
 HandleType s_activeHandle = HANDLE_NONE;
+int s_activePointIndex = -1;
 int s_hoveredROI = -1;
 int s_currentROIType = ROI_TYPE_RECT;
+std::vector<ImVec2> s_polygonDraftPoints;
 
 std::vector<int> s_drawSequence;
 std::vector<ROI> s_completedROIs;
@@ -25,8 +27,10 @@ ImVec2& DrawStart() { return s_drawStart; }
 bool& Dragging() { return s_dragging; }
 ImVec2& LastMousePosition() { return s_lastMousePosition; }
 HandleType& ActiveHandle() { return s_activeHandle; }
+int& ActivePointIndex() { return s_activePointIndex; }
 int& HoveredROI() { return s_hoveredROI; }
 int& CurrentROIType() { return s_currentROIType; }
+std::vector<ImVec2>& PolygonDraftPoints() { return s_polygonDraftPoints; }
 
 void BeginDrawSequence(std::initializer_list<int> roiTypes)
 {
@@ -34,6 +38,7 @@ void BeginDrawSequence(std::initializer_list<int> roiTypes)
     s_completedROIs.clear();
     s_drawSequenceStep = 0;
     s_drawing = false;
+    s_polygonDraftPoints.clear();
     if (!s_drawSequence.empty())
         s_currentROIType = s_drawSequence.front();
 }
@@ -44,6 +49,7 @@ void CancelDrawSequence()
     s_completedROIs.clear();
     s_drawSequenceStep = 0;
     s_drawing = false;
+    s_polygonDraftPoints.clear();
 }
 
 bool IsDrawSequenceActive()
@@ -102,6 +108,8 @@ void ResetInteraction()
     s_drawing = false;
     s_dragging = false;
     s_activeHandle = HANDLE_NONE;
+    s_activePointIndex = -1;
     s_hoveredROI = -1;
+    s_polygonDraftPoints.clear();
 }
 }

@@ -20,6 +20,7 @@
 #include "../Algorithm/ShapeMatcher.h"
 #include "../Algorithm/ShapeTools.h"
 #include "../Algorithm/ThresholdTool.h"
+#include "../Algorithm/ToolImageUtils.h"
 #include "../Algorithm/YOLODetector.h"
 #include "../Algorithm/YOLOTool.h"
 #include "ImageState.h"
@@ -35,6 +36,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <utility>
 
 namespace
 {
@@ -82,7 +84,7 @@ double MeasurementValue(const ToolResult& result, const char* name, double fallb
 std::vector<ROI> SelectSearchROIs(const ToolInstance& it)
 {
     if (it.searchROIs.empty())
-        return ROIState::ReadOnlyItems();
+        return {};
 
     std::vector<ROI> resolved = it.searchROIs;
     const auto& visibleROIs = ROIState::ReadOnlyItems();
@@ -123,6 +125,62 @@ bool ToolCanUseSharedInput(const ToolInstance& it)
     default:
         return false;
     }
+}
+
+ResultROIOutputGeometry ResultROIGeometryForTool(const ToolInstance& tool,
+    bool secondInput = false)
+{
+    // 点点距离需要两个点，或一条带有两个端点的线。区域类上游结果
+    // 在这里统一转换为中心点；线检测结果则保留为线 ROI。
+    if (tool.type == 15 && tool.measureMode == 0)
+    {
+        return tool.resultRoiMode == static_cast<int>(ResultROIMode::SelectedPair)
+            ? ResultROIOutputGeometry::CenterPoint
+            : ResultROIOutputGeometry::CenterPointsOrPreserveLines;
+    }
+    if (tool.type == 15 && (tool.measureMode == 2 || tool.measureMode == 7))
+        return ResultROIOutputGeometry::CenterPointsOrPreserveLines;
+    if (tool.type == 15 && tool.measureMode == 6 &&
+        tool.resultRoiMode == static_cast<int>(ResultROIMode::SelectedPair))
+    {
+        return secondInput
+            ? ResultROIOutputGeometry::CenterPointsOrPreserveLines
+            : ResultROIOutputGeometry::CenterPoint;
+    }
+    return ResultROIOutputGeometry::Bounds;
+}
+
+ResultROIRequest BuildResultROIRequest(const ToolInstance& tool, bool secondInput = false)
+{
+    ResultROIRequest request;
+    const bool selectedPair =
+        tool.resultRoiMode == static_cast<int>(ResultROIMode::SelectedPair);
+    request.mode = selectedPair
+        ? ResultROIMode::NthResult
+        : static_cast<ResultROIMode>(std::clamp(tool.resultRoiMode, 0, 2));
+    request.resultIndex = (std::max)(0,
+        secondInput ? tool.resultRoiSecondIndex : tool.resultRoiIndex);
+    request.missingPolicy = static_cast<MissingResultPolicy>(
+        std::clamp(tool.resultRoiMissingPolicy, 0, 1));
+    request.category = tool.resultRoiCategory;
+    request.classId = tool.resultRoiClassId;
+    request.minScore = tool.resultRoiMinScore;
+    request.minArea = tool.resultRoiMinArea;
+    request.sortMode = tool.resultRoiSortMode;
+    request.sortDescending = tool.resultRoiSortDescending;
+    const int configuredChannel = secondInput
+        ? tool.resultRoiSecondChannel : tool.resultRoiChannel;
+    request.channel = IsValidSpatialResultChannel(configuredChannel)
+        ? static_cast<ToolSpatialResultChannel>(configuredChannel)
+        : ToolSpatialResultChannel::Auto;
+    request.outputGeometry = ResultROIGeometryForTool(tool, secondInput);
+    request.requireLineResults = tool.type == 15 &&
+        tool.resultRoiMode == static_cast<int>(ResultROIMode::SelectedPair) &&
+        (tool.measureMode == 2 || tool.measureMode == 7 ||
+         (tool.measureMode == 6 && secondInput));
+    if (request.requireLineResults)
+        request.channel = ToolSpatialResultChannel::Lines;
+    return request;
 }
 
 int SelectROIIndex(const std::vector<ROI>& rois)
@@ -271,6 +329,7 @@ int ResolveToolSourceIndex(const std::vector<ToolInstance>& tools, int legacyInd
             if (tools[i].toolId == stableId)
                 return i;
         }
+        return -1;
     }
     return legacyIndex >= 0 && legacyIndex < static_cast<int>(tools.size()) ? legacyIndex : -1;
 }
@@ -385,7 +444,7 @@ struct OpenCVYoloIToolRegister
     OpenCVYoloIToolRegister()
     {
         ToolRegistry::Register(11, []() -> std::unique_ptr<ITool> { return std::make_unique<OpenCVYoloITool>(); });
-        ToolRegistry::RegisterName(11, "OpenCVYolo");
+        ToolRegistry::RegisterName(11, "YOLO OpenCV 5.0");
     }
 };
 
@@ -411,6 +470,7 @@ void SyncIToolParams(ToolInstance& it, const VisionContext& context)
             tt->matchThreshold = it.templateMatch.matchThreshold;
             tt->maxImageDim = it.templateMatch.maxImageDim;
             tt->nmsThreshold = it.templateMatch.nmsThreshold;
+            tt->subpixelRefinement = it.templateMatch.subpixelRefinement;
             tt->tplGray = it.templateMatch.templateGray;
             tt->tplBinary = it.templateMatch.templateBinary;
             tt->tplBinThresh = it.templateMatch.templateBinaryThreshold;
@@ -479,6 +539,8 @@ void SyncIToolParams(ToolInstance& it, const VisionContext& context)
             ct->filterConvex = it.cntFilterConvex; ct->approxEps = it.cntApproxEps;
             ct->lineThick = it.cntLineThick; ct->showLabels = it.showResultLabels;
             ct->fillContours = it.cntFillContours;
+            ct->normalizeDirection = it.cntNormalizeDirection;
+            ct->subpixelBoundary = it.cntSubpixelBoundary;
             ct->matchROI = it.cntMatchROI; ct->matchThresh = it.cntMatchThresh;
         }
     } else if (t == 6) {
@@ -488,6 +550,10 @@ void SyncIToolParams(ToolInstance& it, const VisionContext& context)
             st->minScore = it.shpMinScore; st->shapeScore = it.shpShapeScore;
             st->lineThick = it.shpLineThick; st->method = it.shpMethod;
             st->showLabels = it.showResultLabels; st->maxResults = it.shpMaxResults;
+            st->enableRotation = it.shpEnableRotation;
+            st->rotationStart = it.shpRotationStart;
+            st->rotationEnd = it.shpRotationEnd;
+            st->rotationStep = it.shpRotationStep;
             st->tplGray = it.shpTplGray; st->tplBinary = it.shpTplBinary;
             st->tplBinThresh = it.shpTplBinThresh;
             st->tplBlur = it.shpTplBlur; st->tplBlurK = it.shpTplBlurK;
@@ -731,6 +797,8 @@ bool PrepareDetached(const ToolInstance& source, const cv::Mat& input,
     context.width = context.image.cols;
     context.height = context.image.rows;
     context.imageVersion = frame.version;
+    context.roiResultPolicy = std::clamp(source.roiResultPolicy, 0, 3);
+    context.roiMinimumCoverage = std::clamp(source.roiMinimumCoverage, 0.0f, 1.0f);
     context.rois = SelectSearchROIs(source);
 
     const auto& tools = ToolChainState::ReadOnlyTools();
@@ -744,22 +812,31 @@ bool PrepareDetached(const ToolInstance& source, const cv::Mat& input,
             return false;
         }
 
-        ResultROIRequest request;
-        request.mode = static_cast<ResultROIMode>(std::clamp(source.resultRoiMode, 0, 2));
-        request.resultIndex = (std::max)(0, source.resultRoiIndex);
-        request.missingPolicy = static_cast<MissingResultPolicy>(
-            std::clamp(source.resultRoiMissingPolicy, 0, 1));
-        request.category = source.resultRoiCategory;
-        request.classId = source.resultRoiClassId;
-        request.minScore = source.resultRoiMinScore;
-        request.minArea = source.resultRoiMinArea;
-        request.sortMode = source.resultRoiSortMode;
-        request.sortDescending = source.resultRoiSortDescending;
+        const ResultROIRequest request = BuildResultROIRequest(source);
         ResultROIResolution resolution = ResultROIResolver::Resolve(
             tools[upstreamIndex].lastResult, request, context.image.size());
         if (!resolution.available)
             return false;
         context.rois = std::move(resolution.rois);
+
+        if (source.resultRoiMode == static_cast<int>(ResultROIMode::SelectedPair))
+        {
+            const int secondIndex = ResolveToolSourceIndex(tools,
+                source.resultRoiSecondSourceTool,
+                source.resultRoiSecondSourceToolId);
+            if (secondIndex < 0 || secondIndex == sourceToolIndex ||
+                !tools[secondIndex].hasLastResult)
+            {
+                return false;
+            }
+            const ResultROIRequest secondRequest = BuildResultROIRequest(source, true);
+            ResultROIResolution secondResolution = ResultROIResolver::Resolve(
+                tools[secondIndex].lastResult, secondRequest, context.image.size());
+            if (!secondResolution.available)
+                return false;
+            context.rois.insert(context.rois.end(),
+                secondResolution.rois.begin(), secondResolution.rois.end());
+        }
     }
 
     if (source.fixture.enabled)
@@ -770,7 +847,8 @@ bool PrepareDetached(const ToolInstance& source, const cv::Mat& input,
         if (upstreamIndex < 0 || upstreamIndex == sourceToolIndex ||
             !tools[upstreamIndex].hasLastResult ||
             !FixtureTransform::TryExtractPose(tools[upstreamIndex].lastResult,
-                (std::max)(0, source.fixture.resultIndex), currentPose))
+                source.fixture.resultIndex, currentPose,
+                static_cast<ToolSpatialResultChannel>(source.fixture.resultChannel)))
         {
             return false;
         }
@@ -795,10 +873,22 @@ bool PrepareDetachedSnapshot(const ToolInstance& source,
     const std::vector<int>& taskToolIndices,
     const std::vector<ROI>& visibleROIs, int selectedROI,
     const cv::Mat& frozenTemplate, ToolInstance& toolSnapshot,
-    VisionContext& context)
+    VisionContext& context, ToolPreparationFailure* failure)
 {
+    if (failure)
+        *failure = {};
     if (input.empty() || taskTools.size() != taskToolIndices.size())
         return false;
+
+    const auto rejectDependency = [failure](std::string reason, bool skip)
+    {
+        if (failure)
+        {
+            failure->reason = std::move(reason);
+            failure->skip = skip;
+        }
+        return false;
+    };
 
     toolSnapshot = source;
     context = VisionContext{};
@@ -811,14 +901,12 @@ bool PrepareDetachedSnapshot(const ToolInstance& source,
     context.width = context.image.cols;
     context.height = context.image.rows;
     context.imageVersion = 0;
+    context.roiResultPolicy = std::clamp(source.roiResultPolicy, 0, 3);
+    context.roiMinimumCoverage = std::clamp(source.roiMinimumCoverage, 0.0f, 1.0f);
 
-    if (source.searchROIs.empty())
+    context.rois = source.searchROIs;
+    if (!context.rois.empty())
     {
-        context.rois = visibleROIs;
-    }
-    else
-    {
-        context.rois = source.searchROIs;
         for (ROI& configured : context.rois)
         {
             if (configured.runtimeId == 0)
@@ -853,25 +941,38 @@ bool PrepareDetachedSnapshot(const ToolInstance& source,
         if (upstreamIndex < 0 || taskToolIndices[upstreamIndex] == sourceToolIndex ||
             !taskTools[upstreamIndex].hasLastResult)
         {
-            return false;
+            return rejectDependency("结果 ROI A 的上游工具无效或尚未产生结果",
+                source.resultRoiMissingPolicy == static_cast<int>(MissingResultPolicy::Skip));
         }
 
-        ResultROIRequest request;
-        request.mode = static_cast<ResultROIMode>(std::clamp(source.resultRoiMode, 0, 2));
-        request.resultIndex = (std::max)(0, source.resultRoiIndex);
-        request.missingPolicy = static_cast<MissingResultPolicy>(
-            std::clamp(source.resultRoiMissingPolicy, 0, 1));
-        request.category = source.resultRoiCategory;
-        request.classId = source.resultRoiClassId;
-        request.minScore = source.resultRoiMinScore;
-        request.minArea = source.resultRoiMinArea;
-        request.sortMode = source.resultRoiSortMode;
-        request.sortDescending = source.resultRoiSortDescending;
+        const ResultROIRequest request = BuildResultROIRequest(source);
         ResultROIResolution resolution = ResultROIResolver::Resolve(
             taskTools[upstreamIndex].lastResult, request, context.image.size());
         if (!resolution.available)
-            return false;
+            return rejectDependency("结果 ROI A: " + resolution.reason,
+                source.resultRoiMissingPolicy == static_cast<int>(MissingResultPolicy::Skip));
         context.rois = std::move(resolution.rois);
+
+        if (source.resultRoiMode == static_cast<int>(ResultROIMode::SelectedPair))
+        {
+            const int secondIndex = resolveTaskSource(
+                source.resultRoiSecondSourceTool,
+                source.resultRoiSecondSourceToolId);
+            if (secondIndex < 0 || taskToolIndices[secondIndex] == sourceToolIndex ||
+                !taskTools[secondIndex].hasLastResult)
+            {
+                return rejectDependency("结果 ROI B 的上游工具无效或尚未产生结果",
+                    source.resultRoiMissingPolicy == static_cast<int>(MissingResultPolicy::Skip));
+            }
+            const ResultROIRequest secondRequest = BuildResultROIRequest(source, true);
+            ResultROIResolution secondResolution = ResultROIResolver::Resolve(
+                taskTools[secondIndex].lastResult, secondRequest, context.image.size());
+            if (!secondResolution.available)
+                return rejectDependency("结果 ROI B: " + secondResolution.reason,
+                    source.resultRoiMissingPolicy == static_cast<int>(MissingResultPolicy::Skip));
+            context.rois.insert(context.rois.end(),
+                secondResolution.rois.begin(), secondResolution.rois.end());
+        }
     }
 
     if (source.fixture.enabled)
@@ -882,9 +983,11 @@ bool PrepareDetachedSnapshot(const ToolInstance& source,
         if (upstreamIndex < 0 || taskToolIndices[upstreamIndex] == sourceToolIndex ||
             !taskTools[upstreamIndex].hasLastResult ||
             !FixtureTransform::TryExtractPose(taskTools[upstreamIndex].lastResult,
-                (std::max)(0, source.fixture.resultIndex), currentPose))
+                source.fixture.resultIndex, currentPose,
+                static_cast<ToolSpatialResultChannel>(source.fixture.resultChannel)))
         {
-            return false;
+            return rejectDependency("Fixture 无法从上游所选结果提取位置和角度",
+                !source.fixture.failOnMissing);
         }
         FixturePose referencePose;
         referencePose.valid = true;
@@ -918,8 +1021,11 @@ bool ExecuteDetached(ToolInstance& it, VisionContext& ctx, int sourceToolIndex,
     VisionContext rotatedContext;
     VisionContext* executionContext = &ctx;
     RotatedROI::Transform rotatedTransform;
-    if (it.type != 17 && ctx.rois.size() == 1 && ctx.rois[0].type == ROI_TYPE_RECT &&
-        std::abs(ctx.rois[0].angle) >= 0.0001f)
+    const bool contourTemplateMode = it.type == 5 && it.cntMatchROI;
+    const bool hasSingleAreaROI = ctx.rois.size() == 1 &&
+        (ctx.rois[0].type == ROI_TYPE_RECT || ctx.rois[0].type == ROI_TYPE_CIRCLE ||
+         ctx.rois[0].type == ROI_TYPE_POLYGON);
+    if (it.type != 17 && !contourTemplateMode && hasSingleAreaROI)
     {
         cv::Mat rotatedImage;
         if (RotatedROI::Extract(ctx.image, ctx.rois[0], rotatedImage, rotatedTransform))
@@ -940,16 +1046,28 @@ bool ExecuteDetached(ToolInstance& it, VisionContext& ctx, int sourceToolIndex,
                     rotatedContext.originalImage = rotatedContext.image;
                 }
             }
-            ROI localROI;
-            localROI.type = ROI_TYPE_RECT;
-            localROI.start = ImVec2(0.0f, 0.0f);
-            localROI.end = ImVec2(static_cast<float>(rotatedContext.image.cols),
-                                  static_cast<float>(rotatedContext.image.rows));
+            ROI localROI = RotatedROI::ToCropROI(ctx.rois[0], rotatedTransform);
             rotatedContext.rois.assign(1, localROI);
             rotatedContext.selectedROI = 0;
+            rotatedContext.domainMask = rotatedTransform.domainMask;
             rotatedContext.width = rotatedContext.image.cols;
             rotatedContext.height = rotatedContext.image.rows;
             rotatedContext.frame.original = rotatedContext.originalImage;
+            executionContext = &rotatedContext;
+        }
+    }
+    else if (it.type != 17 && !contourTemplateMode && !ctx.rois.empty() &&
+             std::all_of(ctx.rois.begin(), ctx.rois.end(), [](const ROI& roi)
+             {
+                 return roi.type == ROI_TYPE_RECT || roi.type == ROI_TYPE_CIRCLE ||
+                        roi.type == ROI_TYPE_POLYGON;
+             }))
+    {
+        cv::Mat unionMask = RotatedROI::BuildDomainMask(ctx.image.size(), ctx.rois);
+        if (!unionMask.empty())
+        {
+            rotatedContext = ctx;
+            rotatedContext.domainMask = std::move(unionMask);
             executionContext = &rotatedContext;
         }
     }
@@ -957,7 +1075,7 @@ bool ExecuteDetached(ToolInstance& it, VisionContext& ctx, int sourceToolIndex,
     SyncIToolParams(it, *executionContext);
     if (executionContext->IsCancellationRequested())
         return false;
-    if (executionContext == &rotatedContext && it.type == 16)
+    if (executionContext == &rotatedContext && rotatedTransform.IsValid() && it.type == 16)
     {
         if (auto* difference = dynamic_cast<DifferenceTool*>(it.toolImpl.get()))
         {
@@ -979,14 +1097,21 @@ bool ExecuteDetached(ToolInstance& it, VisionContext& ctx, int sourceToolIndex,
         return false;
     if (executionContext == &rotatedContext)
     {
-        RotatedROI::RestoreResult(result, rotatedTransform);
-        if (!result.debugImage.empty())
+        ToolImageUtils::FilterResultToDomain(
+            result, rotatedContext.domainMask,
+            rotatedContext.roiResultPolicy,
+            rotatedContext.roiMinimumCoverage);
+        if (rotatedTransform.IsValid())
         {
-            cv::Mat restoredDebugImage;
-            if (RotatedROI::RestoreDebugImage(result.debugImage, ctx.image,
-                                              rotatedTransform, restoredDebugImage))
+            RotatedROI::RestoreResult(result, rotatedTransform);
+            if (!result.debugImage.empty())
             {
-                result.debugImage = std::move(restoredDebugImage);
+                cv::Mat restoredDebugImage;
+                if (RotatedROI::RestoreDebugImage(result.debugImage, ctx.image,
+                                                  rotatedTransform, restoredDebugImage))
+                {
+                    result.debugImage = std::move(restoredDebugImage);
+                }
             }
         }
     }
@@ -997,6 +1122,23 @@ bool ExecuteDetached(ToolInstance& it, VisionContext& ctx, int sourceToolIndex,
     result.timing.prepareMs = output.prepareMs;
     result.timing.executeMs = output.executeMs;
     result.timing.wallMs = output.prepareMs + output.executeMs;
+    result.timing.inputBytes = executionContext->image.empty() ? 0 :
+        static_cast<std::uint64_t>(executionContext->image.total() *
+            executionContext->image.elemSize());
+    result.timing.debugImageBytes = result.debugImage.empty() ? 0 :
+        static_cast<std::uint64_t>(result.debugImage.total() *
+            result.debugImage.elemSize());
+    result.timing.resultDataBytes =
+        static_cast<std::uint64_t>(result.measurements.size() * sizeof(ToolResult::Measurement) +
+            result.detections.size() * sizeof(ToolResult::Detection) +
+            result.lines.size() * sizeof(ToolResult::Line) +
+            result.texts.size() * sizeof(ToolResult::TextItem));
+    for (const ToolResult::Region& region : result.regions)
+    {
+        result.timing.resultDataBytes += sizeof(ToolResult::Region) +
+            static_cast<std::uint64_t>(region.contour.size() * sizeof(cv::Point) +
+                region.label.size());
+    }
     const std::string baseName = result.toolName.empty() ? it.toolImpl->GetName() : result.toolName;
     result.toolName = ToolInstanceLogName(baseName.c_str(), it.label);
     result.sourceToolIndex = sourceToolIndex;
@@ -1118,20 +1260,51 @@ bool RunViaITool(ToolInstance& it)
         }
         else
         {
-            ResultROIRequest request;
-            request.mode = static_cast<ResultROIMode>(std::clamp(it.resultRoiMode, 0, 2));
-            request.resultIndex = (std::max)(0, it.resultRoiIndex);
-            request.missingPolicy = static_cast<MissingResultPolicy>(std::clamp(it.resultRoiMissingPolicy, 0, 1));
-            request.category = it.resultRoiCategory;
-            request.classId = it.resultRoiClassId;
-            request.minScore = it.resultRoiMinScore;
-            request.minArea = it.resultRoiMinArea;
-            request.sortMode = it.resultRoiSortMode;
-            request.sortDescending = it.resultRoiSortDescending;
+            const ResultROIRequest request = BuildResultROIRequest(it);
             resolution = ResultROIResolver::Resolve(
                 tools[resultRoiSourceIndex].lastResult,
                 request,
                 gContext.image.size());
+
+            if (resolution.available &&
+                it.resultRoiMode == static_cast<int>(ResultROIMode::SelectedPair))
+            {
+                const int secondIndex = ResolveToolSourceIndex(tools,
+                    it.resultRoiSecondSourceTool,
+                    it.resultRoiSecondSourceToolId);
+                if (secondIndex < 0 || secondIndex == currentIndex)
+                {
+                    resolution.available = false;
+                    resolution.rois.clear();
+                    resolution.reason = "结果 ROI B 的上游工具无效";
+                }
+                else if (!tools[secondIndex].hasLastResult)
+                {
+                    resolution.available = false;
+                    resolution.rois.clear();
+                    resolution.reason = "结果 ROI B 的上游工具尚未产生结果";
+                }
+                else
+                {
+                    const ResultROIRequest secondRequest =
+                        BuildResultROIRequest(it, true);
+                    ResultROIResolution secondResolution = ResultROIResolver::Resolve(
+                        tools[secondIndex].lastResult,
+                        secondRequest,
+                        gContext.image.size());
+                    if (!secondResolution.available)
+                    {
+                        resolution.available = false;
+                        resolution.rois.clear();
+                        resolution.reason = "结果 ROI B: " + secondResolution.reason;
+                    }
+                    else
+                    {
+                        resolution.rois.insert(resolution.rois.end(),
+                            secondResolution.rois.begin(), secondResolution.rois.end());
+                    }
+                }
+            }
         }
 
         if (!resolution.available)
@@ -1176,8 +1349,8 @@ bool RunViaITool(ToolInstance& it)
         }
         else if (!FixtureTransform::TryExtractPose(
             tools[fixtureSourceIndex].lastResult,
-            (std::max)(0, it.fixture.resultIndex),
-            currentPose))
+            it.fixture.resultIndex, currentPose,
+            static_cast<ToolSpatialResultChannel>(it.fixture.resultChannel)))
         {
             fixtureError = "Fixture 无法从上游结果提取位置和角度";
         }

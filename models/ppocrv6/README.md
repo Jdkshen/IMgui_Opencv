@@ -1,4 +1,4 @@
-> 文档同步日期：2026-07-27。此目录用于 OCR 工具的 PP-OCRv6 NCNN 默认模型；算法入口和缺失模型行为见 [视觉算法说明](../../docs/ALGORITHMS.md)。
+> 文档同步日期：2026-08-02。此目录用于 OCR 工具的 PP-OCRv6 NCNN 默认模型；本轮界面/资源整理未改变模型文件，算法入口和缺失模型行为见 [视觉算法说明](../../docs/ALGORITHMS.md)。
 
 模型来源为 Avafly/PaddleOCR-ncnn-CPP v0.3.0 的 PP-OCRv6 NCNN 资产。
 

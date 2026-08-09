@@ -1,6 +1,6 @@
 # 运行时文件目录
 
-> 文档同步日期：2026-07-27。完整依赖、复制规则和发布检查分别见 [构建基线](../docs/BUILD.md) 与 [发布说明](../docs/RELEASE.md)。
+> 文档同步日期：2026-08-02。完整依赖、复制规则和发布检查分别见 [构建基线](../docs/BUILD.md) 与 [发布说明](../docs/RELEASE.md)；字体和工具 PNG 属于 `assets/`，不放在本目录。
 
 本目录在本地保存 OpenCV、ONNX Runtime、DirectML、NCNN、open62541 及必要的 MSVC 运行库/链接库。主程序 PostBuild 从这里复制运行所需 DLL；缺少必要文件时，编译可能成功但程序会在启动或加载对应工具时失败。
 

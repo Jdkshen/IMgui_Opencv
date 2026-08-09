@@ -12,7 +12,7 @@ and a full run of `Test/x64/Release/RegressionTests.exe`.
 - P0 input source behavior, original-image deletion, and recipe auto-run are implemented.
 - `ToolInstance.toolId` and `ToolResult.sourceToolId` are the stable identity path.
 - `ImageState`, `ROIState`, `ToolChainState`, `FrameNavigation`, and `ResultOverlayState` are Core-owned state services.
-- `TemplateMatch.cpp` is a pure template asset helper and no longer owns legacy ImGui/global parameters.
+- `TemplateMatchingTool.cpp` owns template matching without legacy ImGui/global parameters; template assets are managed by Core services.
 - Tool parameters are serialized by `ToolInstance::ToRecipeJson()` and `LoadRecipeJson()`.
 - `ToolChainState::MoveTool()` and `RemoveTool()` now own index remapping, dependency cleanup, and live-tool index cleanup.
 - `ImageViewState` now owns zoom, pan, canvas position, and grid settings; ImageViewer and ROIManager no longer export or consume view globals.

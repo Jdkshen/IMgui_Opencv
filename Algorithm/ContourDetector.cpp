@@ -1,6 +1,6 @@
 #define NOMINMAX
 #include "ContourDetector.h"
-#include "../Core/ROIState.h"
+#include "ToolImageUtils.h"
 #include "../Log/LogSystem.h"
 #include <opencv2/geometry.hpp>
 #include <chrono>
@@ -15,8 +15,56 @@ namespace ContourDetector
         return 4 * CV_PI * a / (p * p);
     }
 
+    static float PrincipalDirectionDegrees(const std::vector<cv::Point2f>& points)
+    {
+        if (points.size() < 3)
+            return 0.0f;
+        const cv::Moments moments = cv::moments(points);
+        if (std::abs(moments.m00) < 1.0e-9)
+            return 0.0f;
+        const double angle = 0.5 * std::atan2(2.0 * moments.mu11,
+            moments.mu20 - moments.mu02) * 180.0 / CV_PI;
+        return static_cast<float>(angle);
+    }
+
+    static std::vector<cv::Point2f> RefineBoundary(const std::vector<cv::Point>& points,
+        const cv::Mat& gradientMagnitude)
+    {
+        std::vector<cv::Point2f> refined;
+        refined.reserve(points.size());
+        for (const cv::Point& point : points)
+        {
+            double sum = 0.0;
+            cv::Point2d weighted;
+            for (int dy = -1; dy <= 1; ++dy)
+            {
+                const int y = point.y + dy;
+                if (y < 0 || y >= gradientMagnitude.rows)
+                    continue;
+                for (int dx = -1; dx <= 1; ++dx)
+                {
+                    const int x = point.x + dx;
+                    if (x < 0 || x >= gradientMagnitude.cols)
+                        continue;
+                    const double weight = gradientMagnitude.at<float>(y, x);
+                    sum += weight;
+                    weighted.x += x * weight;
+                    weighted.y += y * weight;
+                }
+            }
+            refined.emplace_back(sum > 1.0e-6
+                ? cv::Point2f(static_cast<float>(weighted.x / sum),
+                    static_cast<float>(weighted.y / sum))
+                : cv::Point2f(static_cast<float>(point.x),
+                    static_cast<float>(point.y)));
+        }
+        return refined;
+    }
+
     // 单张图上找轮廓
-    static std::vector<ContourResult> Find(const cv::Mat &img, const Params &p, cv::Point off = cv::Point(0, 0))
+    static std::vector<ContourResult> Find(const cv::Mat &img, const Params &p,
+                                           cv::Point off = cv::Point(0, 0),
+                                           const cv::Mat &domainMask = cv::Mat())
     {
         cv::Mat gray;
         if (img.channels() == 1)
@@ -28,11 +76,15 @@ namespace ContourDetector
             int k = p.blurSize * 2 + 1;
             if (k < 3)
                 k = 3;
-            cv::GaussianBlur(gray, gray, cv::Size(k, k), 0);
+            gray = ToolImageUtils::DomainGaussianBlur(
+                gray, domainMask, cv::Size(k, k));
         }
         cv::Mat bin;
         if (p.threshMode == 0)
-            cv::threshold(gray, bin, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
+        {
+            const double threshold = ToolImageUtils::MaskedOtsuThreshold(gray, domainMask);
+            cv::threshold(gray, bin, threshold, 255, cv::THRESH_BINARY);
+        }
         else if (p.threshMode == 2)
         {
             int bs = p.adaptiveBlock;
@@ -40,23 +92,58 @@ namespace ContourDetector
                 bs++;
             if (bs < 3)
                 bs = 3;
-            cv::adaptiveThreshold(gray, bin, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C, cv::THRESH_BINARY, bs, 2);
+            bin = ToolImageUtils::DomainAdaptiveThreshold(gray, domainMask, bs, 2);
         }
         else
             cv::threshold(gray, bin, p.threshValue, 255, cv::THRESH_BINARY);
         if (p.invertBinary)
             cv::bitwise_not(bin, bin);
+        if (!domainMask.empty() && domainMask.type() == CV_8UC1 && domainMask.size() == bin.size())
+            bin.setTo(0, domainMask == 0);
         int retrM[] = {cv::RETR_EXTERNAL, cv::RETR_LIST, cv::RETR_TREE}, appM[] = {cv::CHAIN_APPROX_NONE, cv::CHAIN_APPROX_SIMPLE, cv::CHAIN_APPROX_TC89_L1};
         std::vector<std::vector<cv::Point>> raw;
-        cv::findContours(bin, raw, retrM[std::clamp(p.retrMode, 0, 2)], appM[std::clamp(p.approxMethod, 0, 2)]);
+        std::vector<cv::Vec4i> hierarchy;
+        cv::findContours(bin, raw, hierarchy,
+            retrM[std::clamp(p.retrMode, 0, 2)],
+            appM[std::clamp(p.approxMethod, 0, 2)]);
+        cv::Mat gradientMagnitude;
+        if (p.subpixelBoundary)
+        {
+            cv::Mat gradientX, gradientY;
+            cv::Sobel(gray, gradientX, CV_32F, 1, 0, 3);
+            cv::Sobel(gray, gradientY, CV_32F, 0, 1, 3);
+            cv::magnitude(gradientX, gradientY, gradientMagnitude);
+        }
         std::vector<ContourResult> res;
         res.reserve(std::min((size_t)p.maxContours, raw.size()));
-        for (auto &pts : raw)
+        for (std::size_t contourIndex = 0; contourIndex < raw.size(); ++contourIndex)
         {
+            auto& pts = raw[contourIndex];
             if ((int)res.size() >= p.maxContours)
                 break;
             ContourResult cr;
+            int hierarchyDepth = 0;
+            if (contourIndex < hierarchy.size())
+            {
+                for (int parent = hierarchy[contourIndex][3]; parent >= 0 &&
+                    parent < static_cast<int>(hierarchy.size());
+                    parent = hierarchy[static_cast<std::size_t>(parent)][3])
+                    ++hierarchyDepth;
+            }
+            cr.isHole = hierarchyDepth % 2 != 0;
+            double signedArea = cv::contourArea(pts, true);
+            const bool directionMismatch = cr.isHole ? signedArea >= 0.0 : signedArea < 0.0;
+            if (p.normalizeDirection && directionMismatch)
+            {
+                std::reverse(pts.begin(), pts.end());
+                signedArea = -signedArea;
+            }
             cr.points = pts;
+            cr.signedArea = signedArea;
+            cr.subpixelPoints = p.subpixelBoundary
+                ? RefineBoundary(pts, gradientMagnitude)
+                : std::vector<cv::Point2f>(pts.begin(), pts.end());
+            cr.directionDegrees = PrincipalDirectionDegrees(cr.subpixelPoints);
             cr.area = cv::contourArea(pts);
             cr.bbox = cv::boundingRect(pts);
             if (cr.area < p.minArea || cr.area > p.maxArea)
@@ -76,6 +163,11 @@ namespace ContourDetector
                     pt.x += off.x;
                     pt.y += off.y;
                 }
+                for (auto& point : cr.subpixelPoints)
+                {
+                    point.x += static_cast<float>(off.x);
+                    point.y += static_cast<float>(off.y);
+                }
                 cr.bbox.x += off.x;
                 cr.bbox.y += off.y;
             }
@@ -84,7 +176,8 @@ namespace ContourDetector
         return res;
     }
 
-    std::vector<ContourResult> Detect(const cv::Mat &img, const Params &p)
+    std::vector<ContourResult> Detect(const cv::Mat &img, const Params &p,
+                                      const cv::Mat &domainMask)
     {
         using clock = std::chrono::high_resolution_clock;
         auto t0 = clock::now();
@@ -99,20 +192,14 @@ namespace ContourDetector
         if (p.matchROI)
         {
             // ROI模式: 先从ROI找模板, 再全图匹配
-            const auto &rois = ROIState::ReadOnlyItems();
-            if (rois.empty())
+            cv::Rect roi = p.matchRect & cv::Rect(0, 0, img.cols, img.rows);
+            if (roi.empty())
             {
             LogSystem::Add(LOG_WARN, "Contour:请先框选ROI");
                 return {};
             }
-            int ri = ROIState::SelectedIndex() >= 0 ? ROIState::SelectedIndex() : 0;
-            if (ri >= (int)rois.size())
-                ri = 0;
-            const auto &r = rois[ri];
-            cv::Rect roi((int)std::min(r.start.x, r.end.x), (int)std::min(r.start.y, r.end.y), (int)std::abs(r.end.x - r.start.x), (int)std::abs(r.end.y - r.start.y));
-            roi &= cv::Rect(0, 0, img.cols, img.rows);
             cv::Mat crop = img(roi);
-            auto templates = Find(crop, p, cv::Point(roi.x, roi.y));
+            auto templates = Find(crop, p, cv::Point(roi.x, roi.y), p.matchMask);
             if (templates.empty())
             {
             LogSystem::Add(LOG_WARN, "Contour:ROI内未找到轮廓");
@@ -176,7 +263,7 @@ namespace ContourDetector
         else
         {
             // 普通模式: 全图找轮廓
-            res = Find(img, p);
+            res = Find(img, p, cv::Point(0, 0), domainMask);
             auto t2 = clock::now();
             auto ms = [](auto a, auto b)
             { return std::chrono::duration<float, std::milli>(b - a).count(); };

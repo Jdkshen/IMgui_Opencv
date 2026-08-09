@@ -1,0 +1,142 @@
+{
+    "version":  5,
+    "name":  "04任务中文完整案例",
+    "imagePath":  "../images/零件缺陷.jpg",
+    "runtime":  {
+                    "loopIntervalMs":  300
+                },
+    "rois":  [
+
+             ],
+    "taskGroups":  [
+                       {
+                           "name":  "任务01-原图预览",
+                           "enabled":  true,
+                           "imagePath":  "../images/零件缺陷.jpg",
+                           "imageFolderPath":  "",
+                           "imageFolderIndex":  -1,
+                           "imageFolderCount":  0,
+                           "cameraIndex":  -1,
+                           "cameraPreferred":  false
+                       },
+                       {
+                           "name":  "任务02-基础边缘",
+                           "enabled":  true,
+                           "imagePath":  "../images/零件缺陷.jpg",
+                           "imageFolderPath":  "",
+                           "imageFolderIndex":  -1,
+                           "imageFolderCount":  0,
+                           "cameraIndex":  -1,
+                           "cameraPreferred":  false
+                       },
+                       {
+                           "name":  "任务03-灰度阈值",
+                           "enabled":  true,
+                           "imagePath":  "../images/零件缺陷.jpg",
+                           "imageFolderPath":  "",
+                           "imageFolderIndex":  -1,
+                           "imageFolderCount":  0,
+                           "cameraIndex":  -1,
+                           "cameraPreferred":  false
+                       },
+                       {
+                           "name":  "任务04-清晰二维码",
+                           "enabled":  true,
+                           "imagePath":  "../images/清晰二维码.png",
+                           "imageFolderPath":  "",
+                           "imageFolderIndex":  -1,
+                           "imageFolderCount":  0,
+                           "cameraIndex":  -1,
+                           "cameraPreferred":  false
+                       }
+                   ],
+    "tools":  [
+                  {
+                      "type":  12,
+                      "toolId":  4001,
+                      "enabled":  true,
+                      "label":  "01-原图",
+                      "groupName":  "任务01-原图预览",
+                      "collapsed":  false,
+                      "inputSourceMode":  2,
+                      "showResultLabels":  true,
+                      "useSearchROI":  false,
+                      "searchROIs":  [
+
+                                     ],
+                      "judgement":  {
+                                        "enabled":  false,
+                                        "stopOnFailure":  false
+                                    }
+                  },
+                  {
+                      "type":  0,
+                      "toolId":  4002,
+                      "enabled":  true,
+                      "label":  "02-边缘检测",
+                      "groupName":  "任务02-基础边缘",
+                      "collapsed":  false,
+                      "inputSourceMode":  2,
+                      "showResultLabels":  true,
+                      "useSearchROI":  false,
+                      "searchROIs":  [
+
+                                     ],
+                      "judgement":  {
+                                        "enabled":  false,
+                                        "stopOnFailure":  false
+                                    },
+                      "cannyLow":  50,
+                      "edgeUseGray":  true,
+                      "cannyHigh":  150
+                  },
+                  {
+                      "type":  3,
+                      "toolId":  4003,
+                      "enabled":  true,
+                      "label":  "03-阈值调试",
+                      "groupName":  "任务03-灰度阈值",
+                      "collapsed":  false,
+                      "inputSourceMode":  2,
+                      "showResultLabels":  true,
+                      "useSearchROI":  false,
+                      "searchROIs":  [
+
+                                     ],
+                      "judgement":  {
+                                        "enabled":  false,
+                                        "stopOnFailure":  false
+                                    },
+                      "dbgEnableBlur":  true,
+                      "dbgEnableThresh":  true,
+                      "dbgUseGray":  true,
+                      "dbgBlurSize":  5,
+                      "dbgThreshold":  128
+                  },
+                  {
+                      "type":  14,
+                      "toolId":  4004,
+                      "enabled":  true,
+                      "label":  "04-二维码识别",
+                      "groupName":  "任务04-清晰二维码",
+                      "collapsed":  false,
+                      "inputSourceMode":  2,
+                      "showResultLabels":  true,
+                      "useSearchROI":  false,
+                      "searchROIs":  [
+
+                                     ],
+                      "judgement":  {
+                                        "enabled":  false,
+                                        "stopOnFailure":  false
+                                    },
+                      "qrUseROI":  false,
+                      "qrEngine":  0,
+                      "qrMinSize":  16,
+                      "qrFormatMask":  31,
+                      "qrFilterDuplicates":  true,
+                      "qrDetectMulti":  true,
+                      "qrEnhance":  true
+                  }
+              ]
+}

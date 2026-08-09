@@ -57,6 +57,29 @@ namespace ShapeMatcher
     static constexpr int kMaxCandidateMultiplier = 12;
     static constexpr int kMaxCandidatesHardLimit = 40;
 
+    struct CoarseCandidate
+    {
+        cv::Point location;
+        cv::Size templateSize;
+        double score = 0.0;
+        float angle = 0.0f;
+    };
+
+    static cv::Mat RotateExpanded(const cv::Mat& image, float angle)
+    {
+        if (std::abs(angle) < 0.001f)
+            return image;
+        const cv::Point2f center(image.cols * 0.5f, image.rows * 0.5f);
+        cv::Mat transform = cv::getRotationMatrix2D(center, angle, 1.0);
+        const cv::Rect bounds = cv::RotatedRect(center, image.size(), angle).boundingRect();
+        transform.at<double>(0, 2) += bounds.width * 0.5 - center.x;
+        transform.at<double>(1, 2) += bounds.height * 0.5 - center.y;
+        cv::Mat rotated;
+        cv::warpAffine(image, rotated, transform, bounds.size(), cv::INTER_LINEAR,
+            cv::BORDER_CONSTANT, cv::Scalar(0));
+        return rotated;
+    }
+
     static void SuppressAround(cv::Mat& scores, const cv::Point& center, const cv::Size& tplSize)
     {
         const int rx = std::max(4, tplSize.width / 3);
@@ -98,7 +121,7 @@ namespace ShapeMatcher
         else if (t.channels() >= 3)
             cv::cvtColor(t, proc, cv::COLOR_BGR2GRAY);
         else
-            proc = t.clone();
+            proc = pp.tplBlur ? t.clone() : t;
         if (pp.tplBlur)
         {
             int k = pp.tplBlurK * 2 + 1;
@@ -173,26 +196,43 @@ namespace ShapeMatcher
             LogSystem::Add(LOG_WARN, "形状匹配:搜索区域小于模板或图像类型不一致 search=%dx%d tpl=%dx%d", s.cols, s.rows, t.cols, t.rows);
             return {};
         }
-        cv::Mat res;
-        cv::matchTemplate(s, t, res, cv::TM_CCOEFF_NORMED);
-        if (res.empty())
-            return {};
         const int requestedResults = std::max(1, p.maxResults);
         const int mc = std::clamp(requestedResults * kMaxCandidateMultiplier, requestedResults, kMaxCandidatesHardLimit);
-        std::vector<std::pair<cv::Point, double>> cand;
-        cand.reserve(mc);
-        cv::Mat scoreMap = res.clone();
-        for (int i = 0; i < mc; ++i)
+        std::vector<CoarseCandidate> cand;
+        cand.reserve(static_cast<std::size_t>(mc));
+        int angleStart = p.enableRotation ? p.rotationStart : 0;
+        int angleEnd = p.enableRotation ? p.rotationEnd : 0;
+        if (angleStart > angleEnd)
+            std::swap(angleStart, angleEnd);
+        const int angleStep = p.enableRotation
+            ? (std::max)(1, std::abs(p.rotationStep)) : 1;
+        for (int angle = angleStart; angle <= angleEnd; angle += angleStep)
         {
-            double minVal = 0.0, maxVal = 0.0;
-            cv::Point minLoc, maxLoc;
-            cv::minMaxLoc(scoreMap, &minVal, &maxVal, &minLoc, &maxLoc);
-            if (maxVal < p.minScore)
-                break;
-
-            cand.push_back({maxLoc, maxVal});
-            SuppressAround(scoreMap, maxLoc, t.size());
+            const cv::Mat rotatedTemplate = RotateExpanded(t,
+                static_cast<float>(angle));
+            if (rotatedTemplate.empty() || rotatedTemplate.cols > s.cols ||
+                rotatedTemplate.rows > s.rows)
+                continue;
+            cv::Mat scoreMap;
+            cv::matchTemplate(s, rotatedTemplate, scoreMap, cv::TM_CCOEFF_NORMED);
+            cv::patchNaNs(scoreMap, -1.0);
+            for (int i = 0; i < mc; ++i)
+            {
+                double maxVal = 0.0;
+                cv::Point maxLoc;
+                cv::minMaxLoc(scoreMap, nullptr, &maxVal, nullptr, &maxLoc);
+                if (maxVal < p.minScore)
+                    break;
+                cand.push_back({maxLoc, rotatedTemplate.size(), maxVal,
+                    static_cast<float>(angle)});
+                SuppressAround(scoreMap, maxLoc, rotatedTemplate.size());
+            }
         }
+
+        std::sort(cand.begin(), cand.end(), [](const CoarseCandidate& left,
+            const CoarseCandidate& right) { return left.score > right.score; });
+        if (cand.size() > static_cast<std::size_t>(kMaxCandidatesHardLimit))
+            cand.resize(kMaxCandidatesHardLimit);
 
         // NMS（基于模板面积的30%作为去重半径）
         float isc = 1.f / sc;
@@ -201,13 +241,19 @@ namespace ShapeMatcher
         {
             if (sup[i])
                 continue;
-            int xi = cand[i].first.x, yi = cand[i].first.y;
-            int nms = t.cols * t.rows / 8;
+            const cv::Point2f centerI(
+                cand[i].location.x + cand[i].templateSize.width * 0.5f,
+                cand[i].location.y + cand[i].templateSize.height * 0.5f);
+            int nms = cand[i].templateSize.width * cand[i].templateSize.height / 8;
             for (size_t j = i + 1; j < cand.size(); j++)
             {
                 if (sup[j])
                     continue;
-                int dx = xi - cand[j].first.x, dy = yi - cand[j].first.y;
+                const cv::Point2f centerJ(
+                    cand[j].location.x + cand[j].templateSize.width * 0.5f,
+                    cand[j].location.y + cand[j].templateSize.height * 0.5f);
+                const int dx = static_cast<int>(centerI.x - centerJ.x);
+                const int dy = static_cast<int>(centerI.y - centerJ.y);
                 if (dx * dx + dy * dy < nms)
                     sup[j] = 1;
             }
@@ -219,7 +265,10 @@ namespace ShapeMatcher
         {
             if (sup[i])
                 continue;
-            cv::Rect b((int)(cand[i].first.x * isc), (int)(cand[i].first.y * isc), tg.cols, tg.rows);
+            cv::Rect b((int)(cand[i].location.x * isc),
+                (int)(cand[i].location.y * isc),
+                (std::max)(1, static_cast<int>(cand[i].templateSize.width * isc)),
+                (std::max)(1, static_cast<int>(cand[i].templateSize.height * isc)));
             b &= cv::Rect(0, 0, img.cols, img.rows);
             if (b.width < 5 || b.height < 5)
                 continue;
@@ -263,7 +312,8 @@ namespace ShapeMatcher
 
             ShapeMatch sm;
             sm.bbox = b;
-            sm.score = cand[i].second;
+            sm.score = cand[i].score;
+            sm.angle = cand[i].angle;
             sm.shapeScore = foundContour ? bestShape : 999;
             sm.isGreen = isGreen;
             if (foundContour)
@@ -316,7 +366,8 @@ namespace ShapeMatcher
             if (p.showLabels)
             {
                 char lb[128];
-                snprintf(lb, 128, "#%zu t=%.3f s=%.3f %s", i + 1, m.score, m.shapeScore, m.isGreen ? "OK" : "NG");
+                snprintf(lb, 128, "#%zu t=%.3f s=%.3f a=%.1f %s", i + 1,
+                    m.score, m.shapeScore, m.angle, m.isGreen ? "OK" : "NG");
                 cv::Point lp(m.bbox.x, m.bbox.y - 4);
                 if (lp.y < 10)
                     lp.y = m.bbox.y + m.bbox.height + 14;

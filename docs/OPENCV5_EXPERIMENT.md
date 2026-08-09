@@ -1,6 +1,6 @@
 # OpenCV 5.0 YOLO 实验功能
 
-> 文档同步日期：2026-07-27。主进程 DNN 和独立 helper 的当前数据传递方式已核对；该实验工具仍走统一 `ToolResult` 与任务输入链。
+> 文档同步日期：2026-08-09。主进程 DNN 和独立 helper 的当前数据传递方式已核对；该实验工具仍走统一 `ToolResult` 与任务输入链，本轮 UI 整理未改变算法行为。
 
 
 当前工程已统一切到仓库内置 OpenCV 5.0；`YOLO OpenCV 5.0` 仍保留为 OpenCV DNN 后端，用于和 ONNX Runtime YOLO 工具对比。
@@ -9,13 +9,13 @@
 
 原工具：
 - 名称：`YOLO检测`
-- 分类：`检测与识别`
+- 分类：`定位与识别`
 - 后端：ONNX Runtime
 - type id：`4`
 
 实验工具：
 - 名称：`YOLO OpenCV 5.0`
-- 分类：`实验功能`
+- 分类：`实验工具`
 - type id：`11`
 
 当前仓库只保留主程序需要的 OpenCV 5.0 运行时：

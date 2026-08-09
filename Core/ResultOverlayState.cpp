@@ -77,8 +77,8 @@ std::vector<FixtureOverlay> FixtureOverlays()
         FixturePose currentPose;
         if (!FixtureTransform::TryExtractPose(
                 tools[sourceIndex].lastResult,
-                (std::max)(0, tool.fixture.resultIndex),
-                currentPose))
+                tool.fixture.resultIndex, currentPose,
+                static_cast<ToolSpatialResultChannel>(tool.fixture.resultChannel)))
             continue;
 
         FixtureOverlay overlay;

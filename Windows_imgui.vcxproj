@@ -49,7 +49,9 @@
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
     <PlatformToolset>v145</PlatformToolset>
-    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <!-- 日常 Release 默认使用快速增量构建；正式交付可传 /p:FullReleaseOptimization=true 开启 LTCG。 -->
+    <WholeProgramOptimization Condition="'$(FullReleaseOptimization)'=='true'">true</WholeProgramOptimization>
+    <WholeProgramOptimization Condition="'$(FullReleaseOptimization)'!='true'">false</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
@@ -110,6 +112,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_WINDOWS;IMGUI_OPENCV_ENABLE_ZXING_CPP;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
@@ -121,16 +124,18 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>opencv_world500d.lib;zxingcppd.lib;open62541d.lib;d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;Comdlg32.lib;Ws2_32.lib;Iphlpapi.lib</AdditionalDependencies>
+      <AdditionalOptions>/IGNORE:4099 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalDependencies>opencv_world500d.lib;zxingcppd.lib;open62541d.lib;d3d11.lib;d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;Comdlg32.lib;Ws2_32.lib;Iphlpapi.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>$(ProjectDir)redist;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
-      <Command>del /Q "$(OutDir)opencv_world4*.dll" 2&gt;nul &amp; del /Q "$(OutDir)opencv_videoio_ffmpeg4*_64.dll" 2&gt;nul &amp; xcopy /Y /D "$(ProjectDir)assets\fonts\*" "$(OutDir)" &amp; if exist "$(ProjectDir)theme.cfg" xcopy /Y /D "$(ProjectDir)theme.cfg" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\onnxruntime*.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_world500d.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_ffmpeg500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_msmf500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\DirectML.dll" "$(OutDir)" &amp; if exist "$(ProjectDir)models\*.onnx" xcopy /Y /D "$(ProjectDir)models\*.onnx" "$(OutDir)models\" &amp; if exist "$(ProjectDir)models\*.txt" xcopy /Y /D "$(ProjectDir)models\*.txt" "$(OutDir)models\" &amp; if exist "$(ProjectDir)models\ppocrv6" xcopy /Y /D /S /I "$(ProjectDir)models\ppocrv6\*" "$(OutDir)models\ppocrv6\"</Command>
+      <Command>del /Q "$(OutDir)opencv_world4*.dll" 2&gt;nul &amp; del /Q "$(OutDir)opencv_videoio_ffmpeg4*_64.dll" 2&gt;nul &amp; xcopy /Y /D "$(ProjectDir)assets\fonts\*" "$(OutDir)" &amp; if exist "$(ProjectDir)assets\icons" xcopy /Y /D /S /I "$(ProjectDir)assets\icons\*" "$(OutDir)assets\icons\" &amp; if exist "$(ProjectDir)theme.cfg" xcopy /Y /D "$(ProjectDir)theme.cfg" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\onnxruntime*.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_world500d.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_ffmpeg500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_msmf500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\DirectML.dll" "$(OutDir)" &amp; if exist "$(ProjectDir)models\*.onnx" xcopy /Y /D "$(ProjectDir)models\*.onnx" "$(OutDir)models\" &amp; if exist "$(ProjectDir)models\*.txt" xcopy /Y /D "$(ProjectDir)models\*.txt" "$(OutDir)models\" &amp; if exist "$(ProjectDir)models\ppocrv6" xcopy /Y /D /S /I "$(ProjectDir)models\ppocrv6\*" "$(OutDir)models\ppocrv6\"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
@@ -146,10 +151,10 @@
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(ProjectDir)redist;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>opencv_world500.lib;ncnn.lib;zxingcpp.lib;open62541.lib;d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;Comdlg32.lib;Ws2_32.lib;Iphlpapi.lib</AdditionalDependencies>
+      <AdditionalDependencies>opencv_world500.lib;ncnn.lib;zxingcpp.lib;open62541.lib;d3d11.lib;d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;Comdlg32.lib;Ws2_32.lib;Iphlpapi.lib</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>del /Q "$(OutDir)opencv_world4*.dll" 2&gt;nul &amp; del /Q "$(OutDir)opencv_videoio_ffmpeg4*_64.dll" 2&gt;nul &amp; xcopy /Y /D "$(ProjectDir)assets\fonts\*" "$(OutDir)" &amp; if exist "$(ProjectDir)theme.cfg" xcopy /Y /D "$(ProjectDir)theme.cfg" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\onnxruntime*.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\ncnn.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_world500.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_ffmpeg500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_msmf500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\DirectML.dll" "$(OutDir)" &amp; if exist "$(ProjectDir)models\*.onnx" xcopy /Y /D "$(ProjectDir)models\*.onnx" "$(OutDir)models\" &amp; if exist "$(ProjectDir)models\*.txt" xcopy /Y /D "$(ProjectDir)models\*.txt" "$(OutDir)models\" &amp; if exist "$(ProjectDir)models\ppocrv6" xcopy /Y /D /S /I "$(ProjectDir)models\ppocrv6\*" "$(OutDir)models\ppocrv6\"</Command>
+      <Command>del /Q "$(OutDir)opencv_world4*.dll" 2&gt;nul &amp; del /Q "$(OutDir)opencv_videoio_ffmpeg4*_64.dll" 2&gt;nul &amp; xcopy /Y /D "$(ProjectDir)assets\fonts\*" "$(OutDir)" &amp; if exist "$(ProjectDir)assets\icons" xcopy /Y /D /S /I "$(ProjectDir)assets\icons\*" "$(OutDir)assets\icons\" &amp; if exist "$(ProjectDir)theme.cfg" xcopy /Y /D "$(ProjectDir)theme.cfg" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\onnxruntime*.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\ncnn.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_world500.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_ffmpeg500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\opencv_videoio_msmf500_64.dll" "$(OutDir)" &amp; xcopy /Y "$(ProjectDir)redist\DirectML.dll" "$(OutDir)" &amp; if exist "$(ProjectDir)models\*.onnx" xcopy /Y /D "$(ProjectDir)models\*.onnx" "$(OutDir)models\" &amp; if exist "$(ProjectDir)models\*.txt" xcopy /Y /D "$(ProjectDir)models\*.txt" "$(OutDir)models\" &amp; if exist "$(ProjectDir)models\ppocrv6" xcopy /Y /D /S /I "$(ProjectDir)models\ppocrv6\*" "$(OutDir)models\ppocrv6\"</Command>
     </PostBuildEvent>
     <PreLinkEvent>
       <Command>
@@ -176,13 +181,14 @@
     <ClInclude Include="Core\TcpTextAdapter.h" />
     <ClInclude Include="Core\ModbusPlcAdapter.h" />
     <ClInclude Include="Core\OpenCvCameraAdapter.h" />
+    <ClInclude Include="Core\HikrobotMvsCameraAdapter.h" />
+    <ClInclude Include="Core\HuarayImvCameraAdapter.h" />
     <ClInclude Include="Core\Open62541OpcUaAdapter.h" />
     <ClInclude Include="Core\HardwareRuntimeService.h" />
     <ClInclude Include="Core\HardwareSettingsService.h" />
     <ClInclude Include="Core\FrameArchiveService.h" />
     <ClInclude Include="Core\ImageViewState.h" />
     <ClInclude Include="Core\TemplateState.h" />
-    <ClInclude Include="Core\FrameRenderer.h" />
     <ClInclude Include="Core\ImageLoadController.h" />
     <ClInclude Include="Core\ImageImportService.h" />
     <ClInclude Include="Core\ImageUtils.h" />
@@ -200,6 +206,8 @@
     <ClInclude Include="Core\ToolROIService.h" />
     <ClInclude Include="Core\ToolJudgement.h" />
     <ClInclude Include="Core\ToolTypes.h" />
+    <ClInclude Include="Core\UiPreferencesService.h" />
+    <ClInclude Include="Core\LanguageService.h" />
     <ClInclude Include="Core\VisionContext.h" />
     <ClInclude Include="Core\ToolExecutor.h" />
     <ClInclude Include="Core\ToolController.h" />
@@ -207,8 +215,11 @@
     <ClInclude Include="Core\ToolChainValidator.h" />
     <ClInclude Include="Core\ToolChainPreflight.h" />
     <ClInclude Include="Core\ThemeManager.h" />
+    <ClInclude Include="Core\RenderBackend.h" />
+    <ClInclude Include="Core\GraphicsBackend.h" />
+    <ClInclude Include="Core\DX11Context.h" />
+    <ClInclude Include="Core\DX12Backend.h" />
     <ClInclude Include="Core\DX12Context.h" />
-    <ClInclude Include="Core\OpenCVTest.h" />
     <ClInclude Include="Core\ResultPublisher.h" />
     <ClInclude Include="Core\ResultOverlayState.h" />
     <ClInclude Include="Core\RealtimeDetectionState.h" />
@@ -229,7 +240,6 @@
     <ClInclude Include="include\imgui\imstb_textedit.h" />
     <ClInclude Include="include\imgui\imstb_truetype.h" />
     <ClInclude Include="Log\LogSystem.h" />
-    <ClInclude Include="Algorithm\TemplateMatch.h" />
     <ClInclude Include="Algorithm\TemplateMatchingTool.h" />
     <ClInclude Include="Algorithm\OpenCVYoloDetector.h" />
     <ClInclude Include="Algorithm\YOLODetector.h" />
@@ -264,6 +274,7 @@
     <ClInclude Include="UI\ROIManager.h" />
     <ClInclude Include="UI\Sidebar.h" />
     <ClInclude Include="UI\StatsWindow.h" />
+    <ClInclude Include="UI\RunResultLayout.h" />
     <ClInclude Include="UI\RunResultWindow.h" />
     <ClInclude Include="UI\ToolsWindow.h" />
     <ClInclude Include="Windows_imgui.h" />
@@ -289,13 +300,14 @@
     <ClCompile Include="Core\TcpTextAdapter.cpp" />
     <ClCompile Include="Core\ModbusPlcAdapter.cpp" />
     <ClCompile Include="Core\OpenCvCameraAdapter.cpp" />
+    <ClCompile Include="Core\HikrobotMvsCameraAdapter.cpp" />
+    <ClCompile Include="Core\HuarayImvCameraAdapter.cpp" />
     <ClCompile Include="Core\Open62541OpcUaAdapter.cpp" />
     <ClCompile Include="Core\HardwareRuntimeService.cpp" />
     <ClCompile Include="Core\HardwareSettingsService.cpp" />
     <ClCompile Include="Core\FrameArchiveService.cpp" />
     <ClCompile Include="Core\ImageViewState.cpp" />
     <ClCompile Include="Core\TemplateState.cpp" />
-    <ClCompile Include="Core\FrameRenderer.cpp" />
     <ClCompile Include="Core\ImageLoadController.cpp" />
     <ClCompile Include="Core\ImageImportService.cpp" />
     <ClCompile Include="Core\LiveYoloRunner.cpp" />
@@ -311,12 +323,16 @@
     <ClCompile Include="Core\ToolController.cpp" />
     <ClCompile Include="Core\ToolExecutionGraph.cpp" />
     <ClCompile Include="Core\ToolJudgement.cpp" />
+    <ClCompile Include="Core\UiPreferencesService.cpp" />
+    <ClCompile Include="Core\LanguageService.cpp" />
     <ClCompile Include="Core\ToolChainState.cpp" />
     <ClCompile Include="Core\ToolChainValidator.cpp" />
     <ClCompile Include="Core\ToolChainPreflight.cpp" />
     <ClCompile Include="Core\ThemeManager.cpp" />
+    <ClCompile Include="Core\GraphicsBackend.cpp" />
+    <ClCompile Include="Core\DX11Context.cpp" />
+    <ClCompile Include="Core\DX12Backend.cpp" />
     <ClCompile Include="Core\DX12Context.cpp" />
-    <ClCompile Include="Core\OpenCVTest.cpp" />
     <ClCompile Include="Core\ResultExporter.cpp" />
     <ClCompile Include="Core\InspectionHistory.cpp" />
     <ClCompile Include="Core\SpcDatabase.cpp" />
@@ -331,7 +347,6 @@
     <ClCompile Include="include\imgui\imgui_tables.cpp" />
     <ClCompile Include="include\imgui\imgui_widgets.cpp" />
     <ClCompile Include="Log\LogSystem.cpp" />
-    <ClCompile Include="Algorithm\TemplateMatch.cpp" />
     <ClCompile Include="Algorithm\TemplateMatchingTool.cpp" />
     <ClCompile Include="Algorithm\OpenCVYoloDetector.cpp" />
     <ClCompile Include="Algorithm\YOLODetector.cpp" />
@@ -366,6 +381,7 @@
     <ClCompile Include="UI\ROIManager.cpp" />
     <ClCompile Include="UI\Sidebar.cpp" />
     <ClCompile Include="UI\StatsWindow.cpp" />
+    <ClCompile Include="UI\RunResultLayout.cpp" />
     <ClCompile Include="UI\RunResultWindow.cpp" />
     <ClCompile Include="UI\ToolsWindow.cpp" />
     <ClCompile Include="UI\Tools\BasicToolPanels.cpp" />

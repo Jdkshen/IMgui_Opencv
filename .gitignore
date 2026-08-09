@@ -1,6 +1,9 @@
 # Build outputs
 dist/
+build/
 x64/
+Windows_imgui/
+Test/RegressionTests/
 Win32/
 Debug/
 Release/
@@ -32,6 +35,7 @@ Release/
 imgui.ini
 imgui_log.txt
 theme.cfg
+ui_preferences.cfg
 Log/*.log
 recipes/
 .codegraph/*
@@ -39,6 +43,8 @@ recipes/
 .continue/
 .claude/*
 !.claude/README.md
+.codex/
+tmp/
 
 # Large local assets: keep these in Git LFS or fetch them with scripts.
 *.pt

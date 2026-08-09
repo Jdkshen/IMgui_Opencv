@@ -8,9 +8,11 @@
 #include "../Algorithm/MeasurementTool.h"
 #include "../Algorithm/ThresholdTool.h"
 #include "../Algorithm/TemplateMatchingTool.h"
+#include "../Algorithm/ToolImageUtils.h"
 #include "../Algorithm/YOLOTool.h"
 #include "../Algorithm/ShapeMatcher.h"
 #include "../Algorithm/ShapeTools.h"
+#include "../Algorithm/ContourDetector.h"
 #include "../Algorithm/MultiColorFinder.h"
 #include "../Algorithm/OCRTool.h"
 #include "../Algorithm/QRCodeTool.h"
@@ -28,6 +30,9 @@
 #include "../Core/AsyncImageLoader.h"
 #include "../Core/ImageViewState.h"
 #include "../Core/HardwareAdapters.h"
+#include "../Core/HikrobotMvsCameraAdapter.h"
+#include "../Core/HuarayImvCameraAdapter.h"
+#include "../Core/CameraPixelFormat.h"
 #include "../Core/HardwareRuntimeService.h"
 #include "../Core/HardwareSettingsService.h"
 #include "../Core/ModbusTcpAdapter.h"
@@ -37,6 +42,7 @@
 #include "../Core/Open62541OpcUaAdapter.h"
 #include "../Core/OpenFileDialog.h"
 #include "../Core/ResultOverlayState.h"
+#include "../Core/RenderBackend.h"
 #include "../Core/RealtimeDetectionState.h"
 #include "../Core/ResultROIResolver.h"
 #include "../Core/ResultExporter.h"
@@ -48,6 +54,8 @@
 #include "../Core/RotatedROI.h"
 #include "../Core/ToolChainState.h"
 #include "../Core/ToolChainValidator.h"
+#include "../Core/ToolResultCapabilities.h"
+#include "../Core/ToolResultUtils.h"
 #include "../Core/ToolChainPreflight.h"
 #include "../Core/ToolController.h"
 #include "../Core/ToolAssetService.h"
@@ -56,15 +64,18 @@
 #include "../Core/ToolJudgement.h"
 #include "../Core/VisionContext.h"
 #include "../UI/ROIManager.h"
+#include "../UI/RunResultLayout.h"
 #include "../UI/ToolsWindow.h"
 #include "../third_party/open62541/open62541.h"
 
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
+#include <opencv2/geometry/2d.hpp>
 
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -91,14 +102,11 @@ public:
     {
         for (std::uint16_t candidate = 48550; candidate < 48570; ++candidate)
         {
-            server_ = UA_Server_new();
+            server_ = CreateLoopbackServer(candidate);
             if (!server_)
                 return false;
 
-            UA_StatusCode status = UA_ServerConfig_setMinimal(
-                UA_Server_getConfig(server_), candidate, nullptr);
-            if (status == UA_STATUSCODE_GOOD)
-                status = AddNodes();
+            UA_StatusCode status = AddNodes();
             if (status == UA_STATUSCODE_GOOD)
                 status = UA_Server_run_startup(server_);
             if (status == UA_STATUSCODE_GOOD)
@@ -142,6 +150,51 @@ public:
     }
 
 private:
+    static UA_Server* CreateLoopbackServer(std::uint16_t port)
+    {
+        UA_ServerConfig config{};
+        config.logging = UA_Log_Stdout_new(UA_LOGLEVEL_ERROR);
+        if (!config.logging)
+            return nullptr;
+
+        UA_StatusCode status = UA_ServerConfig_setMinimal(&config, port, nullptr);
+        if (status != UA_STATUSCODE_GOOD)
+        {
+            // setMinimal owns cleanup of a partially initialized configuration.
+            return nullptr;
+        }
+
+        const std::string endpointUrl =
+            "opc.tcp://127.0.0.1:" + std::to_string(port);
+        UA_String loopbackUrl = UA_STRING(
+            const_cast<char*>(endpointUrl.c_str()));
+        void* copiedUrls = nullptr;
+        status = UA_Array_copy(&loopbackUrl, 1, &copiedUrls,
+            &UA_TYPES[UA_TYPES_STRING]);
+        if (status == UA_STATUSCODE_GOOD)
+        {
+            UA_Array_delete(config.serverUrls, config.serverUrlsSize,
+                &UA_TYPES[UA_TYPES_STRING]);
+            config.serverUrls = static_cast<UA_String*>(copiedUrls);
+            config.serverUrlsSize = 1;
+
+            // The production adapter currently connects anonymously. Keep that
+            // contract explicit here, but expose this fixture on loopback only.
+            if (config.sessionPKI.clear)
+                config.sessionPKI.clear(&config.sessionPKI);
+            config.sessionPKI = UA_CertificateVerification{};
+            status = UA_AccessControl_default(&config, true,
+                &UA_SECURITY_POLICY_NONE_URI, 0, nullptr);
+        }
+
+        if (status != UA_STATUSCODE_GOOD)
+        {
+            UA_ServerConfig_clean(&config);
+            return nullptr;
+        }
+        return UA_Server_newWithConfig(&config);
+    }
+
     UA_StatusCode AddVariable(const char* nodeName, const void* initialValue,
         const UA_DataType& type)
     {
@@ -321,6 +374,29 @@ struct TestCameraAdapter final : ICameraAdapter
         return {true, {}};
     }
     void StopStream() override { stopped = true; }
+    CameraCapabilities Capabilities() const override
+    {
+        return {true, true, true, true, true};
+    }
+    DeviceOperationResult ConfigureTrigger(const CameraTriggerConfig& config) override
+    {
+        triggerConfig = config;
+        ++triggerConfigureCount;
+        return {true, {}};
+    }
+    DeviceOperationResult ExecuteSoftwareTrigger() override
+    {
+        ++softwareTriggerCount;
+        return triggerConfig.mode == CameraTriggerMode::Software
+            ? DeviceOperationResult{true, {}}
+            : DeviceOperationResult{false, "not in software trigger mode"};
+    }
+    DeviceOperationResult ConfigureBufferPolicy(CameraBufferPolicy policy) override
+    {
+        bufferPolicy = policy;
+        ++bufferPolicyConfigureCount;
+        return {true, {}};
+    }
 
     DeviceConnectionState state = DeviceConnectionState::Disconnected;
     bool stopped = false;
@@ -328,6 +404,11 @@ struct TestCameraAdapter final : ICameraAdapter
     int failGrabsRemaining = 0;
     int connectCount = 0;
     int startCount = 0;
+    CameraTriggerConfig triggerConfig;
+    int triggerConfigureCount = 0;
+    int softwareTriggerCount = 0;
+    CameraBufferPolicy bufferPolicy = CameraBufferPolicy::Sequential;
+    int bufferPolicyConfigureCount = 0;
 };
 
 struct ScriptedCameraBackend final : ICameraCaptureBackend
@@ -765,6 +846,21 @@ void TestRotatedROIExtractionAndResultRestore()
         Require(bounds.contains(cv::Point(static_cast<int>(std::floor(point.x)),
                                           static_cast<int>(std::floor(point.y)))),
             "rotated ROI covering rectangle regressed");
+
+    ROI circle;
+    circle.type = ROI_TYPE_CIRCLE;
+    circle.start = ImVec2(50.0f, 60.0f);
+    circle.end = ImVec2(70.0f, 60.0f);
+    Require(circle.ToCvRect() == cv::Rect(30, 40, 40, 40),
+        "circle ROI covering rectangle regressed");
+
+    ROI polygonROI;
+    polygonROI.type = ROI_TYPE_POLYGON;
+    polygonROI.start = ImVec2(-999.0f, -999.0f); // Bounds must come from vertices.
+    polygonROI.end = ImVec2(-998.0f, -998.0f);
+    polygonROI.points = {{10.25f, 20.5f}, {35.75f, 18.25f}, {30.5f, 42.75f}};
+    Require(polygonROI.ToCvRect() == cv::Rect(10, 18, 26, 25),
+        "polygon ROI covering rectangle regressed");
 }
 
 void TestToolExecutorUsesRotatedROI()
@@ -1262,6 +1358,28 @@ void TestFixtureTransform()
     const ROI transformedROI = FixtureTransform::TransformROI(rectangle, reference, current);
     Require(transformedROI.type == ROI_TYPE_POLYGON && transformedROI.points.size() == 4,
         "rotated fixture rectangle should become a polygon ROI");
+
+    ToolResult detectionResult;
+    detectionResult.detections.push_back({cv::Rect(10, 20, 30, 40), 1, 0.9f, "part"});
+    FixturePose detectionPose;
+    Require(FixtureTransform::TryExtractPose(detectionResult, 0, detectionPose) &&
+        cv::norm(detectionPose.origin - cv::Point2f(25.0f, 40.0f)) < 0.001f,
+        "fixture pose extraction from detection failed");
+
+    ToolResult lineResult;
+    lineResult.lines.push_back({cv::Point(10, 10), cv::Point(30, 20), 22.36f, 26.565f});
+    FixturePose linePose;
+    Require(FixtureTransform::TryExtractPose(lineResult, 0, linePose) &&
+        cv::norm(linePose.origin - cv::Point2f(20.0f, 15.0f)) < 0.001f &&
+        std::abs(linePose.angleDegrees - 26.565f) < 0.001f,
+        "fixture pose extraction from line failed");
+
+    ToolResult textResult;
+    textResult.texts.push_back({"SN123", cv::Rect(40, 50, 20, 10), 0.95f});
+    FixturePose textPose;
+    Require(FixtureTransform::TryExtractPose(textResult, 0, textPose) &&
+        cv::norm(textPose.origin - cv::Point2f(50.0f, 55.0f)) < 0.001f,
+        "fixture pose extraction from text box failed");
 }
 
 void TestResultROIResolution()
@@ -1283,6 +1401,75 @@ void TestResultROIResolution()
     resolution = ResultROIResolver::Resolve(source, request, cv::Size(100, 100));
     Require(resolution.available && resolution.rois.size() == 2,
         "all result ROI resolution failed");
+    const std::vector<ResultROIChoice> detectionChoices =
+        ResultROIResolver::ListChoices(source, request);
+    Require(detectionChoices.size() == 2 &&
+        detectionChoices[0].label.find("检测框") != std::string::npos &&
+        detectionChoices[0].label.find("中心(25.0,40.0)") != std::string::npos,
+        "result ROI dropdown choices did not describe current detections");
+
+    request.outputGeometry = ResultROIOutputGeometry::CenterPointsOrPreserveLines;
+    resolution = ResultROIResolver::Resolve(source, request, cv::Size(100, 100));
+    Require(resolution.available && resolution.rois.size() == 2 &&
+        resolution.rois[0].type == ROI_TYPE_POINT &&
+        resolution.rois[1].type == ROI_TYPE_POINT &&
+        std::abs(resolution.rois[0].start.x - 25.0f) < 0.001f &&
+        std::abs(resolution.rois[0].start.y - 40.0f) < 0.001f &&
+        std::abs(resolution.rois[1].start.x - 60.0f) < 0.001f &&
+        std::abs(resolution.rois[1].start.y - 65.0f) < 0.001f,
+        "region results were not adapted to center-point ROIs");
+
+    VisionContext measurementContext;
+    measurementContext.rois = resolution.rois;
+    MeasurementTool pointDistance;
+    pointDistance.mode = 0;
+    ToolResult distanceResult = pointDistance.Execute(measurementContext);
+    Require(distanceResult.success && !distanceResult.measurements.empty() &&
+        std::abs(distanceResult.measurements.front().value - std::sqrt(1850.0)) < 0.001,
+        "result ROI center points were not accepted by point-distance measurement");
+
+    ToolInstance firstSource;
+    firstSource.type = 1;
+    firstSource.toolId = 7101;
+    firstSource.hasLastResult = true;
+    ToolResult::Region firstRegion;
+    firstRegion.bbox = cv::Rect(10, 20, 30, 40);
+    firstSource.lastResult.regions.push_back(firstRegion);
+
+    ToolInstance secondSource;
+    secondSource.type = 2;
+    secondSource.toolId = 7102;
+    secondSource.hasLastResult = true;
+    ToolResult::Region secondRegion;
+    secondRegion.bbox = cv::Rect(50, 60, 20, 10);
+    secondSource.lastResult.regions.push_back(secondRegion);
+
+    ToolInstance pairMeasurement;
+    pairMeasurement.type = 15;
+    pairMeasurement.toolId = 7103;
+    pairMeasurement.measureMode = 0;
+    pairMeasurement.resultRoiMode = static_cast<int>(ResultROIMode::SelectedPair);
+    pairMeasurement.resultRoiSourceToolId = firstSource.toolId;
+    pairMeasurement.resultRoiSecondSourceToolId = secondSource.toolId;
+    const std::vector<ToolInstance> pairTools = {
+        firstSource, secondSource, pairMeasurement};
+    const std::vector<int> pairIndices = {0, 1, 2};
+    ToolInstance pairSnapshot;
+    VisionContext pairContext;
+    const cv::Mat pairImage(100, 100, CV_8UC1, cv::Scalar(0));
+    Require(ToolExecutor::PrepareDetachedSnapshot(pairTools[2], pairImage, pairImage,
+        2, pairTools, pairIndices, {}, -1, cv::Mat(), pairSnapshot, pairContext) &&
+        pairContext.rois.size() == 2 &&
+        pairContext.rois[0].type == ROI_TYPE_POINT &&
+        pairContext.rois[1].type == ROI_TYPE_POINT,
+        "selected results from two upstream tools were not combined as measurement points");
+    ToolExecutor::ToolExecutionOutput pairOutput;
+    Require(ToolExecutor::ExecuteDetached(pairSnapshot, pairContext, 2, pairOutput) &&
+        pairOutput.result.success && !pairOutput.result.measurements.empty() &&
+        std::abs(pairOutput.result.measurements.front().value - std::sqrt(1850.0)) < 0.001,
+        "cross-upstream selected result pair measurement failed");
+
+    request.outputGeometry = ResultROIOutputGeometry::Bounds;
 
     request.mode = ResultROIMode::NthResult;
     request.resultIndex = 0;
@@ -1308,6 +1495,99 @@ void TestResultROIResolution()
     resolution = ResultROIResolver::Resolve(source, request);
     Require(!resolution.available && !resolution.reason.empty(),
         "missing result ROI policy input was not reported");
+
+    ToolResult lineSource;
+    lineSource.lines.push_back({cv::Point(5, 8), cv::Point(25, 8), 20.0f, 0.0f});
+    request = {};
+    request.mode = ResultROIMode::AllResults;
+    resolution = ResultROIResolver::Resolve(lineSource, request, cv::Size(40, 30));
+    Require(resolution.available && resolution.rois.size() == 1 &&
+        resolution.rois[0].ToCvRect() == cv::Rect(5, 8, 21, 1),
+        "line result was not adapted to a downstream ROI");
+
+    request.outputGeometry = ResultROIOutputGeometry::CenterPointsOrPreserveLines;
+    resolution = ResultROIResolver::Resolve(lineSource, request, cv::Size(40, 30));
+    Require(resolution.available && resolution.rois.size() == 1 &&
+        resolution.rois[0].type == ROI_TYPE_LINE &&
+        resolution.rois[0].start.x == 5.0f && resolution.rois[0].start.y == 8.0f &&
+        resolution.rois[0].end.x == 25.0f && resolution.rois[0].end.y == 8.0f,
+        "line result endpoints were not preserved for downstream measurement");
+
+    ToolResult mixedSpatialSource;
+    mixedSpatialSource.regions.push_back(firstRegion);
+    mixedSpatialSource.lines = lineSource.lines;
+    request.requireLineResults = true;
+    const std::vector<ResultROIChoice> lineChoices =
+        ResultROIResolver::ListChoices(mixedSpatialSource, request);
+    Require(lineChoices.size() == 1 &&
+        lineChoices[0].label.find("线段") != std::string::npos,
+        "line-only result dropdown was masked by another spatial result channel");
+    request.requireLineResults = false;
+
+    mixedSpatialSource.detections.push_back(
+        {cv::Rect(28, 4, 8, 9), 3, 0.77f, "混合检测"});
+    mixedSpatialSource.texts.push_back(
+        {"混合文本", cv::Rect(4, 20, 12, 5), 0.91f});
+    request.channel = ToolSpatialResultChannel::Auto;
+    const std::vector<ResultROIChoice> mixedChoices =
+        ResultROIResolver::ListChoices(mixedSpatialSource, request);
+    Require(mixedChoices.size() == 4,
+        "mixed spatial output channels did not expose every selectable result");
+    request.channel = ToolSpatialResultChannel::Texts;
+    const std::vector<ResultROIChoice> textOnlyChoices =
+        ResultROIResolver::ListChoices(mixedSpatialSource, request);
+    Require(textOnlyChoices.size() == 1 &&
+        textOnlyChoices[0].label.find("混合文本") != std::string::npos,
+        "explicit result ROI channel selection did not isolate text results");
+    request.channel = ToolSpatialResultChannel::Auto;
+
+    request.outputGeometry = ResultROIOutputGeometry::Bounds;
+
+    ToolResult textSource;
+    textSource.texts.push_back({"CODE", cv::Rect(7, 9, 12, 6), 0.88f});
+    resolution = ResultROIResolver::Resolve(textSource, request, cv::Size(40, 30));
+    Require(resolution.available && resolution.rois.size() == 1 &&
+        resolution.rois[0].ToCvRect() == cv::Rect(7, 9, 12, 6),
+        "text result was not adapted to a downstream ROI");
+
+    const std::array<bool, 18> expectedSpatial = {
+        false, true, true, false, true, true, true, true, false,
+        false, true, true, false, true, true, true, true, true,
+    };
+    for (int type = 0; type < static_cast<int>(expectedSpatial.size()); ++type)
+    {
+        Require(ToolCapabilitiesForType(type).SupportsSpatialResult() ==
+            expectedSpatial[type], "tool result capability matrix regressed");
+        Require(ToolResultKindsLabel(type) != nullptr &&
+            ToolResultKindsLabel(type)[0] != '\0',
+            "tool result capability label is missing");
+    }
+}
+
+void TestAllToolRegistryAndResultCapabilityContracts()
+{
+    for (int type = 0; type <= 17; ++type)
+    {
+        const ToolResultCapabilities capabilities = ToolCapabilitiesForType(type);
+        Require(capabilities.regions || capabilities.detections || capabilities.lines ||
+                capabilities.texts || capabilities.measurements || capabilities.processedImage,
+            "tool result capability table contains an empty tool contract");
+        Require(ToolResultKindsLabel(type) != nullptr &&
+                std::string(ToolResultKindsLabel(type)) != "未知输出",
+            "tool result capability label is missing");
+
+        // 原图（type 12）由执行器直接恢复本轮输入，不创建 ITool 对象。
+        if (type == 12)
+            continue;
+
+        std::unique_ptr<ITool> tool = ITool::Create(type);
+        Require(tool != nullptr, "tool registry cannot create a catalog tool");
+        Require(tool->GetType() == type, "tool factory returned the wrong type");
+        Require(tool->GetName() != nullptr && tool->GetName()[0] != '\0',
+            "tool factory returned an empty display name");
+        Require(std::string(ToolRegistry::GetName(type)) != "Unknown",
+            "tool registry is missing the Chinese catalog name");
+    }
 }
 
 void TestTemplateMatchingToolUsesInstanceParameters()
@@ -1329,6 +1609,21 @@ void TestTemplateMatchingToolUsesInstanceParameters()
     Require(std::abs(result.regions[0].bbox.x - 55) <= 1 &&
         std::abs(result.regions[0].bbox.y - 35) <= 1,
         "template matching coordinates regressed");
+
+    cv::Mat fractionalSource = cv::Mat::zeros(context.image.size(), CV_8UC1);
+    const cv::Mat translation = cv::Mat(cv::Matx23d(
+        1.0, 0.0, 55.35,
+        0.0, 1.0, 35.65));
+    cv::warpAffine(tool.templateImg, fractionalSource, translation,
+        fractionalSource.size(), cv::INTER_LINEAR, cv::BORDER_CONSTANT,
+        cv::Scalar(0));
+    context.image = fractionalSource;
+    tool.subpixelRefinement = true;
+    tool.matchThreshold = 0.70f;
+    result = tool.Execute(context);
+    Require(result.success && result.regions.size() == 1 &&
+        cv::norm(result.regions[0].center - cv::Point2f(67.35f, 44.65f)) < 0.65f,
+        "HALCON-style subpixel template position refinement regressed");
 }
 
 void TestToolChainReorderRemapsResultROISource()
@@ -1343,8 +1638,9 @@ void TestToolChainReorderRemapsResultROISource()
     detector.type = 4;
     ToolInstance consumer;
     consumer.type = 2;
-    consumer.resultRoiMode = 1;
+    consumer.resultRoiMode = 3;
     consumer.resultRoiSourceTool = 0;
+    consumer.resultRoiSecondSourceTool = 0;
     consumer.fixture.enabled = true;
     consumer.fixture.sourceToolIndex = 0;
     ToolInstance original;
@@ -1355,6 +1651,7 @@ void TestToolChainReorderRemapsResultROISource()
     ToolChainState::EnsureToolIds();
     const std::uint64_t detectorId = tools[0].toolId;
     tools[1].resultRoiSourceToolId = detectorId;
+    tools[1].resultRoiSecondSourceToolId = detectorId;
     tools[1].fixture.sourceToolId = detectorId;
     ToolChainState::SetActiveIndex(1);
     ToolChainState::SetYoloLiveInstanceIndex(0);
@@ -1364,9 +1661,12 @@ void TestToolChainReorderRemapsResultROISource()
         "original tool reorder regressed");
     Require(tools[2].resultRoiSourceTool == 1,
         "result ROI source index was not remapped after reorder");
+    Require(tools[2].resultRoiSecondSourceTool == 1,
+        "second result ROI source index was not remapped after reorder");
     Require(tools[2].fixture.sourceToolIndex == 1,
         "fixture source index was not remapped after reorder");
     Require(tools[2].resultRoiSourceToolId == detectorId &&
+        tools[2].resultRoiSecondSourceToolId == detectorId &&
         tools[2].fixture.sourceToolId == detectorId,
         "stable tool identity changed after reorder");
     Require(ToolChainState::ActiveIndex() == 2 && ToolChainState::YoloLiveInstanceIndex() == 1,
@@ -1388,12 +1688,15 @@ void TestRecipeRoundTrip()
     data.tmMatch.maxResults = 3;
     data.tmMatch.matchThreshold = 0.91f;
     data.rois.push_back({1.0f, 2.0f, 30.0f, 40.0f, 27.5f, 0});
+    data.rois[0].type = ROI_TYPE_POLYGON;
+    data.rois[0].points = {{1.0f, 2.0f}, {30.0f, 4.0f}, {20.0f, 40.0f}};
     data.taskGroups.push_back({"检测组", true, "assets/images/task-a.jpg"});
     data.taskGroups.push_back({"空任务", false});
     data.taskGroups[0].imageFolderPath = "assets/images/task-a";
     data.taskGroups[0].imageFolderIndex = 3;
     data.taskGroups[0].imageFolderCount = 8;
     data.taskGroups[0].cameraPreferred = true;
+    data.taskGroups[0].cameraIndex = 15;
 
     ToolInstance tool;
     tool.type = 4;
@@ -1527,8 +1830,8 @@ void TestRecipeRoundTrip()
     nlohmann::json savedRecipe;
     savedRecipeStream >> savedRecipe;
     savedRecipeStream.close();
-    Require(savedRecipe.value("version", 0) == 4,
-        "new recipes were not saved with schema version 4");
+    Require(savedRecipe.value("version", 0) == 5,
+        "new recipes were not saved with schema version 5");
     for (const auto& savedTool : savedRecipe["tools"])
     {
         Require(!savedTool.contains("blobShowLabels") &&
@@ -1548,7 +1851,10 @@ void TestRecipeRoundTrip()
     Require(loaded.threshold.useGray == data.threshold.useGray, "threshold round-trip regressed");
     Require(loaded.threshold.thresholdValue == data.threshold.thresholdValue, "threshold value round-trip regressed");
     Require(loaded.rois.size() == 1 && loaded.rois[0].endX == 30.0f &&
-        std::abs(loaded.rois[0].angle - 27.5f) < 0.001f, "ROI round-trip regressed");
+        std::abs(loaded.rois[0].angle - 27.5f) < 0.001f &&
+        loaded.rois[0].points.size() == 3 &&
+        std::abs(loaded.rois[0].points[2].y - 40.0f) < 0.001f,
+        "ROI round-trip regressed");
     Require(loaded.taskGroups.size() == 2 && loaded.taskGroups[0].name == "检测组" &&
         loaded.taskGroups[0].enabled &&
         loaded.taskGroups[0].imagePath == "assets/images/task-a.jpg" &&
@@ -1556,6 +1862,7 @@ void TestRecipeRoundTrip()
         loaded.taskGroups[0].imageFolderIndex == 3 &&
         loaded.taskGroups[0].imageFolderCount == 8 &&
         loaded.taskGroups[0].cameraPreferred &&
+        loaded.taskGroups[0].cameraIndex == 15 &&
         loaded.taskGroups[1].name == "空任务" &&
         !loaded.taskGroups[1].enabled, "task-group order/state round-trip regressed");
     Require(loaded.tools.size() == 4, "tool count round-trip regressed");
@@ -1658,6 +1965,7 @@ void TestRecipeRoundTrip()
         std::ifstream input(path);
         nlohmann::json legacy = nlohmann::json::parse(input);
         legacy["rois"][0].erase("angle");
+        legacy["rois"][0].erase("points");
         legacy["tools"][0]["searchROIs"][0].erase("angle");
         std::ofstream output(legacyPath);
         output << legacy.dump(2);
@@ -1667,11 +1975,30 @@ void TestRecipeRoundTrip()
         "legacy ROI recipe load failed");
     const ToolInstance legacyTool = legacyLoaded.tools[0].CreateToolInstance();
     Require(legacyLoaded.rois.size() == 1 && legacyLoaded.rois[0].angle == 0.0f &&
+        legacyLoaded.rois[0].points.empty() &&
         legacyTool.searchROIs.size() == 1 && legacyTool.searchROIs[0].angle == 0.0f,
         "legacy recipe ROI angle did not default to zero");
 
+    const std::filesystem::path futurePath =
+        std::filesystem::temp_directory_path() / "imgui_opencv_future.recipe";
+    {
+        std::ifstream input(path);
+        nlohmann::json future = nlohmann::json::parse(input);
+        future["version"] = 999;
+        future["futureOnlyField"] = "must-not-be-discarded";
+        std::ofstream output(futurePath);
+        output << future.dump(2);
+    }
+    RecipeData protectedData;
+    protectedData.name = "unchanged";
+    Require(!RecipeManager::Load(futurePath.string().c_str(), protectedData),
+        "newer recipe version was not rejected");
+    Require(protectedData.name == "unchanged",
+        "newer recipe version partially modified destination data");
+
     std::filesystem::remove(path);
     std::filesystem::remove(legacyPath);
+    std::filesystem::remove(futurePath);
     std::filesystem::remove(path.parent_path() / "imgui_opencv_regression_tool.png");
     std::filesystem::remove(path.parent_path() / "imgui_opencv_regression_difference.png");
 }
@@ -1679,6 +2006,20 @@ void TestRecipeRoundTrip()
 void TestTaskGroupManagement()
 {
     ToolChainState::ClearTools();
+    Require(ToolChainState::ReadOnlyTaskGroups().empty(),
+        "an empty recipe unexpectedly created a task group");
+    const int onlyGroup = ToolChainState::CreateTaskGroup();
+    Require(onlyGroup == 0 && ToolChainState::RemoveTaskGroup(onlyGroup) &&
+        ToolChainState::ReadOnlyTaskGroups().empty(),
+        "removing the last task group did not leave the task list empty");
+
+    ToolResult measurementOverlay;
+    measurementOverlay.toolName = "工业测量";
+    measurementOverlay.measurements.push_back({"value", 270.0, "mm"});
+    Require(BuildToolResultLineOverlayLabel(measurementOverlay) ==
+            "工业测量 270.000 mm",
+        "measurement line overlay omitted its value or unit");
+
     ToolInstance first;
     first.type = 0;
     first.groupName = "旧任务A";
@@ -2068,6 +2409,50 @@ void TestColorAnalyzerITool()
     Require(!result.debugImage.empty(), "color analyzer histogram image regressed");
     Require(std::abs(result.measurements[0].value - 10.0) < 0.001,
         "color analyzer mean channel regressed");
+
+    tool.params.colorSpace = 4;
+    result = entry->Execute(ctx);
+    Require(result.success && std::abs(result.measurements[0].value - 22.0) < 0.001,
+        "color analyzer Gray mode did not convert BGR to luminance");
+    Require(std::abs(result.measurements[1].value) < 0.001 &&
+            std::abs(result.measurements[2].value) < 0.001,
+        "color analyzer Gray mode unexpectedly retained color channels");
+}
+
+void TestContourDirectionAndSubpixelBoundary()
+{
+    cv::Mat image = cv::Mat::zeros(128, 128, CV_8UC1);
+    cv::circle(image, cv::Point(64, 64), 42, cv::Scalar(255), cv::FILLED, cv::LINE_AA);
+    cv::circle(image, cv::Point(64, 64), 18, cv::Scalar(0), cv::FILLED, cv::LINE_AA);
+
+    ContourDetector::Params params;
+    params.blurSize = 0;
+    params.threshMode = 1;
+    params.threshValue = 128;
+    params.retrMode = 2;
+    params.approxMethod = 0;
+    params.minArea = 20.0;
+    params.normalizeDirection = true;
+    params.subpixelBoundary = true;
+    const auto contours = ContourDetector::Detect(image, params);
+
+    const auto external = std::find_if(contours.begin(), contours.end(),
+        [](const ContourResult& contour) { return !contour.isHole; });
+    const auto hole = std::find_if(contours.begin(), contours.end(),
+        [](const ContourResult& contour) { return contour.isHole; });
+    Require(external != contours.end() && hole != contours.end(),
+        "contour hierarchy did not preserve external and hole boundaries");
+    Require(external->signedArea > 0.0 && hole->signedArea < 0.0,
+        "contour direction normalization did not distinguish external and hole boundaries");
+    Require(external->subpixelPoints.size() == external->points.size(),
+        "subpixel contour point count regressed");
+    const bool hasFractionalBoundary = std::any_of(external->subpixelPoints.begin(),
+        external->subpixelPoints.end(), [](const cv::Point2f& point) {
+            return std::abs(point.x - std::round(point.x)) > 1.0e-3f ||
+                std::abs(point.y - std::round(point.y)) > 1.0e-3f;
+        });
+    Require(hasFractionalBoundary,
+        "subpixel contour refinement returned integer-only boundary points");
 }
 
 void TestBlobToolITool()
@@ -2126,6 +2511,9 @@ void TestToolInstanceOwnsRecipeSerialization()
     source.mcfShowPreview = false;
     source.resultRoiMode = 2;
     source.resultRoiSourceToolId = 1234;
+    source.resultRoiSecondSourceTool = 3;
+    source.resultRoiSecondSourceToolId = 4321;
+    source.resultRoiSecondIndex = 4;
     source.fixture.enabled = true;
     source.fixture.sourceToolId = 5678;
     source.fixture.referenceOrigin = {12.5f, 8.25f};
@@ -2162,7 +2550,10 @@ void TestToolInstanceOwnsRecipeSerialization()
     Require(loaded.label == source.label && !loaded.showResultLabels &&
         !loaded.showTemplatePreview && !loaded.mcfShowPreview,
         "ToolInstance display recipe serialization regressed");
-    Require(loaded.fixture.sourceToolId == 5678 && loaded.judgement.stopOnFailure,
+    Require(loaded.fixture.sourceToolId == 5678 && loaded.judgement.stopOnFailure &&
+        loaded.resultRoiSecondSourceTool == 3 &&
+        loaded.resultRoiSecondSourceToolId == 4321 &&
+        loaded.resultRoiSecondIndex == 4,
         "ToolInstance dependency/judgement serialization regressed");
     Require(loaded.searchROIs.size() == 1 && loaded.searchROIs[0].points.size() == 3,
         "ToolInstance polygon ROI serialization regressed");
@@ -2270,7 +2661,171 @@ void TestROIEditorStateOwnsInteraction()
     Require(ROIEditorState::ConsumeCompletedDrawSequence(completed) &&
         completed.size() == 2 && completed[0].runtimeId == pointId,
         "ROI editor completed sequence contract regressed");
+    ROIEditorState::ActivePointIndex() = 2;
+    ROIEditorState::PolygonDraftPoints().push_back(ImVec2(3.0f, 4.0f));
     ROIEditorState::ResetInteraction();
+    Require(ROIEditorState::ActivePointIndex() == -1 &&
+        ROIEditorState::PolygonDraftPoints().empty(),
+        "ROI editor polygon interaction reset regressed");
+
+    ROIState::ClearInteraction();
+    ROI editable;
+    editable.type = ROI_TYPE_RECT;
+    editable.start = ImVec2(10.0f, 10.0f);
+    editable.end = ImVec2(30.0f, 30.0f);
+    editable.locked = true;
+    editable.visible = false;
+    editable.constrainToImage = true;
+    ROIEditorState::EnsureRuntimeId(editable);
+    const int editableIndex = ROIState::Add(editable, true);
+    ROIState::BeginHistoryTransaction();
+    editable.start.x = 20.0f;
+    ROIState::Update(editableIndex, editable);
+    editable.start.x = 25.0f;
+    ROIState::Update(editableIndex, editable);
+    ROIState::CommitHistoryTransaction();
+    Require(ROIState::Undo() && std::abs(ROIState::At(editableIndex)->start.x - 10.0f) < 0.001f,
+        "ROI transaction undo did not restore the pre-drag geometry");
+    Require(ROIState::Redo() && std::abs(ROIState::At(editableIndex)->start.x - 25.0f) < 0.001f,
+        "ROI transaction redo did not restore the edited geometry");
+
+    ToolInstance roiPersistence;
+    roiPersistence.searchROIs.push_back(editable);
+    ToolInstance restoredRoiPersistence;
+    restoredRoiPersistence.LoadRecipeJson(roiPersistence.ToRecipeJson());
+    Require(restoredRoiPersistence.searchROIs.size() == 1 &&
+            restoredRoiPersistence.searchROIs[0].locked &&
+            !restoredRoiPersistence.searchROIs[0].visible &&
+            restoredRoiPersistence.searchROIs[0].constrainToImage,
+        "ROI lock/visibility/bounds recipe persistence regressed");
+
+    ROI outside = editable;
+    outside.locked = false;
+    outside.visible = true;
+    outside.start = ImVec2(-20.0f, -10.0f);
+    outside.end = ImVec2(140.0f, 120.0f);
+    outside.angle = 25.0f;
+    outside.ClampToImage(cv::Size(100, 80));
+    for (const ImVec2& corner : outside.Corners())
+        Require(corner.x >= -0.01f && corner.y >= -0.01f &&
+                corner.x <= 100.01f && corner.y <= 80.01f,
+            "ROI image-bound constraint left a rotated corner outside the image");
+    ROIState::ClearInteraction();
+}
+
+void TestHalconStyleROIDomain()
+{
+    cv::Mat otsuInput(10, 10, CV_8UC1, cv::Scalar(100));
+    cv::Mat otsuMask = cv::Mat::zeros(10, 10, CV_8UC1);
+    otsuMask(cv::Rect(2, 2, 6, 6)).setTo(255);
+    otsuInput(cv::Rect(2, 2, 3, 6)).setTo(20);
+    otsuInput(cv::Rect(5, 2, 3, 6)).setTo(70);
+    Require(std::abs(ToolImageUtils::MaskedOtsuThreshold(otsuInput, otsuMask) - 20.0) < 0.001,
+        "OTSU threshold included pixels outside the HALCON definition domain");
+
+    cv::Mat policyMask = cv::Mat::zeros(10, 10, CV_8UC1);
+    policyMask(cv::Rect(0, 0, 5, 10)).setTo(255);
+    const cv::Rect crossingBox(4, 2, 4, 4);
+    Require(!ToolImageUtils::AcceptRectByDomain(policyMask, crossingBox, 0, 0.5f) &&
+             ToolImageUtils::AcceptRectByDomain(policyMask, crossingBox, 1, 0.5f) &&
+            !ToolImageUtils::AcceptRectByDomain(policyMask, crossingBox, 2, 0.5f) &&
+             ToolImageUtils::AcceptRectByDomain(policyMask, crossingBox, 3, 0.2f) &&
+            !ToolImageUtils::AcceptRectByDomain(policyMask, crossingBox, 3, 0.5f),
+        "ROI center/intersection/containment/coverage policies regressed");
+
+    ToolInstance policyTool;
+    policyTool.roiResultPolicy = 3;
+    policyTool.roiMinimumCoverage = 0.65f;
+    ToolInstance restoredPolicyTool;
+    restoredPolicyTool.LoadRecipeJson(policyTool.ToRecipeJson());
+    Require(restoredPolicyTool.roiResultPolicy == 3 &&
+            std::abs(restoredPolicyTool.roiMinimumCoverage - 0.65f) < 0.001f,
+        "ROI result policy recipe persistence regressed");
+
+    cv::Mat morphInput = cv::Mat::zeros(9, 9, CV_8UC1);
+    cv::Mat morphMask = cv::Mat::zeros(9, 9, CV_8UC1);
+    morphMask(cv::Rect(2, 2, 5, 5)).setTo(255);
+    morphInput.setTo(100, morphMask);
+    MorphologyTool::Params morphParams;
+    morphParams.opType = 0;
+    morphParams.kernelSize = 1;
+    morphParams.iterations = 1;
+    cv::Mat morphResult = MorphologyTool::Process(morphInput, morphParams, morphMask);
+    Require(morphResult.at<uchar>(2, 2) == 100 && morphResult.at<uchar>(1, 1) == 0,
+        "morphology domain boundary was influenced by outside pixels");
+
+    ROI rectangle2;
+    rectangle2.type = ROI_TYPE_RECT;
+    rectangle2.start = ImVec2(20.0f, 30.0f);
+    rectangle2.end = ImVec2(80.0f, 70.0f);
+    rectangle2.angle = 135.0f;
+    Require(std::abs(rectangle2.HalconRow() - 50.0f) < 0.001f &&
+            std::abs(rectangle2.HalconColumn() - 50.0f) < 0.001f,
+        "HALCON rectangle2 center conversion regressed");
+    Require(std::abs(rectangle2.HalconLength1() - 30.0f) < 0.001f &&
+            std::abs(rectangle2.HalconLength2() - 20.0f) < 0.001f,
+        "HALCON rectangle2 half-length conversion regressed");
+    Require(std::abs(rectangle2.HalconPhi() + CV_PI * 0.25) < 0.0001,
+        "HALCON rectangle2 Phi normalization regressed");
+
+    cv::Mat source(120, 120, CV_8UC3, cv::Scalar(0, 0, 0));
+    ROI circle;
+    circle.type = ROI_TYPE_CIRCLE;
+    circle.start = ImVec2(60.0f, 60.0f);
+    circle.end = ImVec2(80.0f, 60.0f);
+    cv::circle(source, cv::Point(60, 60), 20, cv::Scalar(255, 255, 255), cv::FILLED);
+    cv::circle(source, cv::Point(60, 60), 3, cv::Scalar(0, 0, 0), cv::FILLED);
+
+    cv::Mat circleCrop;
+    RotatedROI::Transform circleTransform;
+    Require(RotatedROI::Extract(source, circle, circleCrop, circleTransform),
+        "circle ROI domain extraction failed");
+    Require(circleTransform.domainMask.at<uchar>(0, 0) == 0 &&
+            circleTransform.domainMask.at<uchar>(20, 20) != 0,
+        "circle ROI domain includes its bounding-box corners");
+    Require(circle.Contains(ImVec2(60.0f, 60.0f)) &&
+            !circle.Contains(ImVec2(42.0f, 42.0f)),
+        "circle ROI exact containment regressed");
+
+    VisionContext context;
+    context.image = source;
+    context.originalImage = source;
+    context.width = source.cols;
+    context.height = source.rows;
+    context.rois = {circle};
+    context.selectedROI = 0;
+    ToolInstance blob;
+    blob.type = 2;
+    blob.toolId = 7101;
+    blob.blob.thresholdMode = 1;
+    blob.blob.threshold = 127;
+    blob.blob.invert = true;
+    blob.blob.minArea = 5;
+    blob.blob.maxArea = 10000;
+    ToolExecutor::RunViaITool(blob, context);
+    Require(blob.hasLastResult && blob.lastResult.success &&
+            blob.lastResult.regions.size() == 1,
+        "circle definition domain did not exclude bounding-box corner blobs");
+    double blobCandidateCount = -1.0;
+    for (const auto& measurement : blob.lastResult.measurements)
+        if (measurement.name == "blobCandidateCount")
+            blobCandidateCount = measurement.value;
+    Require(std::abs(blobCandidateCount - 1.0) < 0.001,
+        "inverted threshold generated foreground outside the circle domain");
+
+    ROI polygon;
+    polygon.type = ROI_TYPE_POLYGON;
+    polygon.points = {{15.0f, 15.0f}, {95.0f, 20.0f}, {35.0f, 100.0f}};
+    polygon.start = ImVec2(15.0f, 15.0f);
+    polygon.end = ImVec2(95.0f, 100.0f);
+    cv::Mat polygonCrop;
+    RotatedROI::Transform polygonTransform;
+    Require(RotatedROI::Extract(source, polygon, polygonCrop, polygonTransform),
+        "polygon ROI domain extraction failed");
+    Require(polygonTransform.domainMask.at<uchar>(0, 79) == 0 &&
+            polygon.Contains(ImVec2(35.0f, 40.0f)) &&
+            !polygon.Contains(ImVec2(90.0f, 90.0f)),
+        "polygon ROI exact domain regressed");
 }
 
 void TestToolAssetServiceOwnsCaptureWorkflow()
@@ -2433,6 +2988,14 @@ void TestHardwareAdapterServiceLifecycle()
     HardwareAdapterService::SetCamera(std::move(camera));
     Require(HardwareAdapterService::Camera() == cameraView,
         "camera adapter registration failed");
+    bool secondCameraDisconnected = false;
+    auto secondCamera = std::make_unique<TestCameraAdapter>(&secondCameraDisconnected);
+    TestCameraAdapter* secondCameraView = secondCamera.get();
+    Require(HardwareAdapterService::RegisterCamera("line-b", std::move(secondCamera)) &&
+        HardwareAdapterService::Camera("line-b") == secondCameraView &&
+        HardwareAdapterService::CameraKeys() ==
+            std::vector<std::string>({"default", "line-b"}),
+        "multi-camera registration or enumeration failed");
     Require(cameraView->Connect({"camera-1", 0, {}}).success,
         "camera adapter connect contract failed");
     Require(HardwareRuntimeService::GrabCameraFrame(100, "camera-1", 7, 42.0).success &&
@@ -2498,10 +3061,12 @@ void TestHardwareAdapterServiceLifecycle()
         "hardware adapter key enumeration regressed");
 
     HardwareAdapterService::DisconnectAll();
-    Require(cameraDisconnected && cameraView->stopped && plcDisconnected,
+    Require(cameraDisconnected && cameraView->stopped && secondCameraDisconnected &&
+        plcDisconnected,
         "hardware adapters were not disconnected as a group");
     HardwareAdapterService::Clear();
     Require(HardwareAdapterService::Camera() == nullptr &&
+        HardwareAdapterService::CameraKeys().empty() &&
         HardwareAdapterService::Keys().empty(),
         "hardware adapter service clear regressed");
     FrameSourceState::Clear();
@@ -2528,6 +3093,9 @@ void TestHardwareRuntimeAutomation()
     captureConfig.reconnectFailureThreshold = 1;
     captureConfig.reconnectInitialDelayMs = 1;
     captureConfig.reconnectMaxDelayMs = 4;
+    captureConfig.trigger.mode = CameraTriggerMode::Software;
+    captureConfig.trigger.delayMicroseconds = 25.0;
+    captureConfig.bufferPolicy = CameraBufferPolicy::LatestFrame;
     Require(HardwareRuntimeService::StartCameraCapture(captureConfig).success,
         "registered camera capture worker failed to start");
     HardwareRuntimeService::RequestCameraFrame();
@@ -2545,6 +3113,12 @@ void TestHardwareRuntimeAutomation()
         ImageState::Current().size() == cv::Size(6, 4) &&
         ImageState::NeedUploadRef() && !ImageState::PendingUploadRef().empty(),
         "asynchronous industrial-camera frame was not published on Tick");
+    Require(cameraView->triggerConfigureCount >= 1 &&
+            cameraView->softwareTriggerCount >= 1 &&
+            cameraView->bufferPolicyConfigureCount >= 1 &&
+            cameraView->bufferPolicy == CameraBufferPolicy::LatestFrame &&
+            cameraSnapshot.cameraTrigger.mode == CameraTriggerMode::Software,
+        "camera trigger or frame buffer configuration was not applied before capture");
 
     const int reconnectStartFrame = cameraSnapshot.cameraFrameIndex;
     cameraView->failGrabsRemaining = 1;
@@ -2562,8 +3136,10 @@ void TestHardwareRuntimeAutomation()
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    Require(cameraRecovered && cameraView->connectCount >= 2 && cameraView->startCount >= 2,
-        "industrial camera did not recover after a scripted frame failure");
+    Require(cameraRecovered && cameraView->connectCount >= 2 && cameraView->startCount >= 2 &&
+            cameraView->triggerConfigureCount >= 2 &&
+            cameraView->bufferPolicyConfigureCount >= 2,
+        "industrial camera did not recover and restore acquisition configuration after failure");
 
     ToolController::Reset();
     ToolChainState::ClearTools();
@@ -2650,6 +3226,33 @@ void TestHardwareRuntimeAutomation()
         HardwareRuntimeService::WaitForOutputIdle(3000) && modbusView->lastValue &&
         modbusView->connectCount > connectsBeforeRetry,
         "queued Modbus output did not reconnect and retry after a write failure");
+
+    auto auxiliaryOne = std::make_unique<TestModbusAdapter>();
+    auto auxiliaryTwo = std::make_unique<TestModbusAdapter>();
+    TestModbusAdapter* auxiliaryOneView = auxiliaryOne.get();
+    TestModbusAdapter* auxiliaryTwoView = auxiliaryTwo.get();
+    Require(auxiliaryOneView->Connect({"127.0.0.1", 1502, {}}).success &&
+        auxiliaryTwoView->Connect({"127.0.0.1", 2502, {}}).success &&
+        HardwareAdapterService::Register("aux-output-1", std::move(auxiliaryOne)) &&
+        HardwareAdapterService::Register("aux-output-2", std::move(auxiliaryTwo)),
+        "auxiliary output adapter setup failed");
+    HardwareOutputConnectionConfig auxiliaryConfigOne;
+    auxiliaryConfigOne.enabled = true;
+    auxiliaryConfigOne.autoPublish = true;
+    auxiliaryConfigOne.binding.kind = HardwareOutputKind::ModbusCoil;
+    auxiliaryConfigOne.binding.adapterKey = "aux-output-1";
+    auxiliaryConfigOne.binding.address = 31;
+    HardwareOutputConnectionConfig auxiliaryConfigTwo = auxiliaryConfigOne;
+    auxiliaryConfigTwo.binding.adapterKey = "aux-output-2";
+    auxiliaryConfigTwo.binding.address = 32;
+    HardwareRuntimeService::ConfigureAuxiliaryOutputBinding(auxiliaryConfigOne);
+    HardwareRuntimeService::ConfigureAuxiliaryOutputBinding(auxiliaryConfigTwo);
+    Require(HardwareRuntimeService::EnqueueConfiguredStatus(ToolResultStatus::Pass).success &&
+        HardwareRuntimeService::WaitForOutputIdle(3000) &&
+        auxiliaryOneView->lastAddress == 31 && auxiliaryOneView->lastValue &&
+        auxiliaryTwoView->lastAddress == 32 && auxiliaryTwoView->lastValue &&
+        HardwareRuntimeService::AuxiliaryOutputSnapshots().size() == 2,
+        "automatic inspection result was not broadcast to auxiliary outputs");
 
     ToolResult error;
     error.status = ToolResultStatus::Error;
@@ -2751,9 +3354,13 @@ void TestModbusHandshakeTriggersIndependentTaskCameraRun()
         {true, HardwareIoSignal::Done, HardwareIoDirection::Output,
             12, false, 30, {}},
         {true, HardwareIoSignal::Ok, HardwareIoDirection::Output,
-            13, false, 0, {}},
+            13, false, 0, "任务A"},
         {true, HardwareIoSignal::Ng, HardwareIoDirection::Output,
-            14, false, 0, {}},
+            14, false, 0, "任务A"},
+        {true, HardwareIoSignal::Ok, HardwareIoDirection::Output,
+            18, false, 0, "任务B"},
+        {true, HardwareIoSignal::Ng, HardwareIoDirection::Output,
+            19, false, 0, "任务B"},
         {true, HardwareIoSignal::Error, HardwareIoDirection::Output,
             15, false, 0, {}},
         {true, HardwareIoSignal::Heartbeat, HardwareIoDirection::Output,
@@ -2827,8 +3434,9 @@ void TestModbusHandshakeTriggersIndependentTaskCameraRun()
     }
     Require(hasWrite(11, true) && hasWrite(11, false) &&
         hasWrite(12, true) && hasWrite(13, true) &&
-        !hasWrite(14, true) && !hasWrite(15, true),
-        "PLC handshake did not publish Busy/Done/OK outputs");
+        !hasWrite(14, true) && !hasWrite(15, true) &&
+        !hasWrite(18, true) && !hasWrite(19, true),
+        "PLC handshake did not isolate task-specific OK/NG outputs");
 
     setCoil(17, true);
     bool acknowledged = false;
@@ -3159,7 +3767,7 @@ void TestHardwareSettingsPersistence()
     HardwarePanelSettings source;
     source.cameraAddress = "rtsp://192.168.10.20/live";
     source.cameraSourceName = "line-a-camera";
-    source.cameraBackend = 3;
+    source.cameraBackend = 6;
     source.cameraOrientation = 3;
     source.cameraTimeoutMs = 880;
     source.cameraIntervalMs = 75;
@@ -3167,7 +3775,7 @@ void TestHardwareSettingsPersistence()
     source.cameraRunAfterCapture = false;
     source.cameraTriggerBeforeRun = false;
     source.cameraAutoExposure = false;
-    source.cameraExposure = -4.25f;
+    source.cameraExposure = 10000.0f;
     source.cameraGain = 12.5f;
     source.outputType = 3;
     source.outputKey = "quality-gate";
@@ -3198,11 +3806,25 @@ void TestHardwareSettingsPersistence()
         {true, HardwareIoSignal::Done, HardwareIoDirection::Output,
             22, false, 350, {}}
     };
+    source.auxiliaryOutputs.resize(kHardwareAuxiliaryOutputCount);
+    source.auxiliaryOutputs[0].enabled = true;
+    source.auxiliaryOutputs[0].adapterType = HardwareOutputAdapterType::TcpText;
+    source.auxiliaryOutputs[0].binding.adapterKey = "output-aux-01";
+    source.auxiliaryOutputs[0].endpoint.address = "192.168.10.41";
+    source.auxiliaryOutputs[0].endpoint.port = 5101;
+    source.auxiliaryOutputs[0].binding.passText = "PASS-AUX";
+    source.auxiliaryOutputs[0].binding.failText = "FAIL-AUX";
+    source.auxiliaryOutputs[0].autoPublish = true;
+    source.auxiliaryOutputs[1].enabled = false;
+    source.auxiliaryOutputs[1].binding.adapterKey = "output-aux-02";
+    source.auxiliaryOutputs[2].enabled = false;
+    source.auxiliaryOutputs[2].binding.adapterKey = "output-aux-03";
 
     std::string error;
-    Require(HardwareSettingsService::Save(source, settingsPath.string(), &error) &&
-        error.empty() && fs::exists(settingsPath),
-        "hardware settings were not saved");
+    if (!HardwareSettingsService::Save(source, settingsPath.string(), &error))
+        throw std::runtime_error("hardware settings were not saved: " + error);
+    Require(error.empty() && fs::exists(settingsPath),
+        "hardware settings save returned success without a target file");
 
     const HardwarePanelSettings loaded = HardwareSettingsService::Load(settingsPath.string());
     Require(loaded.cameraAddress == source.cameraAddress &&
@@ -3217,6 +3839,11 @@ void TestHardwareSettingsPersistence()
         loaded.cameraAutoExposure == source.cameraAutoExposure &&
         std::abs(loaded.cameraExposure - source.cameraExposure) < 0.001f &&
         std::abs(loaded.cameraGain - source.cameraGain) < 0.001f &&
+        loaded.cameras.size() == kHardwareCameraCount &&
+        loaded.cameras[0].address == source.cameraAddress &&
+        loaded.cameras[0].sourceName == source.cameraSourceName &&
+        loaded.cameras[15].address == "15" &&
+        loaded.cameras[15].sourceName == "camera-16" &&
         loaded.outputType == source.outputType &&
         loaded.outputKey == source.outputKey &&
         loaded.outputAddress == source.outputAddress &&
@@ -3250,10 +3877,76 @@ void TestHardwareSettingsPersistence()
         loaded.outputIoMappings[0].invert &&
         loaded.outputIoMappings[0].taskGroupName == "任务A" &&
         loaded.outputIoMappings[1].pulseMs == 350 &&
+        loaded.auxiliaryOutputs.size() == kHardwareAuxiliaryOutputCount &&
+        loaded.auxiliaryOutputs[0].enabled &&
+        loaded.auxiliaryOutputs[0].adapterType == HardwareOutputAdapterType::TcpText &&
+        loaded.auxiliaryOutputs[0].binding.adapterKey == "output-aux-01" &&
+        loaded.auxiliaryOutputs[0].endpoint.address == "192.168.10.41" &&
+        loaded.auxiliaryOutputs[0].endpoint.port == 5101 &&
+        loaded.auxiliaryOutputs[0].binding.passText == "PASS-AUX" &&
+        !loaded.auxiliaryOutputs[1].enabled &&
         !HardwareSettingsService::SettingsPath().empty(),
         "hardware settings round trip lost camera or output fields");
 
+    HardwarePanelSettings updated = loaded;
+    updated.activeCameraIndex = 15;
+    updated.cameras[15].address = "rtsp://192.168.10.35/camera16";
+    updated.cameras[15].sourceName = "line-a-camera-16";
+    updated.cameras[15].backend = 3;
+    updated.cameras[15].exposure = -3.5f;
+    updated.cameras[14].address = "192.168.20.22";
+    updated.cameras[14].sourceName = "hikrobot-gige";
+    updated.cameras[14].backend = 5;
+    updated.cameras[14].exposure = 12500.0f;
+    updated.cameras[14].triggerMode = 2;
+    updated.cameras[14].triggerDelayMicroseconds = 275.0f;
+    updated.cameras[14].bufferPolicy = 1;
+    updated.cameras[14].ptpEnabled = true;
+    updated.cameras[15].triggerMode = 1;
+    updated.cameras[15].triggerDelayMicroseconds = 80.0f;
+    Require(HardwareSettingsService::Save(updated, settingsPath.string(), &error) &&
+        fs::exists(settingsPath.string() + ".bak"),
+        "hardware settings backup rotation failed");
+    const HardwarePanelSettings multiCameraLoaded =
+        HardwareSettingsService::Load(settingsPath.string());
+    Require(multiCameraLoaded.activeCameraIndex == 15 &&
+        multiCameraLoaded.cameras.size() == kHardwareCameraCount &&
+        multiCameraLoaded.cameras[15].address == updated.cameras[15].address &&
+        multiCameraLoaded.cameras[15].sourceName == updated.cameras[15].sourceName &&
+        multiCameraLoaded.cameras[15].backend == updated.cameras[15].backend &&
+        std::abs(multiCameraLoaded.cameras[15].exposure -
+            updated.cameras[15].exposure) < 0.001f &&
+        multiCameraLoaded.cameras[14].address == "192.168.20.22" &&
+        multiCameraLoaded.cameras[14].backend == 5 &&
+        std::abs(multiCameraLoaded.cameras[14].exposure - 12500.0f) < 0.001f &&
+        multiCameraLoaded.cameras[14].triggerMode == 2 &&
+        std::abs(multiCameraLoaded.cameras[14].triggerDelayMicroseconds -
+            275.0f) < 0.001f &&
+        multiCameraLoaded.cameras[14].bufferPolicy == 1 &&
+        multiCameraLoaded.cameras[14].ptpEnabled &&
+        multiCameraLoaded.cameras[15].triggerMode == 1 &&
+        std::abs(multiCameraLoaded.cameras[15].triggerDelayMicroseconds -
+            80.0f) < 0.001f,
+        "16-camera hardware settings were not persisted independently");
+    {
+        std::ofstream corrupt(settingsPath, std::ios::binary | std::ios::trunc);
+        corrupt << "{";
+    }
+    const HardwarePanelSettings recovered =
+        HardwareSettingsService::Load(settingsPath.string());
+    Require(recovered.cameraAddress == source.cameraAddress,
+        "invalid hardware settings did not fall back to last valid backup");
+    Require(HardwareSettingsService::RestoreLastValid(
+        settingsPath.string(), &error) && error.empty(),
+        "explicit hardware settings backup restore failed");
+    const HardwarePanelSettings restored =
+        HardwareSettingsService::Load(settingsPath.string());
+    Require(restored.cameraAddress == source.cameraAddress,
+        "restored hardware settings do not match backup");
+
     fs::remove(settingsPath);
+    fs::remove(settingsPath.string() + ".bak");
+    fs::remove(settingsPath.string() + ".tmp");
 }
 
 void TestHardwareTaskTriggerMappingSynchronization()
@@ -3269,8 +3962,8 @@ void TestHardwareTaskTriggerMappingSynchronization()
     std::vector<HardwareIoMapping> mappings = HardwarePanelSettings{}.outputIoMappings;
     Require(HardwareSettingsService::EnsureTaskTriggerMappings(mappings, taskNames),
         "task Trigger synchronization did not add missing mappings");
-    Require(mappings.size() == 23,
-        "task Trigger synchronization did not produce 16 triggers plus 7 handshake signals");
+    Require(mappings.size() == 53,
+        "task IO synchronization did not produce 16 Trigger/OK/NG groups plus shared signals");
 
     for (int index = 0; index < 16; ++index)
     {
@@ -3286,18 +3979,34 @@ void TestHardwareTaskTriggerMappingSynchronization()
             found->direction == HardwareIoDirection::Input &&
             found->address == expectedAddress,
             "task Trigger synchronization assigned an unexpected address");
+        const auto ok = std::find_if(mappings.begin(), mappings.end(),
+            [&taskNames, index](const HardwareIoMapping& mapping)
+            {
+                return mapping.signal == HardwareIoSignal::Ok &&
+                    mapping.taskGroupName == taskNames[index];
+            });
+        const auto ng = std::find_if(mappings.begin(), mappings.end(),
+            [&taskNames, index](const HardwareIoMapping& mapping)
+            {
+                return mapping.signal == HardwareIoSignal::Ng &&
+                    mapping.taskGroupName == taskNames[index];
+            });
+        Require(ok != mappings.end() && ng != mappings.end(),
+            "task IO synchronization did not add independent OK/NG outputs");
     }
     Require(!HardwareSettingsService::EnsureTaskTriggerMappings(mappings, taskNames),
         "task Trigger synchronization was not idempotent");
 
     const std::vector<HardwareIoMapping> standard =
         HardwareSettingsService::BuildStandardIoMappings(taskNames);
-    Require(standard.size() == 23 &&
+    Require(standard.size() == 53 &&
         standard[0].taskGroupName == "任务01" && standard[0].address == 0 &&
-        standard[1].taskGroupName == "任务02" && standard[1].address == 8 &&
-        standard[15].taskGroupName == "任务16" && standard[15].address == 22 &&
-        standard[16].signal == HardwareIoSignal::Busy,
-        "standard task Trigger mapping order or addresses regressed");
+        standard[1].signal == HardwareIoSignal::Ok && standard[1].address == 3 &&
+        standard[2].signal == HardwareIoSignal::Ng && standard[2].address == 4 &&
+        standard[3].taskGroupName == "任务02" && standard[3].address == 8 &&
+        standard[45].taskGroupName == "任务16" && standard[45].address == 22 &&
+        standard[48].signal == HardwareIoSignal::Busy,
+        "standard task Trigger/OK/NG mapping order or addresses regressed");
 
     std::vector<HardwareIoMapping> reconciled =
         HardwareSettingsService::BuildStandardIoMappings({"任务01", "任务02"});
@@ -3475,6 +4184,25 @@ void TestConcreteOpenCvCameraAdapter()
         "OpenCV camera adapter did not apply the capture endpoint");
     Require(cameraView->StartStream().success && cameraView->IsStreaming(),
         "OpenCV camera adapter stream state did not start");
+
+    const CameraCapabilities capabilities = cameraView->Capabilities();
+    Require(capabilities.softwareTrigger && !capabilities.hardwareTrigger &&
+        capabilities.queueControl,
+        "OpenCV camera capabilities were not reported accurately");
+    CameraTriggerConfig trigger;
+    trigger.mode = CameraTriggerMode::Software;
+    Require(cameraView->ConfigureTrigger(trigger).success &&
+        !cameraView->GrabFrame(frame, 10).success &&
+        cameraView->ExecuteSoftwareTrigger().success,
+        "OpenCV software trigger contract regressed");
+    CameraFrameMetadata metadata;
+    Require(cameraView->GrabFrame(frame, metadata, 10).success &&
+        metadata.frameNumber == 1 && metadata.receivedTimestampNanoseconds > 0 &&
+        metadata.exposureComplete && cameraView->Statistics().receivedFrames == 1,
+        "OpenCV frame metadata or statistics contract regressed");
+    trigger.mode = CameraTriggerMode::Continuous;
+    Require(cameraView->ConfigureTrigger(trigger).success,
+        "OpenCV continuous trigger mode could not be restored");
 
     Require(HardwareRuntimeService::GrabCameraFrame(250, "opencv-camera", 9, 88.0).success &&
         backendView->lastTimeoutMs == 250 &&
@@ -3707,6 +4435,76 @@ void TestCalibrationFitter()
     const CalibrationFitResult evaluation = CalibrationFitter::Evaluate(loaded, loadedSamples);
     Require(evaluation.success && evaluation.residuals.size() == samples.size() &&
         evaluation.rmsError < 1.0e-4, "calibration document residual evaluation regressed");
+
+    const cv::Size innerCorners(7, 5);
+    constexpr int chessSquarePixels = 45;
+    constexpr int chessBorderPixels = 40;
+    const cv::Size chessboardSize(
+        (innerCorners.width + 1) * chessSquarePixels + 2 * chessBorderPixels,
+        (innerCorners.height + 1) * chessSquarePixels + 2 * chessBorderPixels);
+    cv::Mat chessboard(chessboardSize, CV_8UC1, cv::Scalar(255));
+    for (int row = 0; row <= innerCorners.height; ++row)
+    {
+        for (int column = 0; column <= innerCorners.width; ++column)
+        {
+            if ((row + column) % 2 != 0)
+                continue;
+            cv::rectangle(chessboard,
+                cv::Rect(chessBorderPixels + column * chessSquarePixels,
+                    chessBorderPixels + row * chessSquarePixels,
+                    chessSquarePixels, chessSquarePixels),
+                cv::Scalar(0), cv::FILLED);
+        }
+    }
+
+    const std::vector<cv::Point2f> sourceQuad = {
+        {0.0f, 0.0f},
+        {static_cast<float>(chessboard.cols - 1), 0.0f},
+        {static_cast<float>(chessboard.cols - 1),
+            static_cast<float>(chessboard.rows - 1)},
+        {0.0f, static_cast<float>(chessboard.rows - 1)}
+    };
+    const std::vector<std::vector<cv::Point2f>> destinationQuads = {
+        {{80.0f, 60.0f}, {540.0f, 75.0f}, {520.0f, 410.0f}, {95.0f, 395.0f}},
+        {{125.0f, 55.0f}, {565.0f, 125.0f}, {500.0f, 430.0f}, {70.0f, 350.0f}},
+        {{60.0f, 120.0f}, {500.0f, 45.0f}, {570.0f, 360.0f}, {115.0f, 435.0f}}
+    };
+    std::vector<cv::Mat> chessboardImages;
+    for (const auto& destinationQuad : destinationQuads)
+    {
+        cv::Mat image(480, 640, CV_8UC1, cv::Scalar(127));
+        const cv::Mat transform = cv::getPerspectiveTransform(sourceQuad, destinationQuad);
+        cv::warpPerspective(chessboard, image, transform, image.size(),
+            cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(127));
+        chessboardImages.push_back(std::move(image));
+    }
+    const CalibrationFitResult chessboardFit = CalibrationFitter::FitChessboard(
+        chessboardImages, innerCorners, 10.0);
+    Require(chessboardFit.success && chessboardFit.model.distortionEnabled &&
+        chessboardFit.residuals.size() == chessboardImages.size() &&
+        chessboardFit.totalImageCount == chessboardImages.size() &&
+        chessboardFit.successfulImageCount == chessboardImages.size() &&
+        std::isfinite(chessboardFit.meanError) &&
+        std::isfinite(chessboardFit.model.fx) && chessboardFit.model.fx > 0.0 &&
+        std::isfinite(chessboardFit.model.fy) && chessboardFit.model.fy > 0.0 &&
+        std::isfinite(chessboardFit.rmsError) && chessboardFit.rmsError < 1.0,
+        "synthetic chessboard calibration fit regressed");
+    const auto reportPath = std::filesystem::temp_directory_path() /
+        "imgui_opencv_calibration_acceptance.json";
+    Require(CalibrationFitter::SaveAcceptanceReport(reportPath.string().c_str(),
+        chessboardFit.model, chessboardFit.totalImageCount,
+        chessboardFit.successfulImageCount, chessboardFit.residuals,
+        chessboardFit.rmsError, chessboardFit.maxError, 1.0, 2.0),
+        "calibration acceptance report export failed");
+    std::ifstream reportFile(reportPath, std::ios::binary);
+    nlohmann::json report;
+    reportFile >> report;
+    Require(report.value("acceptance", "") == "PASS" &&
+        report.value("successfulImages", 0U) == chessboardImages.size() &&
+        report.contains("calibration"),
+        "calibration acceptance report content regressed");
+    reportFile.close();
+    std::filesystem::remove(reportPath);
     std::filesystem::remove(path);
 }
 
@@ -3813,6 +4611,15 @@ void TestImageStateOwnsCurrentImageSnapshot()
     const ImmutableImageFrame immutableFrame = ImageState::AcquireImmutableFrame();
     Require(immutableFrame.valid() && immutableFrame.version == ImageState::Version(),
         "image state did not provide an immutable shared frame");
+
+    const int sourceVersion = ImageState::Version();
+    ImageState::SetDebugImage(cv::Mat(10, 14, CV_8UC3, cv::Scalar(21, 22, 23)));
+    Require(ImageState::Version() == sourceVersion &&
+        gContext.imageVersion == sourceVersion,
+        "publishing a debug image incorrectly changed the source image version");
+    Require(ImageState::Current().at<cv::Vec3b>(0, 0)[0] == 21 &&
+        ImageState::Original().at<cv::Vec3b>(0, 0)[0] == 7,
+        "debug image publication changed the original source image");
 
     ImageState::CurrentRef().setTo(cv::Scalar(11, 12, 13));
     Require(ImageState::Current().at<cv::Vec3b>(0, 0)[0] == 11,
@@ -3931,6 +4738,8 @@ void TestToolChainEditActions()
     tools[2].type = 7;
     tools[2].resultRoiSourceTool = 1;
     tools[2].resultRoiSourceToolId = 5001;
+    tools[2].resultRoiSecondSourceTool = 1;
+    tools[2].resultRoiSecondSourceToolId = 5001;
     tools[2].fixture.sourceToolIndex = 1;
     tools[2].fixture.sourceToolId = 5001;
     ToolChainState::SetActiveIndex(2);
@@ -3940,7 +4749,9 @@ void TestToolChainEditActions()
     Require(ToolChainState::MoveTool(2, 1),
         "tool chain move up was rejected");
     Require(tools[1].type == 7 && tools[2].type == 5, "tool chain move order regressed");
-    Require(tools[1].resultRoiSourceTool == 2 && tools[1].fixture.sourceToolIndex == 2,
+    Require(tools[1].resultRoiSourceTool == 2 &&
+        tools[1].resultRoiSecondSourceTool == 2 &&
+        tools[1].fixture.sourceToolIndex == 2,
         "tool chain move did not remap dependencies");
     Require(ToolChainState::ActiveIndex() == 1 &&
         ToolChainState::YoloLiveInstanceIndex() == 1 &&
@@ -3953,7 +4764,9 @@ void TestToolChainEditActions()
         "tool chain rejected deleting original tool");
     Require(tools.size() == 2 && tools[0].type == 7 && tools[1].type == 5,
         "tool chain original deletion order regressed");
-    Require(tools[0].resultRoiSourceTool == 1 && tools[0].fixture.sourceToolIndex == 1,
+    Require(tools[0].resultRoiSourceTool == 1 &&
+        tools[0].resultRoiSecondSourceTool == 1 &&
+        tools[0].fixture.sourceToolIndex == 1,
         "tool chain original deletion did not remap dependencies");
     Require(ToolChainState::ActiveIndex() == 0 &&
         ToolChainState::YoloLiveInstanceIndex() == 0 &&
@@ -4001,7 +4814,10 @@ void TestToolChainValidatorAndRunGuard()
     std::vector<ToolInstance> tools(2);
     tools[0].toolId = 100;
     tools[1].toolId = 200;
+    tools[0].type = 2;
+    tools[1].type = 0;
 
+    tools[1].resultRoiMode = static_cast<int>(ResultROIMode::NthResult);
     tools[1].resultRoiSourceTool = 0;
     tools[1].resultRoiSourceToolId = tools[0].toolId;
     Require(ToolChainValidator::Validate(tools).valid(),
@@ -4013,8 +4829,38 @@ void TestToolChainValidatorAndRunGuard()
         dependencies[0].consumerIndex == 1 && dependencies[0].sourceIndex == 0,
         "dependency description did not match validation resolution");
 
+    std::vector<ToolInstance> pairTools(3);
+    pairTools[0].type = 1;
+    pairTools[0].toolId = 301;
+    pairTools[1].type = 2;
+    pairTools[1].toolId = 302;
+    pairTools[2].type = 15;
+    pairTools[2].toolId = 303;
+    pairTools[2].resultRoiMode = static_cast<int>(ResultROIMode::SelectedPair);
+    pairTools[2].resultRoiSourceToolId = 301;
+    pairTools[2].resultRoiSecondSourceToolId = 302;
+    const std::vector<ToolChainDependency> pairDependencies =
+        ToolChainValidator::DescribeDependencies(pairTools);
+    Require(pairDependencies.size() == 2 && pairDependencies[0].valid &&
+        pairDependencies[1].valid && pairDependencies[0].sourceIndex == 0 &&
+        pairDependencies[1].sourceIndex == 1,
+        "selected result pair dependencies were not both validated");
+    pairTools[2].measureMode = 2;
+    Require(!ToolChainValidator::Validate(pairTools).valid(),
+        "line-line measurement accepted upstream tools without line results");
+    pairTools[0].type = 7;
+    pairTools[1].type = 7;
+    Require(ToolChainValidator::Validate(pairTools).valid(),
+        "line-line measurement rejected two line-result upstream tools");
+
+    tools[1].resultRoiMode = static_cast<int>(ResultROIMode::Disabled);
+    Require(ToolChainValidator::DescribeDependencies(tools).empty(),
+        "disabled result ROI retained a stale dependency");
+    tools[1].resultRoiMode = static_cast<int>(ResultROIMode::NthResult);
+
     tools[0].resultRoiSourceTool = 1;
     tools[0].resultRoiSourceToolId = tools[1].toolId;
+    tools[0].resultRoiMode = static_cast<int>(ResultROIMode::NthResult);
     const ToolChainValidationResult future = ToolChainValidator::Validate(tools);
     Require(!future.valid(), "future dependency was not rejected");
 
@@ -4033,6 +4879,17 @@ void TestToolChainValidatorAndRunGuard()
     tools[0].resultRoiSourceToolId = tools[0].toolId;
     Require(!ToolChainValidator::Validate(tools).valid(),
         "self dependency was not rejected");
+
+    tools[0].resultRoiMode = static_cast<int>(ResultROIMode::Disabled);
+    tools[0].resultRoiSourceTool = -1;
+    tools[0].resultRoiSourceToolId = 0;
+    tools[0].type = 0;
+    tools[1].resultRoiMode = static_cast<int>(ResultROIMode::NthResult);
+    tools[1].resultRoiSourceTool = 0;
+    tools[1].resultRoiSourceToolId = tools[0].toolId;
+    const ToolChainValidationResult incompatible = ToolChainValidator::Validate(tools);
+    Require(!incompatible.valid() && !incompatible.issues.empty(),
+        "non-spatial tool was accepted as a result ROI source");
 
     ToolController::OnToolChainChanged();
     ToolChainState::ClearTools();
@@ -4064,6 +4921,20 @@ void TestToolChainPreflight()
     tools[0].skipIfModelMissing = true;
     Require(ToolChainPreflight::Check(tools, true, 0).valid(),
         "preflight did not honor the missing-model skip policy");
+
+    ToolInstance roiTool;
+    roiTool.type = 0;
+    roiTool.useSearchROI = true;
+    tools.assign(1, roiTool);
+    Require(!ToolChainPreflight::Check(tools, true, 1).valid(),
+        "preflight accepted an unbound tool by borrowing a canvas ROI");
+    ROI boundROI;
+    boundROI.type = ROI_TYPE_RECT;
+    boundROI.start = {2.0f, 3.0f};
+    boundROI.end = {12.0f, 13.0f};
+    tools[0].searchROIs.push_back(boundROI);
+    Require(ToolChainPreflight::Check(tools, true, 1).valid(),
+        "preflight rejected an explicitly bound search ROI");
 }
 
 void TestToolChainDuplicate()
@@ -4204,6 +5075,80 @@ void TestExampleRecipesLoadAndExecute()
                 "template/shape example result ROI settings regressed");
             Require(shape.fixture.enabled && shape.fixture.sourceToolIndex >= 0,
                 "template/shape example fixture settings regressed");
+        }
+    }
+
+    const auto utf8Path = [](const std::string& value)
+    {
+        return std::filesystem::path(std::u8string(value.begin(), value.end()));
+    };
+    const int taskExampleCounts[] = {2, 4, 6, 8, 10, 12, 16};
+    for (int expectedCount : taskExampleCounts)
+    {
+        const std::string folderName = expectedCount < 10
+            ? "0" + std::to_string(expectedCount) + "_tasks"
+            : std::to_string(expectedCount) + "_tasks";
+        const std::filesystem::path recipePath = recipeDir / "task_series" /
+            folderName / (folderName + ".recipe");
+
+        RecipeData data;
+        Require(RecipeManager::Load(recipePath.string().c_str(), data),
+            "multi-task example recipe failed to load");
+        Require(data.taskGroups.size() == static_cast<size_t>(expectedCount),
+            "multi-task example task count is incorrect");
+        Require(data.tools.size() == static_cast<size_t>(expectedCount),
+            "multi-task example tool count is incorrect");
+
+        RecipeManager::Apply(data);
+        std::string imagePath;
+        Require(FrameNavigation::ConsumePendingImagePath(imagePath) &&
+            std::filesystem::exists(utf8Path(imagePath)),
+            "multi-task example default image was not resolved");
+
+        const auto& groups = ToolChainState::ReadOnlyTaskGroups();
+        const auto& tools = ToolChainState::ReadOnlyTools();
+        Require(groups.size() == static_cast<size_t>(expectedCount) &&
+            tools.size() == static_cast<size_t>(expectedCount),
+            "multi-task example runtime state lost tasks or tools");
+
+        for (const TaskGroupDefinition& group : groups)
+        {
+            Require(!group.name.empty() && !group.imagePath.empty() &&
+                std::filesystem::exists(utf8Path(group.imagePath)),
+                "multi-task example task image was not resolved");
+            int matchingTools = 0;
+            for (const ToolInstance& tool : tools)
+            {
+                if (tool.groupName == group.name)
+                    ++matchingTools;
+            }
+            Require(matchingTools == 1,
+                "multi-task example does not bind exactly one tool per task");
+        }
+
+        for (const ToolInstance& tool : tools)
+        {
+            Require(tool.toolId != 0 && !tool.label.empty() && !tool.groupName.empty(),
+                "multi-task example tool metadata is incomplete");
+            if (tool.type == 15)
+            {
+                Require(tool.useSearchROI && !tool.searchROIs.empty(),
+                    "measurement example did not retain its explicit ROI");
+            }
+            else if (tool.type == 13)
+            {
+                Require(std::filesystem::exists(utf8Path(tool.ocrDetModelPath)) &&
+                    std::filesystem::exists(utf8Path(tool.ocrRecModelPath)) &&
+                    std::filesystem::exists(utf8Path(tool.ocrDictionaryPath)),
+                    "multi-task OCR example model paths were not resolved");
+                Require(!tool.useSearchROI && tool.searchROIs.empty(),
+                    "full-image OCR example unexpectedly bound a search ROI");
+            }
+            else
+            {
+                Require(!tool.useSearchROI && tool.searchROIs.empty(),
+                    "full-image example unexpectedly bound a search ROI");
+            }
         }
     }
 
@@ -4708,6 +5653,51 @@ void TestToolControllerAdvancesTaskFolderImages()
     fs::remove_all(folder, fileError);
 }
 
+void TestUnboundToolDoesNotInheritCanvasROI()
+{
+    const cv::Mat input = cv::Mat::zeros(48, 64, CV_8UC1);
+    ImageState::SetImage(input);
+    ROIState::Clear();
+
+    ROI canvasROI;
+    canvasROI.type = ROI_TYPE_RECT;
+    canvasROI.start = {8.0f, 10.0f};
+    canvasROI.end = {28.0f, 30.0f};
+    ROIState::Add(canvasROI, true);
+
+    ToolInstance unbound;
+    unbound.type = 3;
+    ToolInstance snapshot;
+    VisionContext context;
+    Require(ToolExecutor::PrepareDetached(
+        unbound, ImageState::Current(), 0, snapshot, context),
+        "unbound tool snapshot preparation failed");
+    Require(context.rois.empty(),
+        "unbound tool inherited a canvas ROI instead of using the full image");
+
+    std::vector<ToolInstance> taskTools{unbound};
+    std::vector<int> taskIndices{0};
+    Require(ToolExecutor::PrepareDetachedSnapshot(
+        unbound, input, input, 0, taskTools, taskIndices,
+        ROIState::ReadOnlyItems(), ROIState::SelectedIndex(), cv::Mat(),
+        snapshot, context),
+        "unbound task snapshot preparation failed");
+    Require(context.rois.empty(),
+        "unbound task snapshot inherited a visible canvas ROI");
+
+    ToolInstance bound;
+    bound.type = 3;
+    bound.searchROIs.push_back(canvasROI);
+    Require(ToolExecutor::PrepareDetached(
+        bound, ImageState::Current(), 0, snapshot, context),
+        "bound tool snapshot preparation failed");
+    Require(context.rois.size() == 1 &&
+        context.rois.front().ToCvRect() == canvasROI.ToCvRect(),
+        "bound tool did not keep its explicit search ROI");
+
+    ROIState::Clear();
+}
+
 void TestToolControllerRunsTaskGroupsInParallel()
 {
     ToolController::Reset();
@@ -4804,6 +5794,8 @@ void TestToolControllerPublishesHeavyToolAsync()
     measurement.type = 15;
     measurement.measureMode = 0;
     measurement.measureMmPerPixel = 0.1f;
+    measurement.useSearchROI = true;
+    measurement.searchROIs.push_back(line);
     const int index = ToolChainState::AddTool(std::move(measurement));
 
     ToolController::RequestRun(index);
@@ -4872,6 +5864,8 @@ void TestToolControllerExecutesDagLevelInParallel()
     first.inputSourceMode = 2;
     first.measureMode = 0;
     first.measureMmPerPixel = 0.1f;
+    first.useSearchROI = true;
+    first.searchROIs.push_back(line);
     const int firstIndex = ToolChainState::AddTool(std::move(first));
 
     ToolInstance second;
@@ -4879,6 +5873,8 @@ void TestToolControllerExecutesDagLevelInParallel()
     second.inputSourceMode = 2;
     second.measureMode = 0;
     second.measureMmPerPixel = 0.2f;
+    second.useSearchROI = true;
+    second.searchROIs.push_back(line);
     const int secondIndex = ToolChainState::AddTool(std::move(second));
 
     ToolController::RequestRunAll(false, false);
@@ -5040,6 +6036,58 @@ void TestToolControllerLoopTimingResetsEachRound()
     ToolController::SetLoopEnabled(false);
     Require(ToolController::GetLastCompletedLoopRound() == 2,
         "stopping the loop discarded the latest completed round metadata");
+    ToolController::SetLoopIntervalMs(previousLoopIntervalMs);
+    ToolChainState::ClearTools();
+}
+
+void TestToolControllerLoopSurvivesDebugImagePublication()
+{
+    const int previousLoopIntervalMs = ToolController::GetLoopIntervalMs();
+    const std::uint64_t initialCompletedSerial =
+        ToolController::GetCompletedBatchSerial();
+    ToolController::Reset();
+    ToolChainState::ClearTools();
+    ToolChainState::ReplaceTaskGroups({});
+    ImageState::SetImage(cv::Mat(80, 100, CV_8UC1, cv::Scalar(25)));
+
+    ROI line;
+    line.type = ROI_TYPE_LINE;
+    line.start = ImVec2(10.0f, 10.0f);
+    line.end = ImVec2(40.0f, 50.0f);
+
+    ToolInstance measurement;
+    measurement.type = 15;
+    measurement.inputSourceMode = 2;
+    measurement.measureMode = 0;
+    measurement.useSearchROI = true;
+    measurement.searchROIs.push_back(line);
+    ToolChainState::AddTool(std::move(measurement));
+    ToolController::SetLoopIntervalMs(1000);
+
+    ToolController::RequestRunAll(true, false);
+    ToolController::Tick();
+    Require(ToolController::GetMode() == ToolController::Mode::Running,
+        "async loop did not start");
+
+    const int sourceVersion = ImageState::Version();
+    ImageState::SetDebugImage(cv::Mat(80, 100, CV_8UC1, cv::Scalar(70)));
+    Require(ImageState::Version() == sourceVersion,
+        "debug image publication invalidated an in-flight loop input");
+
+    for (int attempt = 0; attempt < 300 &&
+        ToolController::GetCompletedBatchSerial() == initialCompletedSerial; ++attempt)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        ToolController::Tick();
+    }
+
+    Require(ToolController::GetCompletedBatchSerial() == initialCompletedSerial + 1 &&
+        ToolController::IsLoopEnabled() &&
+        ToolController::GetMode() == ToolController::Mode::Running &&
+        ToolController::IsWaitingForNextLoop(),
+        "async loop stopped after a debug image was published");
+
+    ToolController::SetLoopEnabled(false);
     ToolController::SetLoopIntervalMs(previousLoopIntervalMs);
     ToolChainState::ClearTools();
 }
@@ -5210,8 +6258,9 @@ void TestToolExecutionGraphTopologyAndCache()
     measurement.type = 15;
     measurement.toolId = 40;
     measurement.inputSourceMode = 2;
-    measurement.resultRoiMode = static_cast<int>(ResultROIMode::AllResults);
+    measurement.resultRoiMode = static_cast<int>(ResultROIMode::SelectedPair);
     measurement.resultRoiSourceToolId = 20;
+    measurement.resultRoiSecondSourceToolId = 30;
     tools.push_back(std::move(measurement));
 
     const ToolExecutionGraphPlan plan = ToolExecutionGraph::Build(tools);
@@ -5219,6 +6268,7 @@ void TestToolExecutionGraphTopologyAndCache()
         plan.levels[0] == std::vector<int>{0} &&
         plan.levels[1] == std::vector<int>({1, 2}) &&
         plan.levels[2] == std::vector<int>{3} &&
+        plan.nodes[3].dependencies == std::vector<int>({0, 1, 2}) &&
         plan.nodes[1].parallelizable && plan.nodes[2].parallelizable,
         "tool execution DAG did not create the expected parallel branches");
 
@@ -5411,6 +6461,236 @@ void TestResultOverlayStatePolicy()
     tools = oldTools;
     gContext.unifiedResults = oldResults;
 }
+
+void TestShapeModelRotationSearch()
+{
+    cv::Mat tpl = cv::Mat::zeros(36, 44, CV_8UC1);
+    cv::rectangle(tpl, cv::Rect(5, 5, 8, 26), cv::Scalar(255), cv::FILLED);
+    cv::rectangle(tpl, cv::Rect(5, 23, 30, 8), cv::Scalar(255), cv::FILLED);
+    const cv::Point2f center(tpl.cols * 0.5f, tpl.rows * 0.5f);
+    cv::Mat transform = cv::getRotationMatrix2D(center, 30.0, 1.0);
+    const cv::Rect bounds = cv::RotatedRect(center, tpl.size(), 30.0).boundingRect();
+    transform.at<double>(0, 2) += bounds.width * 0.5 - center.x;
+    transform.at<double>(1, 2) += bounds.height * 0.5 - center.y;
+    cv::Mat rotated;
+    cv::warpAffine(tpl, rotated, transform, bounds.size(), cv::INTER_LINEAR,
+        cv::BORDER_CONSTANT, cv::Scalar(0));
+    cv::Mat image = cv::Mat::zeros(140, 180, CV_8UC1);
+    rotated.copyTo(image(cv::Rect(70, 45, rotated.cols, rotated.rows)));
+
+    ShapeMatcher::Params params;
+    params.blurSize = 0;
+    params.tplMinArea = 10.0;
+    params.minScore = 0.75;
+    params.minShapeScore = 0.5;
+    params.maxResults = 1;
+    params.enableRotation = true;
+    params.rotationStart = 20;
+    params.rotationEnd = 40;
+    params.rotationStep = 5;
+    const auto matches = ShapeMatcher::Search(image, tpl, params, {});
+    Require(!matches.empty() && std::abs(matches.front().angle - 30.0f) <= 5.0f &&
+        std::abs(matches.front().bbox.x - 70) <= 2 &&
+        std::abs(matches.front().bbox.y - 45) <= 2,
+        "HALCON-style shape model rotation search regressed");
+}
+
+void TestRenderBackendSelectionPolicy()
+{
+    Require(SelectRenderBackend(true, true) == RenderBackendKind::DirectX12,
+        "renderer policy did not prefer DX12 when both backends are available");
+    Require(SelectRenderBackend(false, true) == RenderBackendKind::DirectX11,
+        "renderer policy did not fall back to DX11 after DX12 failure");
+    Require(SelectRenderBackend(false, false) == RenderBackendKind::None,
+        "renderer policy selected a backend when none were available");
+}
+
+void TestRunResultLayoutPolicy()
+{
+    namespace Layout = UI::RunResultLayout;
+
+    const Layout::Size fullHd =
+        Layout::CalculateDashboardWindowSize(1920.0f, 1080.0f);
+    Require(std::abs(fullHd.width - 1760.0f) < 0.01f &&
+        std::abs(fullHd.height - 993.6f) < 0.01f,
+        "run-result dashboard window sizing regressed");
+
+    const Layout::DashboardGrid threeCards =
+        Layout::CalculateDashboardGrid(3, 1200.0f, 700.0f, 8.0f);
+    Require(threeCards.columns == 3 && threeCards.rowCount == 1 &&
+        threeCards.visibleRowCount == 1 &&
+        std::abs(threeCards.cardHeight - 520.0f) < 0.01f,
+        "run-result single-row grid layout regressed");
+
+    const Layout::DashboardGrid wrappedCards =
+        Layout::CalculateDashboardGrid(8, 900.0f, 700.0f, 8.0f);
+    Require(wrappedCards.columns == 3 && wrappedCards.rowCount == 3 &&
+        wrappedCards.visibleRowCount == 2 &&
+        std::abs(wrappedCards.cardHeight - 342.0f) < 0.01f,
+        "run-result wrapped grid layout regressed");
+    Require(Layout::CalculateDashboardGrid(0, 900.0f, 700.0f, 8.0f).columns == 0,
+        "empty run-result grid should not create columns");
+    Require(Layout::FormatDuration(0.0f) == "<0.1 ms" &&
+        Layout::FormatDuration(11.66f) == "11.7 ms" &&
+        Layout::FormatDuration(1239.2f) == "1.239 s" &&
+        Layout::FormatDuration(-1.0f) == "--" &&
+        Layout::FormatDuration(0.0f, 2) == "<0.01 ms",
+        "run-result duration formatting regressed");
+
+    const Layout::Rect imageBounds{0.0f, 0.0f, 200.0f, 100.0f};
+    const Layout::LabelPlacement first = Layout::PlaceOverlayLabel(
+        {20.0f, 20.0f}, {50.0f, 10.0f}, imageBounds, {});
+    Require(first.placed && first.bounds.left >= imageBounds.left &&
+        first.bounds.top >= imageBounds.top &&
+        first.bounds.right <= imageBounds.right &&
+        first.bounds.bottom <= imageBounds.bottom,
+        "run-result overlay label was not clamped to the image");
+
+    const Layout::LabelPlacement second = Layout::PlaceOverlayLabel(
+        {20.0f, 20.0f}, {50.0f, 10.0f}, imageBounds, {first.bounds});
+    Require(second.placed && !Layout::RectsOverlap(first.bounds, second.bounds),
+        "run-result overlay labels were not separated");
+    Require(!Layout::RectsOverlap(
+        {0.0f, 0.0f, 10.0f, 10.0f}, {10.0f, 0.0f, 20.0f, 10.0f}),
+        "touching run-result label edges should not overlap");
+
+    const Layout::LabelPlacement saturated = Layout::PlaceOverlayLabel(
+        {20.0f, 20.0f}, {50.0f, 10.0f}, imageBounds, {imageBounds});
+    Require(!saturated.placed,
+        "run-result overlay label should be skipped when no slot is free");
+}
+
+void TestIndustrialCameraPixelFormatMatrix()
+{
+    const CameraPixelFormatDescription mono10 =
+        DescribeCameraPixelFormat(0x01100003U);
+    const CameraPixelFormatDescription mono12Packed =
+        DescribeCameraPixelFormat(0x010C0006U);
+    const CameraPixelFormatDescription mono16 =
+        DescribeCameraPixelFormat(0x01100007U);
+    const CameraPixelFormatDescription bayer12 =
+        DescribeCameraPixelFormat(0x01100011U);
+    Require(mono10.name == "Mono10" && mono10.bitDepth == 10 &&
+        mono10.storageBitsPerPixel == 16 && mono10.monochrome,
+        "Mono10 PFNC description regressed");
+    Require(mono12Packed.name == "Mono12Packed" && mono12Packed.bitDepth == 12 &&
+        mono12Packed.storageBitsPerPixel == 12,
+        "Mono12Packed PFNC description regressed");
+    Require(mono16.name == "Mono16" && mono16.bitDepth == 16,
+        "Mono16 PFNC description regressed");
+    Require(bayer12.name == "BayerRG12" && bayer12.bayer &&
+        bayer12.bitDepth == 12,
+        "Bayer12 PFNC description regressed");
+}
+
+int RunCameraDiscoveryDiagnostic(const std::string& backend)
+{
+    std::unique_ptr<ICameraAdapter> camera;
+    if (backend == "huaray")
+        camera = std::make_unique<HuarayImvCameraAdapter>();
+    else if (backend == "hikrobot")
+        camera = std::make_unique<HikrobotMvsCameraAdapter>();
+    else
+    {
+        std::cerr << "unknown camera backend: " << backend << "\n";
+        return 2;
+    }
+    std::vector<CameraDeviceInfo> devices;
+    const DeviceOperationResult result = camera->EnumerateDevices(devices);
+    std::cout << camera->AdapterName() << ": " << result.message << "\n";
+    for (const CameraDeviceInfo& device : devices)
+    {
+        std::cout << "selector=" << device.selector << " model=" << device.model
+                  << " serial=" << device.serialNumber << " ip=" << device.ipAddress
+                  << " mac=" << device.macAddress << " transport=" << device.transport
+                  << " status=" << device.status << " sdk=" << device.runtimeVersion
+                  << " path=" << device.runtimePath << "\n";
+    }
+    std::cout << "device_count=" << devices.size() << "\n";
+    return result.success ? 0 : 1;
+}
+
+int RunCameraPixelFormatDiagnostic(const std::string& backend,
+    const std::string& selector, int requestedFrames, const std::string& reportPath)
+{
+    std::unique_ptr<ICameraAdapter> camera;
+    if (backend == "huaray")
+        camera = std::make_unique<HuarayImvCameraAdapter>();
+    else if (backend == "hikrobot")
+        camera = std::make_unique<HikrobotMvsCameraAdapter>();
+    else
+        return 2;
+
+    DeviceEndpoint endpoint;
+    endpoint.address = selector;
+    endpoint.timeoutMs = 3000;
+    DeviceOperationResult operation = camera->Connect(endpoint);
+    if (!operation.success)
+    {
+        std::cerr << "connect failed: " << operation.message << "\n";
+        return 1;
+    }
+    operation = camera->StartStream();
+    if (!operation.success)
+    {
+        std::cerr << "start stream failed: " << operation.message << "\n";
+        camera->Disconnect();
+        return 1;
+    }
+
+    nlohmann::json frames = nlohmann::json::array();
+    int successfulFrames = 0;
+    for (int index = 0; index < (std::max)(1, requestedFrames); ++index)
+    {
+        cv::Mat frame;
+        CameraFrameMetadata metadata;
+        operation = camera->GrabFrame(frame, metadata, 3000);
+        if (!operation.success)
+        {
+            std::cerr << "frame " << (index + 1) << " failed: " << operation.message << "\n";
+            continue;
+        }
+        const bool validDisplayFrame = !frame.empty() &&
+            (frame.type() == CV_8UC1 || frame.type() == CV_8UC3);
+        frames.push_back({
+            {"index", index + 1}, {"frameNumber", metadata.frameNumber},
+            {"sourcePfnc", metadata.sourcePixelFormat},
+            {"sourcePixelFormat", metadata.sourcePixelFormatName},
+            {"sourceBitDepth", metadata.sourceBitDepth},
+            {"sourceStorageBitsPerPixel", metadata.sourceStorageBitsPerPixel},
+            {"sourceIsBayer", metadata.sourceIsBayer},
+            {"convertedToDisplay", metadata.convertedToDisplay},
+            {"conversionPath", metadata.conversionPath},
+            {"width", frame.cols}, {"height", frame.rows},
+            {"displayFrameValid", validDisplayFrame}
+        });
+        successfulFrames += validDisplayFrame ? 1 : 0;
+        std::cout << "frame=" << (index + 1) << " source="
+                  << metadata.sourcePixelFormatName << " bitDepth="
+                  << metadata.sourceBitDepth << " bayer=" << metadata.sourceIsBayer
+                  << " conversion=" << metadata.conversionPath << " display="
+                  << frame.cols << "x" << frame.rows << " type=" << frame.type() << "\n";
+    }
+    camera->StopStream();
+    camera->Disconnect();
+
+    const nlohmann::json report = {
+        {"kind", "camera_pixel_format_validation"}, {"backend", backend},
+        {"selector", selector}, {"requestedFrames", requestedFrames},
+        {"successfulFrames", successfulFrames}, {"frames", frames}
+    };
+    if (!reportPath.empty())
+    {
+        std::ofstream output(reportPath, std::ios::binary | std::ios::trunc);
+        if (!output)
+        {
+            std::cerr << "cannot write report: " << reportPath << "\n";
+            return 1;
+        }
+        output << report.dump(2);
+    }
+    return successfulFrames > 0 ? 0 : 1;
+}
 }
 
 int main(int argc, char** argv)
@@ -5420,6 +6700,17 @@ int main(int argc, char** argv)
             ("imgui_opencv_spc_test_" + std::to_string(
                 std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
         InspectionHistory::ConfigureDatabase(testSpcDatabase.string());
+        if (argc > 1 && std::string(argv[1]) == "--huaray-discovery-only")
+            return RunCameraDiscoveryDiagnostic("huaray");
+        if (argc > 1 && std::string(argv[1]) == "--hikrobot-discovery-only")
+            return RunCameraDiscoveryDiagnostic("hikrobot");
+        if (argc > 3 && std::string(argv[1]) == "--camera-pixel-format")
+        {
+            const int frames = argc > 4 ? (std::max)(1, std::atoi(argv[4])) : 10;
+            const std::string reportPath = argc > 5 ? argv[5]
+                : "camera_pixel_format_validation.json";
+            return RunCameraPixelFormatDiagnostic(argv[2], argv[3], frames, reportPath);
+        }
         if (argc > 1 && std::string(argv[1]) == "--qr-only") {
             TestQRCodeToolRecognizesBundledSample();
             std::cout << "regression_tests: QR checks passed\n";
@@ -5430,12 +6721,16 @@ int main(int argc, char** argv)
             TestToolJudgementPolicy();
             TestIndustrialMeasurement();
             TestResultROIResolution();
+            TestAllToolRegistryAndResultCapabilityContracts();
             TestTemplateMatchingToolUsesInstanceParameters();
             TestToolChainReorderRemapsResultROISource();
             TestRecipeRoundTrip();
             TestTaskGroupManagement();
             TestToolInstanceOwnsRecipeSerialization();
             TestToolExecutorResolvesMovedRuntimeRoi();
+            TestRenderBackendSelectionPolicy();
+            TestRunResultLayoutPolicy();
+            TestIndustrialCameraPixelFormatMatrix();
             std::cout << "regression_tests: import and judgement checks passed\n";
             return 0;
         }
@@ -5459,6 +6754,13 @@ int main(int argc, char** argv)
             std::cout << "regression_tests: independent task image checks passed\n";
             return 0;
         }
+        if (argc > 1 && std::string(argv[1]) == "--roi-domain-only") {
+            TestRotatedROIExtractionAndResultRestore();
+            TestToolExecutorUsesRotatedROI();
+            TestHalconStyleROIDomain();
+            std::cout << "regression_tests: HALCON ROI domain checks passed\n";
+            return 0;
+        }
         if (argc > 1 && std::string(argv[1]) == "--hardware-camera-only") {
             TestHardwareRuntimeAutomation();
             std::cout << "regression_tests: hardware camera automation checks passed\n";
@@ -5475,6 +6777,7 @@ int main(int argc, char** argv)
         TestRoiConversion();
         TestRotatedROIExtractionAndResultRestore();
         TestToolExecutorUsesRotatedROI();
+        TestHalconStyleROIDomain();
         TestGeometryDrawToolAndRecipe();
         TestYoloToolNoModelPath();
         TestQRCodeToolRecognizesBundledSample();
@@ -5486,12 +6789,14 @@ int main(int argc, char** argv)
         TestCalibrationModel();
         TestFixtureTransform();
         TestResultROIResolution();
+        TestAllToolRegistryAndResultCapabilityContracts();
         TestTemplateMatchingToolUsesInstanceParameters();
         TestToolChainReorderRemapsResultROISource();
         TestRecipeRoundTrip();
         TestTaskGroupManagement();
         TestToolInstanceOwnsRecipeSerialization();
         TestSampleImageCorePipeline();
+        TestContourDirectionAndSubpixelBoundary();
         TestLineToolSampleImage();
         TestMultiColorFinderNoPoints();
         TestOCRToolMissingEngineFailsWithTextResultContract();
@@ -5534,6 +6839,7 @@ int main(int argc, char** argv)
         TestImageViewStateOwnsTransform();
         TestRecipeCaptureUsesCurrentFramePath();
         TestToolExecutorInjectsImageSnapshot();
+        TestUnboundToolDoesNotInheritCanvasROI();
         TestToolExecutorDetachedExecutionPublishesOnCallerThread();
         TestToolExecutorResolvesMovedRuntimeRoi();
         TestToolChainEditActions();
@@ -5553,12 +6859,17 @@ int main(int argc, char** argv)
         TestCancellationTokensStopHeavyTools();
         TestAsyncHeavyToolUsesDependencySnapshots();
         TestToolControllerLoopTimingResetsEachRound();
+        TestToolControllerLoopSurvivesDebugImagePublication();
         TestExampleRecipesLoadAndExecute();
         TestShapeMaxResultsDefaultIsOne();
         TestToolInstanceLabelDefaultIsEmpty();
         TestCoreStateOwnsRoiAndToolChain();
         TestShapeMatcherTemplateLargerThanSearchImage();
+        TestShapeModelRotationSearch();
         TestResultOverlayStatePolicy();
+        TestRenderBackendSelectionPolicy();
+        TestRunResultLayoutPolicy();
+        TestIndustrialCameraPixelFormatMatrix();
         TestInspectionHistoryStatisticsAndCsv();
         TestResultExporterWritesResultsAndReport();
         std::cout << "regression_tests: all tests passed\n";

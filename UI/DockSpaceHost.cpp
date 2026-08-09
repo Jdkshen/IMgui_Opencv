@@ -5,6 +5,7 @@
 #include "HardwareWindow.h"
 #include "RunResultWindow.h"
 #include "../Core/ThemeManager.h"
+#include "../Core/LanguageService.h"
 #include "../Core/VisionContext.h"
 #include "../Core/RecipeManager.h"
 #include "../Core/RecipeAutosaveService.h"
@@ -83,11 +84,12 @@ static std::string GetRecipesDirA()
 // 全局状态变量定义
 bool show_demo_window = false;
 bool g_ShowLog = true;
-bool g_ShowSidebar = true;
+bool g_ShowSidebar = false;
 bool g_ShowStats = true;
 bool g_ShowOpenCV = true;
 bool g_ShowTools = true;
-bool g_ShowHardware = true;
+// 设备连接现在是中央工作区页面，不再占用独立停靠窗口。
+bool g_ShowHardware = false;
 
 namespace UI
 {
@@ -574,7 +576,7 @@ TemplateState::ClearResults();
                 g_ShowHardware = !g_ShowHardware;
                 if (g_ShowHardware)
                 {
-                    g_ShowSidebar = true;
+                    g_ShowOpenCV = true;
                     UI::RequestHardwareWindowFocus();
                 }
             }
@@ -598,7 +600,7 @@ TemplateState::ClearResults();
 
         if (ImGui::MenuItem("连接设备(D)", nullptr, g_ShowHardware))
         {
-            g_ShowSidebar = true;
+            g_ShowOpenCV = true;
             g_ShowHardware = true;
             UI::RequestHardwareWindowFocus();
         }
@@ -613,7 +615,7 @@ TemplateState::ClearResults();
                 g_ShowLog = true;
             if (ImGui::MenuItem("设备连接"))
             {
-                g_ShowSidebar = true;
+                g_ShowOpenCV = true;
                 g_ShowHardware = true;
                 UI::RequestHardwareWindowFocus();
             }
@@ -674,6 +676,15 @@ TemplateState::ClearResults();
         {
             if (ImGui::MenuItem("ImGui Demo"))
                 show_demo_window = true;
+            if (ImGui::BeginMenu("语言 / Language"))
+            {
+                const bool chinese = LanguageService::IsChinese();
+                if (ImGui::MenuItem("中文 / Chinese", nullptr, chinese))
+                    LanguageService::Set(LanguageService::Language::Chinese);
+                if (ImGui::MenuItem("English / 英文", nullptr, !chinese))
+                    LanguageService::Set(LanguageService::Language::English);
+                ImGui::EndMenu();
+            }
             if (ImGui::MenuItem("关于"))
             {
             }
@@ -754,7 +765,8 @@ TemplateState::ClearResults();
             ImGui::DockBuilderDockWindow("功能窗口", right );
             ImGui::DockBuilderDockWindow("图像预览", main);
             ImGui::DockBuilderDockWindow("侧边栏",   left);
-            ImGui::DockBuilderDockWindow("设备连接", left);
+            ImGui::DockBuilderDockWindow(
+                "任务列表###task_group_list_window", left);
             ImGui::DockBuilderDockWindow("日志窗口", bottom);
             ImGui::DockBuilderDockWindow("性能统计", bottom);
             // 每个停靠节点的标签栏在单窗口时自动隐藏（节省空间），图钉仍可用

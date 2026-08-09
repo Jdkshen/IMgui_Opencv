@@ -15,7 +15,10 @@ namespace
         return {
             {"startX", roi.start.x}, {"startY", roi.start.y},
             {"endX", roi.end.x}, {"endY", roi.end.y},
-            {"angle", roi.angle}, {"type", roi.type}, {"points", std::move(points)}
+            {"angle", roi.angle}, {"type", roi.type},
+            {"locked", roi.locked}, {"visible", roi.visible},
+            {"constrainToImage", roi.constrainToImage},
+            {"points", std::move(points)}
         };
     }
 
@@ -28,6 +31,11 @@ namespace
         roi.end.y = value.value("endY", 0.0f);
         roi.angle = value.value("angle", 0.0f);
         roi.type = value.value("type", ROI_TYPE_RECT);
+        roi.locked = value.value("locked", false);
+        roi.visible = value.value("visible", true);
+        roi.constrainToImage = value.value("constrainToImage", true);
+        if (roi.type == ROI_TYPE_RECT)
+            roi.angle = ROI::NormalizeRectangle2AngleDegrees(roi.angle);
         if (value.contains("points") && value["points"].is_array())
         {
             for (const auto& point : value["points"])
@@ -100,6 +108,12 @@ ToolInstance& ToolInstance::operator=(const ToolInstance& other)
     measureCalibrationRmsError = other.measureCalibrationRmsError;
     measureCalibrationMaxError = other.measureCalibrationMaxError;
     measureCalibrationFitMessage = other.measureCalibrationFitMessage;
+    measureChessboardImages.clear();
+    measureChessboardImages.reserve(other.measureChessboardImages.size());
+    for (const cv::Mat& image : other.measureChessboardImages)
+        measureChessboardImages.push_back(image.clone());
+    measureChessboardErrors = other.measureChessboardErrors;
+    measureChessboardSuccessfulImages = other.measureChessboardSuccessfulImages;
     return *this;
 }
 
@@ -119,10 +133,17 @@ nlohmann::json ToolInstance::ToRecipeJson() const
     SAVE_FIELD(showTemplatePreview);
     SAVE_FIELD(hasTemplateROI);
     SAVE_FIELD(useSearchROI);
+    SAVE_FIELD(roiResultPolicy);
+    SAVE_FIELD(roiMinimumCoverage);
     SAVE_FIELD(resultRoiMode);
     SAVE_FIELD(resultRoiSourceTool);
     SAVE_FIELD(resultRoiSourceToolId);
     SAVE_FIELD(resultRoiIndex);
+    SAVE_FIELD(resultRoiChannel);
+    SAVE_FIELD(resultRoiSecondSourceTool);
+    SAVE_FIELD(resultRoiSecondSourceToolId);
+    SAVE_FIELD(resultRoiSecondIndex);
+    SAVE_FIELD(resultRoiSecondChannel);
     SAVE_FIELD(resultRoiMissingPolicy);
     SAVE_FIELD(resultRoiCategory);
     SAVE_FIELD(resultRoiClassId);
@@ -138,6 +159,7 @@ nlohmann::json ToolInstance::ToRecipeJson() const
     SAVE_FIELD(matchThreshold);
     SAVE_FIELD(maxImageDim);
     SAVE_FIELD(nmsThreshold);
+    SAVE_FIELD(matchSubpixel);
     SAVE_FIELD(searchMode);
     SAVE_FIELD(tplGray);
     SAVE_FIELD(tplBinary);
@@ -195,6 +217,8 @@ nlohmann::json ToolInstance::ToRecipeJson() const
     SAVE_FIELD(cntApproxEps);
     SAVE_FIELD(cntLineThick);
     SAVE_FIELD(cntFillContours);
+    SAVE_FIELD(cntNormalizeDirection);
+    SAVE_FIELD(cntSubpixelBoundary);
     SAVE_FIELD(cntMatchROI);
     SAVE_FIELD(cntMatchThresh);
     SAVE_FIELD(shpBlurSize);
@@ -205,6 +229,10 @@ nlohmann::json ToolInstance::ToRecipeJson() const
     SAVE_FIELD(shpLineThick);
     SAVE_FIELD(shpMethod);
     SAVE_FIELD(shpMaxResults);
+    SAVE_FIELD(shpEnableRotation);
+    SAVE_FIELD(shpRotationStart);
+    SAVE_FIELD(shpRotationEnd);
+    SAVE_FIELD(shpRotationStep);
     SAVE_FIELD(shpTplGray);
     SAVE_FIELD(shpTplBinary);
     SAVE_FIELD(shpTplBinThresh);
@@ -309,6 +337,7 @@ nlohmann::json ToolInstance::ToRecipeJson() const
     result["fixture"] = {
         {"enabled", fixture.enabled}, {"sourceToolIndex", fixture.sourceToolIndex},
         {"sourceToolId", fixture.sourceToolId}, {"resultIndex", fixture.resultIndex},
+        {"resultChannel", fixture.resultChannel},
         {"referenceX", fixture.referenceOrigin.x}, {"referenceY", fixture.referenceOrigin.y},
         {"referenceAngle", fixture.referenceAngleDegrees}, {"failOnMissing", fixture.failOnMissing}
     };
@@ -334,6 +363,11 @@ nlohmann::json ToolInstance::ToRecipeJson() const
         {"fitInlierThreshold", measureFitInlierThreshold},
         {"minimumValidCalipers", measureMinimumValidCalipers},
         {"minimumConfidence", measureMinimumConfidence},
+        {"chessboardColumns", measureChessboardColumns},
+        {"chessboardRows", measureChessboardRows},
+        {"chessboardSquareSize", measureChessboardSquareSize},
+        {"chessboardRmsAcceptance", measureCalibrationRmsAcceptance},
+        {"chessboardMaxAcceptance", measureCalibrationMaxAcceptance},
         {"legacyMmPerPixel", measureMmPerPixel},
         {"calibrationEnabled", measureCalibration.enabled},
         {"scaleX", measureCalibration.scaleX}, {"scaleY", measureCalibration.scaleY},
@@ -359,6 +393,7 @@ nlohmann::json ToolInstance::ToRecipeJson() const
             {"rotationEnd", rotationEnd}, {"rotationStep", rotationStep},
             {"maxResults", maxResults}, {"matchThreshold", matchThreshold},
             {"maxImageDim", maxImageDim}, {"nmsThreshold", nmsThreshold},
+            {"subpixelRefinement", matchSubpixel},
             {"searchMode", searchMode}, {"templateGray", tplGray},
             {"templateBinary", tplBinary}, {"templateBinaryThreshold", tplBinThresh},
             {"templateEdge", tplEdge}, {"templateEdgeLow", tplEdgeLow},
@@ -403,10 +438,17 @@ void ToolInstance::LoadRecipeJson(const nlohmann::json& source)
     LOAD_FIELD(showTemplatePreview);
     LOAD_FIELD(hasTemplateROI);
     LOAD_FIELD(useSearchROI);
+    LOAD_FIELD(roiResultPolicy);
+    LOAD_FIELD(roiMinimumCoverage);
     LOAD_FIELD(resultRoiMode);
     LOAD_FIELD(resultRoiSourceTool);
     LOAD_FIELD(resultRoiSourceToolId);
     LOAD_FIELD(resultRoiIndex);
+    LOAD_FIELD(resultRoiChannel);
+    LOAD_FIELD(resultRoiSecondSourceTool);
+    LOAD_FIELD(resultRoiSecondSourceToolId);
+    LOAD_FIELD(resultRoiSecondIndex);
+    LOAD_FIELD(resultRoiSecondChannel);
     LOAD_FIELD(resultRoiMissingPolicy);
     LOAD_FIELD(resultRoiCategory);
     LOAD_FIELD(resultRoiClassId);
@@ -422,6 +464,7 @@ void ToolInstance::LoadRecipeJson(const nlohmann::json& source)
     LOAD_FIELD(matchThreshold);
     LOAD_FIELD(maxImageDim);
     LOAD_FIELD(nmsThreshold);
+    LOAD_FIELD(matchSubpixel);
     LOAD_FIELD(searchMode);
     LOAD_FIELD(tplGray);
     LOAD_FIELD(tplBinary);
@@ -479,6 +522,8 @@ void ToolInstance::LoadRecipeJson(const nlohmann::json& source)
     LOAD_FIELD(cntApproxEps);
     LOAD_FIELD(cntLineThick);
     LOAD_FIELD(cntFillContours);
+    LOAD_FIELD(cntNormalizeDirection);
+    LOAD_FIELD(cntSubpixelBoundary);
     LOAD_FIELD(cntMatchROI);
     LOAD_FIELD(cntMatchThresh);
     LOAD_FIELD(shpBlurSize);
@@ -489,6 +534,10 @@ void ToolInstance::LoadRecipeJson(const nlohmann::json& source)
     LOAD_FIELD(shpLineThick);
     LOAD_FIELD(shpMethod);
     LOAD_FIELD(shpMaxResults);
+    LOAD_FIELD(shpEnableRotation);
+    LOAD_FIELD(shpRotationStart);
+    LOAD_FIELD(shpRotationEnd);
+    LOAD_FIELD(shpRotationStep);
     LOAD_FIELD(shpTplGray);
     LOAD_FIELD(shpTplBinary);
     LOAD_FIELD(shpTplBinThresh);
@@ -626,6 +675,7 @@ void ToolInstance::LoadRecipeJson(const nlohmann::json& source)
         fixture.sourceToolIndex = value.value("sourceToolIndex", fixture.sourceToolIndex);
         fixture.sourceToolId = value.value("sourceToolId", fixture.sourceToolId);
         fixture.resultIndex = value.value("resultIndex", fixture.resultIndex);
+        fixture.resultChannel = value.value("resultChannel", fixture.resultChannel);
         fixture.referenceOrigin.x = value.value("referenceX", fixture.referenceOrigin.x);
         fixture.referenceOrigin.y = value.value("referenceY", fixture.referenceOrigin.y);
         fixture.referenceAngleDegrees = value.value("referenceAngle", fixture.referenceAngleDegrees);
@@ -687,6 +737,14 @@ void ToolInstance::LoadRecipeJson(const nlohmann::json& source)
         measureCalibration.p1 = value.value("p1", measureCalibration.p1);
         measureCalibration.p2 = value.value("p2", measureCalibration.p2);
         measureCalibration.k3 = value.value("k3", measureCalibration.k3);
+        measureChessboardColumns = value.value("chessboardColumns", measureChessboardColumns);
+        measureChessboardRows = value.value("chessboardRows", measureChessboardRows);
+        measureChessboardSquareSize = value.value(
+            "chessboardSquareSize", measureChessboardSquareSize);
+        measureCalibrationRmsAcceptance = value.value(
+            "chessboardRmsAcceptance", measureCalibrationRmsAcceptance);
+        measureCalibrationMaxAcceptance = value.value(
+            "chessboardMaxAcceptance", measureCalibrationMaxAcceptance);
         measureToleranceEnabled = value.value("toleranceEnabled", measureToleranceEnabled);
         measureNominal = value.value("nominal", measureNominal);
         measureToleranceMinus = value.value("toleranceMinus", measureToleranceMinus);
@@ -712,6 +770,8 @@ void ToolInstance::LoadRecipeJson(const nlohmann::json& source)
             templateMatch.matchThreshold = value.value("matchThreshold", templateMatch.matchThreshold);
             templateMatch.maxImageDim = value.value("maxImageDim", templateMatch.maxImageDim);
             templateMatch.nmsThreshold = value.value("nmsThreshold", templateMatch.nmsThreshold);
+            templateMatch.subpixelRefinement = value.value(
+                "subpixelRefinement", templateMatch.subpixelRefinement);
             templateMatch.searchMode = value.value("searchMode", templateMatch.searchMode);
             templateMatch.templateGray = value.value("templateGray", templateMatch.templateGray);
             templateMatch.templateBinary = value.value("templateBinary", templateMatch.templateBinary);
@@ -766,6 +826,7 @@ void ToolInstance::SyncSettingsFromLegacy()
     templateMatch.matchThreshold = matchThreshold;
     templateMatch.maxImageDim = maxImageDim;
     templateMatch.nmsThreshold = nmsThreshold;
+    templateMatch.subpixelRefinement = matchSubpixel;
     templateMatch.searchMode = searchMode;
     templateMatch.templateGray = tplGray;
     templateMatch.templateBinary = tplBinary;
@@ -811,6 +872,7 @@ void ToolInstance::SyncLegacyFromSettings()
     matchThreshold = templateMatch.matchThreshold;
     maxImageDim = templateMatch.maxImageDim;
     nmsThreshold = templateMatch.nmsThreshold;
+    matchSubpixel = templateMatch.subpixelRefinement;
     searchMode = templateMatch.searchMode;
     tplGray = templateMatch.templateGray;
     tplBinary = templateMatch.templateBinary;

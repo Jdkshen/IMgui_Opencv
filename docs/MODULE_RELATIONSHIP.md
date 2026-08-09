@@ -1,6 +1,6 @@
 # 模块关系图
 
-> 文档同步日期：2026-07-27。工具范围、整轮计时、任务独立输入和 PLC 单槽握手已按当前实现更新。
+> 文档同步日期：2026-08-09。DX12/DX11 双后端、工具范围、独立流程图窗口、工具图标资源、统一结果能力、整轮计时、任务独立输入和 PLC 单槽握手已按当前实现更新。
 
 
 本文整理 `IMgui_Opencv` 当前代码结构中的核心模块关系，重点说明：
@@ -21,7 +21,7 @@
 ┌──────────────────────────── 应用壳 / 主循环 ────────────────────────────┐
 │ Windows_imgui.cpp                                                     │
 │ - Win32 窗口创建                                                      │
-│ - DX12 初始化                                                         │
+│ - GraphicsBackend 初始化（DX12 优先，DX11 回退）                      │
 │ - ImGui 初始化                                                        │
 │ - 每帧驱动 UI / 视频 / 推理 / 上传 / 渲染                             │
 └───────────────┬──────────────────────────────┬─────────────────────────┘
@@ -30,7 +30,7 @@
                 ▼                              ▼
 ┌──────────────────────────┐      ┌─────────────────────────────────────┐
 │ UI 层                    │      │ Core / Service 层                  │
-│ - DockSpaceHost          │      │ - DX12Context                      │
+│ - DockSpaceHost          │      │ - GraphicsBackend / RenderBackend  │
 │ - Sidebar                │      │ - AsyncImageLoader                 │
 │ - ImageViewer            │      │ - VideoCapture / AudioPlayer       │
 │ - ROIManager             │      │ - OpenFileDialog                   │
@@ -63,7 +63,7 @@
              ┌──────────────────┐     ┌─────────────────────┐   ┌──────────────────┐
              │ ITool 统一接口    │     │ OpenCV/工具算法      │   │ 深度学习推理      │
              │ - type 0-11、13-17 │     │ - ThresholdTool     │   │ - YOLODetector    │
-             │ - Edge/Template  │     │ - TemplateMatch     │   │ - ONNX Runtime    │
+             │ - Edge/Template  │     │ - TemplateMatching  │   │ - ONNX Runtime    │
              │ - Blob/Threshold │     │ - MorphologyTool    │   │ - DirectML/CUDA   │
              │ - YOLO/Contour   │     │ - ColorAnalyzer     │   └──────────────────┘
              │ - Shape/Line/... │     │ - OpenCV DNN YOLO   │
@@ -81,7 +81,7 @@
                              │ - 画图像 / ROI / 检测结果    │
                              └──────────────┬───────────────┘
                                         ▼
-                                 DX12 + ImGui 渲染
+                       当前图形后端 + ImGui 渲染
 ```
 
 ---
@@ -100,7 +100,7 @@
     │      ▼
     │  ImageImportService / AsyncImageLoader
     │      ▼
-    │  ImageState / DX12纹理上传
+    │  ImageState / GraphicsBackend 纹理上传
     │
     ├─ 打开视频 / 摄像头
     │      │
@@ -124,7 +124,7 @@
    ┌───────────────────────────────┐
    │ 算法层                         │
    │ - OpenCV 传统视觉              │
-   │ - TemplateMatch               │
+   │ - TemplateMatchingTool        │
    │ - Contour / Shape / Line      │
    │ - Morphology / Color          │
    │ - YOLODetector (ONNX Runtime) │
@@ -140,7 +140,7 @@
       ImageViewer::DrawUnifiedResults()
            │
            ▼
-      ImGui + DX12 Present
+      ImGui + 当前图形后端 Present
 ```
 
 PLC 触发在进入 `ToolController` 前还经过硬件握手调度：
@@ -179,7 +179,7 @@ PLC / 模拟器
         ↓
 界面显示（ImageViewer）
         ↓
-DX12 渲染输出
+GraphicsBackend 渲染输出（DX12 或 DX11）
 ```
 
 这条中轴线就是项目最核心的运行骨架。
@@ -222,7 +222,11 @@ Tool -> ToolResult -> ResultPublisher / ToolExecutor::PublishDetached
 负责把程序跑起来。
 
 - `Windows_imgui.cpp`
+- `Core/RenderBackend.h`
+- `Core/GraphicsBackend.*`
+- `Core/DX12Backend.*`
 - `Core/DX12Context.*`
+- `Core/DX11Context.*`
 - `Renderer/FontManager.*`
 - `Renderer/PreviewTextureCache.*`
 
@@ -260,7 +264,11 @@ Tool -> ToolResult -> ResultPublisher / ToolExecutor::PublishDetached
 
 | 模块 | 关键文件 | 说明 |
 |------|----------|------|
-| 程序入口 | `Windows_imgui.cpp` | 主循环、窗口、DX12、ImGui 初始化与逐帧驱动 |
+| 程序入口 | `Windows_imgui.cpp` | 主循环、窗口、统一图形后端、ImGui 初始化与逐帧驱动 |
+| 后端契约 | `Core/RenderBackend.h` | DX11/DX12 一致的初始化、渲染、Resize、纹理和释放接口 |
+| 后端选择 | `Core/GraphicsBackend.*` | DX12 优先、DX11 自动回退、统一主纹理和诊断信息 |
+| DX12 实现 | `Core/DX12Backend.*` / `Core/DX12Context.*` | 公共契约适配与完整保留的 DX12 实现 |
+| DX11 实现 | `Core/DX11Context.*` | 独立 D3D11 设备、交换链、ImGui 和纹理实现 |
 | 公共头聚合 | `Windows_imgui.h` | 汇总主要模块头文件 |
 | 统一上下文 | `Core/VisionContext.h` | 图像、ROI、模板和结果的统一容器 |
 | 图像状态 | `Core/ImageState.*` | 当前图、原图、版本和 GPU 上传请求 |
@@ -269,18 +277,22 @@ Tool -> ToolResult -> ResultPublisher / ToolExecutor::PublishDetached
 | 工具调度 | `Core/ToolController.h/.cpp` | 全部/当前任务/单步/循环、任务输入和最多 4 任务并行 |
 | 工具执行 | `Core/ToolExecutor.h/.cpp` | type 0-11、13-17 分发到 ITool，type 12 原图由 ToolController 特殊处理 |
 | 图像显示 | `UI/ImageViewer.h/.cpp` | 图片/视频显示、缩放平移、叠加绘制 |
-| 工具界面 | `UI/ToolsWindow.h/.cpp` | 参数编辑、任务管理、输入配置和执行入口 |
+| 工具界面 | `UI/ToolsWindow.h/.cpp` | 参数编辑、任务管理、输入配置、按宽度自动换行的独立流程图窗口和执行入口 |
+| 工具图标 | `Renderer/FontManager.*` / `assets/icons/` | 把工具 PNG 合并进 ImGui 图集，缺失时由 ToolsWindow 回退绘制 |
 | 结果总览 | `UI/RunResultWindow.*` | 任务卡片、详情、结果图、缩放/最大化和整轮耗时 |
+| 结果布局 | `UI/RunResultLayout.*` | 无状态窗口尺寸、任务网格与标签避让策略 |
 | ROI 交互 | `UI/ROIManager.h/.cpp` | ROI 创建、选中、拖动、坐标转换 |
-| 模板匹配 | `Algorithm/TemplateMatch.*` | 模板匹配、旋转、NMS、模板编辑 |
+| 模板匹配 | `Algorithm/TemplateMatchingTool.*` | 模板预处理、旋转搜索、NMS 和结果发布 |
 | YOLO 推理 | `Algorithm/YOLODetector.*` | ORT 模型加载、预处理、推理、后处理 |
 | 统一工具接口 | `Algorithm/ITool.h/.cpp` | `Execute(ctx)`、`DrawUI()`、`Save/Load()` |
 | 统一输出 | `Algorithm/ToolResult.h` | 检测框、线、点、文本、区域等统一结构 |
-| 配方系统 | `Core/RecipeManager.*` | version 4 JSON 保存/恢复任务、工具实例、参数和资产，并兼容旧版本 |
+| 输出能力表 | `Core/ToolResultCapabilities.h` | 定义 type 0-17 可发布的结果通道，供 UI 来源过滤和工具链校验共用 |
+| 配方系统 | `Core/RecipeManager.*` | version 5 JSON 保存/恢复任务、工具实例、参数和资产，并兼容旧版本 |
 | 视频与音频 | `Core/VideoCapture.*` / `Core/AudioPlayer.*` | 视频帧更新、播放控制、音视频同步 |
 | 图片异步加载 | `Core/AsyncImageLoader.*` | 后台解码 + 主线程回调上传 |
-| DX12 纹理上传 | `Core/OpenCVTest.*` | UploadToDX12 / FlushPendingRelease（独立函数） |
+| 通用纹理缓存 | `Renderer/PreviewTextureCache.*` | 使用 `RenderTextureHandle` 上传、查询和释放主图/预览/结果纹理 |
 | 结果发布 | `Core/ResultPublisher.h` / `Core/ResultOverlayState.*` | 统一结果清理、发布和显示查询 |
+| 下游空间结果 | `Core/ResultROIResolver.*` / `Core/FixtureTransform.*` | 把区域、检测框、文本框和线段统一转换为结果 ROI 或定位位姿；支持同源/跨源 A、B 结果组合，点点测量可请求中心点几何 |
 | 日志系统 | `Log/LogSystem.*` | 线程安全日志、颜色分级、数量控制 |
 
 ---
@@ -304,7 +316,7 @@ gContext.unifiedResults → ResultOverlayState
     ↓
 ImageViewer::DrawUnifiedResults
     ↓
-ImageViewer 可视化 + DX12 呈现
+ImageViewer 可视化 + GraphicsBackend 呈现
 ```
 
 它已经不是单一算法 demo，而是一个正在逐步平台化的视觉工具台：

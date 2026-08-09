@@ -31,7 +31,7 @@ public:
     int cannyLow = 50;
     int cannyHigh = 150;
 
-    const char* GetName() const override { return "Threshold"; }
+    const char* GetName() const override { return "阈值调试"; }
     int GetType() const override { return 3; }
     void DrawUI() override {}
     nlohmann::json Save() const override;

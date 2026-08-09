@@ -129,6 +129,7 @@ Index of this file:
 #endif
 
 #include "imgui.h"
+#include "../../Core/LanguageService.h"
 #ifndef IMGUI_DISABLE
 
 // System includes
@@ -140,6 +141,11 @@ Index of this file:
 #include <stdint.h>         // intptr_t
 #if !defined(_MSC_VER) || _MSC_VER >= 1800
 #include <inttypes.h>       // PRId64/PRIu64, not avail in some MinGW headers.
+
+static const char* DemoText(const char* chinese, const char* english)
+{
+    return LanguageService::Text(chinese, english);
+}
 #endif
 #ifdef __EMSCRIPTEN__
 #include <emscripten/version.h>     // __EMSCRIPTEN_MAJOR__ etc.
@@ -384,7 +390,7 @@ void ImGui::ShowDemoWindow(bool* p_open)
     if (demo_data.ShowAbout)                { ImGui::ShowAboutWindow(&demo_data.ShowAbout); }
     if (demo_data.ShowStyleEditor)
     {
-        ImGui::Begin("Dear ImGui Style Editor", &demo_data.ShowStyleEditor);
+        ImGui::Begin(DemoText("风格编辑器##DearImGuiStyleEditor", "Dear ImGui Style Editor##DearImGuiStyleEditor"), &demo_data.ShowStyleEditor);
         ImGui::ShowStyleEditor();
         ImGui::End();
     }
@@ -424,7 +430,7 @@ void ImGui::ShowDemoWindow(bool* p_open)
     ImGui::SetNextWindowSize(ImVec2(550, 680), ImGuiCond_FirstUseEver);
 
     // Main body of the Demo window starts here.
-    if (!ImGui::Begin("Dear ImGui Demo", p_open, window_flags))
+    if (!ImGui::Begin(DemoText("Dear ImGui 演示##DearImGuiDemo", "Dear ImGui Demo##DearImGuiDemo"), p_open, window_flags))
     {
         // Early out if the window is collapsed, as an optimization.
         ImGui::End();
@@ -448,13 +454,14 @@ void ImGui::ShowDemoWindow(bool* p_open)
     // Menu Bar
     DemoWindowMenuBar(&demo_data);
 
-    ImGui::Text("dear imgui says hello! (%s) (%d)", IMGUI_VERSION, IMGUI_VERSION_NUM);
+    ImGui::Text(DemoText("Dear ImGui 欢迎你！版本 (%s) (%d)",
+        "dear imgui says hello! (%s) (%d)"), IMGUI_VERSION, IMGUI_VERSION_NUM);
     ImGui::Spacing();
 
-    if (ImGui::CollapsingHeader("Help"))
+    if (ImGui::CollapsingHeader(DemoText("帮助##DemoHelp", "Help##DemoHelp")))
     {
         IMGUI_DEMO_MARKER("Help");
-        ImGui::SeparatorText("ABOUT THIS DEMO:");
+        ImGui::SeparatorText(DemoText("关于本演示：", "ABOUT THIS DEMO:"));
         ImGui::BulletText("Sections below are demonstrating many aspects of the library.");
         ImGui::BulletText("The \"Examples\" menu above leads to more demo contents.");
         ImGui::BulletText("The \"Tools\" menu above gives access to: About Box, Style Editor,\n"
@@ -477,14 +484,14 @@ void ImGui::ShowDemoWindow(bool* p_open)
         ImGui::ShowUserGuide();
     }
 
-    if (ImGui::CollapsingHeader("Configuration"))
+    if (ImGui::CollapsingHeader(DemoText("配置##DemoConfiguration", "Configuration##DemoConfiguration")))
     {
         ImGuiIO& io = ImGui::GetIO();
 
         if (ImGui::TreeNode("Configuration##2"))
         {
             IMGUI_DEMO_MARKER("Configuration");
-            ImGui::SeparatorText("General");
+            ImGui::SeparatorText(DemoText("常规", "General"));
             ImGui::CheckboxFlags("io.ConfigFlags: NavEnableKeyboard",    &io.ConfigFlags, ImGuiConfigFlags_NavEnableKeyboard);
             ImGui::SameLine(); HelpMarker("Enable keyboard controls.");
             ImGui::CheckboxFlags("io.ConfigFlags: NavEnableGamepad",     &io.ConfigFlags, ImGuiConfigFlags_NavEnableGamepad);
@@ -515,7 +522,7 @@ void ImGui::ShowDemoWindow(bool* p_open)
             ImGui::Checkbox("io.MouseDrawCursor", &io.MouseDrawCursor);
             ImGui::SameLine(); HelpMarker("Instruct Dear ImGui to render a mouse cursor itself. Note that a mouse cursor rendered via your application GPU rendering path will feel more laggy than hardware cursor, but will be more in sync with your other visuals.\n\nSome desktop applications may use both kinds of cursors (e.g. enable software cursor only when resizing/dragging something).");
 
-            ImGui::SeparatorText("Keyboard/Gamepad Navigation");
+            ImGui::SeparatorText(DemoText("键盘/手柄导航", "Keyboard/Gamepad Navigation"));
             ImGui::Checkbox("io.ConfigNavSwapGamepadButtons", &io.ConfigNavSwapGamepadButtons);
             ImGui::Checkbox("io.ConfigNavMoveSetMousePos", &io.ConfigNavMoveSetMousePos);
             ImGui::SameLine(); HelpMarker("Directional/tabbing navigation teleports the mouse cursor. May be useful on TV/console systems where moving a virtual mouse is difficult");
@@ -529,7 +536,7 @@ void ImGui::ShowDemoWindow(bool* p_open)
             ImGui::Checkbox("io.ConfigNavCursorVisibleAlways", &io.ConfigNavCursorVisibleAlways);
             ImGui::SameLine(); HelpMarker("Navigation cursor is always visible.");
 
-            ImGui::SeparatorText("Docking");
+            ImGui::SeparatorText(DemoText("停靠", "Docking"));
             ImGui::CheckboxFlags("io.ConfigFlags: DockingEnable", &io.ConfigFlags, ImGuiConfigFlags_DockingEnable);
             ImGui::SameLine();
             if (io.ConfigDockingWithShift)
@@ -552,7 +559,7 @@ void ImGui::ShowDemoWindow(bool* p_open)
                 ImGui::Unindent();
             }
 
-            ImGui::SeparatorText("Multi-viewports");
+            ImGui::SeparatorText(DemoText("多视口", "Multi-viewports"));
             ImGui::CheckboxFlags("io.ConfigFlags: ViewportsEnable", &io.ConfigFlags, ImGuiConfigFlags_ViewportsEnable);
             ImGui::SameLine(); HelpMarker("[beta] Enable beta multi-viewports support. See ImGuiPlatformIO for details.");
             if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
@@ -577,7 +584,7 @@ void ImGui::ShowDemoWindow(bool* p_open)
             //ImGui::Checkbox("io.ConfigDpiScaleViewports", &io.ConfigDpiScaleViewports);
             //ImGui::SameLine(); HelpMarker("Experimental: Scale Dear ImGui and Platform Windows when Monitor DPI changes.");
 
-            ImGui::SeparatorText("Windows");
+            ImGui::SeparatorText(DemoText("窗口", "Windows"));
             ImGui::Checkbox("io.ConfigWindowsResizeFromEdges", &io.ConfigWindowsResizeFromEdges);
             ImGui::SameLine(); HelpMarker("Enable resizing of windows from their edges and from the lower-left corner.\nThis requires ImGuiBackendFlags_HasMouseCursors for better mouse cursor feedback.");
             ImGui::Checkbox("io.ConfigWindowsMoveFromTitleBarOnly", &io.ConfigWindowsMoveFromTitleBarOnly);
@@ -586,7 +593,7 @@ void ImGui::ShowDemoWindow(bool* p_open)
             ImGui::Checkbox("io.ConfigScrollbarScrollByPage", &io.ConfigScrollbarScrollByPage);
             ImGui::SameLine(); HelpMarker("Enable scrolling page by page when clicking outside the scrollbar grab.\nWhen disabled, always scroll to clicked location.\nWhen enabled, Shift+Click scrolls to clicked location.");
 
-            ImGui::SeparatorText("Widgets");
+            ImGui::SeparatorText(DemoText("控件", "Widgets"));
             ImGui::Checkbox("io.ConfigInputTextCursorBlink", &io.ConfigInputTextCursorBlink);
             ImGui::SameLine(); HelpMarker("Enable blinking cursor (optional as some users consider it to be distracting).");
             ImGui::Checkbox("io.ConfigInputTextEnterKeepActive", &io.ConfigInputTextEnterKeepActive);
@@ -598,7 +605,7 @@ void ImGui::ShowDemoWindow(bool* p_open)
             ImGui::Text("Also see Style->Rendering for rendering options.");
 
             // Also read: https://github.com/ocornut/imgui/wiki/Error-Handling
-            ImGui::SeparatorText("Error Handling");
+            ImGui::SeparatorText(DemoText("错误处理", "Error Handling"));
 
             ImGui::Checkbox("io.ConfigErrorRecovery", &io.ConfigErrorRecovery);
             ImGui::SameLine(); HelpMarker(
@@ -615,7 +622,7 @@ void ImGui::ShowDemoWindow(bool* p_open)
                 io.ConfigErrorRecoveryEnableAssert = io.ConfigErrorRecoveryEnableDebugLog = io.ConfigErrorRecoveryEnableTooltip = true;
 
             // Also read: https://github.com/ocornut/imgui/wiki/Debug-Tools
-            ImGui::SeparatorText("Debug");
+            ImGui::SeparatorText(DemoText("调试", "Debug"));
             ImGui::Checkbox("io.ConfigDebugIsDebuggerPresent", &io.ConfigDebugIsDebuggerPresent);
             ImGui::SameLine(); HelpMarker("Enable various tools calling IM_DEBUG_BREAK().\n\nRequires a debugger being attached, otherwise IM_DEBUG_BREAK() options will appear to crash your application.");
             ImGui::Checkbox("io.ConfigDebugHighlightIdConflicts", &io.ConfigDebugHighlightIdConflicts);
@@ -690,15 +697,15 @@ void ImGui::ShowDemoWindow(bool* p_open)
         }
     }
 
-    if (ImGui::CollapsingHeader("Window options"))
+    if (ImGui::CollapsingHeader(DemoText("窗口选项##DemoWindowOptions", "Window options##DemoWindowOptions")))
     {
         IMGUI_DEMO_MARKER("Window options");
         if (ImGui::BeginTable("split", 3))
         {
-            ImGui::TableNextColumn(); ImGui::Checkbox("No titlebar", &no_titlebar);
-            ImGui::TableNextColumn(); ImGui::Checkbox("No scrollbar", &no_scrollbar);
-            ImGui::TableNextColumn(); ImGui::Checkbox("No menu", &no_menu);
-            ImGui::TableNextColumn(); ImGui::Checkbox("No move", &no_move);
+            ImGui::TableNextColumn(); ImGui::Checkbox(DemoText("无标题栏", "No titlebar"), &no_titlebar);
+            ImGui::TableNextColumn(); ImGui::Checkbox(DemoText("无滚动条", "No scrollbar"), &no_scrollbar);
+            ImGui::TableNextColumn(); ImGui::Checkbox(DemoText("无菜单", "No menu"), &no_menu);
+            ImGui::TableNextColumn(); ImGui::Checkbox(DemoText("不可移动", "No move"), &no_move);
             ImGui::TableNextColumn(); ImGui::Checkbox("No resize", &no_resize);
             ImGui::TableNextColumn(); ImGui::Checkbox("No collapse", &no_collapse);
             ImGui::TableNextColumn(); ImGui::Checkbox("No close", &no_close);
@@ -731,18 +738,18 @@ static void DemoWindowMenuBar(ImGuiDemoWindowData* demo_data)
 {
     if (ImGui::BeginMenuBar())
     {
-        if (ImGui::BeginMenu("Menu"))
+        if (ImGui::BeginMenu(DemoText("菜单##DemoMenu", "Menu##DemoMenu")))
         {
             IMGUI_DEMO_MARKER("Menu/File");
             ShowExampleMenuFile();
             ImGui::EndMenu();
         }
-        if (ImGui::BeginMenu("Examples"))
+        if (ImGui::BeginMenu(DemoText("示例##DemoExamples", "Examples##DemoExamples")))
         {
             IMGUI_DEMO_MARKER("Menu/Examples");
             ImGui::MenuItem("Main menu bar", NULL, &demo_data->ShowMainMenuBar);
 
-            ImGui::SeparatorText("Mini apps");
+            ImGui::SeparatorText(DemoText("小应用", "Mini apps"));
             ImGui::MenuItem("Assets Browser", NULL, &demo_data->ShowAppAssetsBrowser);
             ImGui::MenuItem("Console", NULL, &demo_data->ShowAppConsole);
             ImGui::MenuItem("Custom rendering", NULL, &demo_data->ShowAppCustomRendering);
@@ -753,7 +760,7 @@ static void DemoWindowMenuBar(ImGuiDemoWindowData* demo_data)
             ImGui::MenuItem("Simple layout", NULL, &demo_data->ShowAppLayout);
             ImGui::MenuItem("Simple overlay", NULL, &demo_data->ShowAppSimpleOverlay);
 
-            ImGui::SeparatorText("Concepts");
+            ImGui::SeparatorText(DemoText("概念", "Concepts"));
             ImGui::MenuItem("Auto-resizing window", NULL, &demo_data->ShowAppAutoResize);
             ImGui::MenuItem("Constrained-resizing window", NULL, &demo_data->ShowAppConstrainedResize);
             ImGui::MenuItem("Fullscreen window", NULL, &demo_data->ShowAppFullscreen);
@@ -763,7 +770,7 @@ static void DemoWindowMenuBar(ImGuiDemoWindowData* demo_data)
             ImGui::EndMenu();
         }
         //if (ImGui::MenuItem("MenuItem")) {} // You can also use MenuItem() inside a menu bar!
-        if (ImGui::BeginMenu("Tools"))
+        if (ImGui::BeginMenu(DemoText("工具##DemoTools", "Tools##DemoTools")))
         {
             IMGUI_DEMO_MARKER("Menu/Tools");
             ImGuiIO& io = ImGui::GetIO();
@@ -773,7 +780,7 @@ static void DemoWindowMenuBar(ImGuiDemoWindowData* demo_data)
             const bool has_debug_tools = false;
 #endif
             ImGui::MenuItem("Metrics/Debugger", NULL, &demo_data->ShowMetrics, has_debug_tools);
-            if (ImGui::BeginMenu("Debug Options"))
+            if (ImGui::BeginMenu(DemoText("调试选项", "Debug Options")))
             {
                 ImGui::BeginDisabled(!has_debug_tools);
                 ImGui::Checkbox("Highlight ID Conflicts", &io.ConfigDebugHighlightIdConflicts);
@@ -792,6 +799,15 @@ static void DemoWindowMenuBar(ImGuiDemoWindowData* demo_data)
             ImGui::MenuItem("Style Editor", NULL, &demo_data->ShowStyleEditor);
             ImGui::MenuItem("About Dear ImGui", NULL, &demo_data->ShowAbout);
 
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("中文 / English##DemoLanguage"))
+        {
+            const bool chinese = LanguageService::IsChinese();
+            if (ImGui::MenuItem("中文 / Chinese", NULL, chinese))
+                LanguageService::Set(LanguageService::Language::Chinese);
+            if (ImGui::MenuItem("English / 英文", NULL, !chinese))
+                LanguageService::Set(LanguageService::Language::English);
             ImGui::EndMenu();
         }
         ImGui::EndMenuBar();
@@ -902,33 +918,33 @@ static ExampleTreeNode* ExampleTree_CreateDemoTree()
 
 static void DemoWindowWidgetsBasic()
 {
-    if (ImGui::TreeNode("Basic"))
+    if (ImGui::TreeNode(DemoText("基础##DemoBasic", "Basic##DemoBasic")))
     {
         IMGUI_DEMO_MARKER("Widgets/Basic");
-        ImGui::SeparatorText("General");
+        ImGui::SeparatorText(DemoText("常规", "General"));
 
         IMGUI_DEMO_MARKER("Widgets/Basic/Button");
         static int clicked = 0;
-        if (ImGui::Button("Button"))
+        if (ImGui::Button(DemoText("按钮", "Button")))
             clicked++;
         if (clicked & 1)
         {
             ImGui::SameLine();
-            ImGui::Text("Thanks for clicking me!");
+            ImGui::Text(DemoText("感谢点击！", "Thanks for clicking me!"));
         }
 
         IMGUI_DEMO_MARKER("Widgets/Basic/Checkbox");
         static bool check = true;
-        ImGui::Checkbox("checkbox", &check);
+        ImGui::Checkbox(DemoText("复选框", "checkbox"), &check);
 
         IMGUI_DEMO_MARKER("Widgets/Basic/RadioButton");
         static int e = 0;
-        ImGui::RadioButton("radio a", &e, 0); ImGui::SameLine();
-        ImGui::RadioButton("radio b", &e, 1); ImGui::SameLine();
-        ImGui::RadioButton("radio c", &e, 2);
+        ImGui::RadioButton(DemoText("单选 A", "radio a"), &e, 0); ImGui::SameLine();
+        ImGui::RadioButton(DemoText("单选 B", "radio b"), &e, 1); ImGui::SameLine();
+        ImGui::RadioButton(DemoText("单选 C", "radio c"), &e, 2);
 
         ImGui::AlignTextToFramePadding();
-        ImGui::TextLinkOpenURL("Hyperlink", "https://github.com/ocornut/imgui/wiki/Error-Handling");
+        ImGui::TextLinkOpenURL(DemoText("超链接", "Hyperlink"), "https://github.com/ocornut/imgui/wiki/Error-Handling");
 
         // Color buttons, demonstrate using PushID() to add unique identifier in the ID stack, and changing style.
         IMGUI_DEMO_MARKER("Widgets/Basic/Buttons (Colored)");
@@ -940,7 +956,7 @@ static void DemoWindowWidgetsBasic()
             ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(i / 7.0f, 0.6f, 0.6f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(i / 7.0f, 0.7f, 0.7f));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(i / 7.0f, 0.8f, 0.8f));
-            ImGui::Button("Click");
+            ImGui::Button(DemoText("点击", "Click"));
             ImGui::PopStyleColor(3);
             ImGui::PopID();
         }
@@ -949,7 +965,7 @@ static void DemoWindowWidgetsBasic()
         // (otherwise a Text+SameLine+Button sequence will have the text a little too high by default!)
         // See 'Demo->Layout->Text Baseline Alignment' for details.
         ImGui::AlignTextToFramePadding();
-        ImGui::Text("Hold to repeat:");
+        ImGui::Text(DemoText("按住重复：", "Hold to repeat:"));
         ImGui::SameLine();
 
         // Arrow buttons with Repeater
@@ -964,12 +980,12 @@ static void DemoWindowWidgetsBasic()
         ImGui::SameLine();
         ImGui::Text("%d", counter);
 
-        ImGui::Button("Tooltip");
-        ImGui::SetItemTooltip("I am a tooltip");
+        ImGui::Button(DemoText("工具提示", "Tooltip"));
+        ImGui::SetItemTooltip(DemoText("这是一个工具提示", "I am a tooltip"));
 
         ImGui::LabelText("label", "Value");
 
-        ImGui::SeparatorText("Inputs");
+        ImGui::SeparatorText(DemoText("输入", "Inputs"));
 
         {
             // If you want to use InputText() with std::string or any custom dynamic string type:
@@ -977,7 +993,7 @@ static void DemoWindowWidgetsBasic()
             // - Otherwise, see the 'Dear ImGui Demo->Widgets->Text Input->Resize Callback' for using ImGuiInputTextFlags_CallbackResize.
             IMGUI_DEMO_MARKER("Widgets/Basic/InputText");
             static char str0[128] = "Hello, world!";
-            ImGui::InputText("input text", str0, IM_COUNTOF(str0));
+            ImGui::InputText(DemoText("输入文本", "input text"), str0, IM_COUNTOF(str0));
             ImGui::SameLine(); HelpMarker(
                 "USER:\n"
                 "Hold Shift or use mouse to select text.\n"
@@ -992,17 +1008,18 @@ static void DemoWindowWidgetsBasic()
                 "in imgui_demo.cpp).");
 
             static char str1[128] = "";
-            ImGui::InputTextWithHint("input text (w/ hint)", "enter text here", str1, IM_COUNTOF(str1));
+            ImGui::InputTextWithHint(DemoText("输入文本（带提示）", "input text (w/ hint)"),
+                DemoText("在此输入文本", "enter text here"), str1, IM_COUNTOF(str1));
 
             IMGUI_DEMO_MARKER("Widgets/Basic/InputInt, InputFloat");
             static int i0 = 123;
-            ImGui::InputInt("input int", &i0);
+            ImGui::InputInt(DemoText("输入整数", "input int"), &i0);
 
             static float f0 = 0.001f;
-            ImGui::InputFloat("input float", &f0, 0.01f, 1.0f, "%.3f");
+            ImGui::InputFloat(DemoText("输入浮点数", "input float"), &f0, 0.01f, 1.0f, "%.3f");
 
             static double d0 = 999999.00000001;
-            ImGui::InputDouble("input double", &d0, 0.01f, 1.0f, "%.8f");
+            ImGui::InputDouble(DemoText("输入双精度", "input double"), &d0, 0.01f, 1.0f, "%.8f");
 
             static float f1 = 1.e10f;
             ImGui::InputFloat("input scientific", &f1, 0.0f, 0.0f, "%e");
@@ -1014,12 +1031,12 @@ static void DemoWindowWidgetsBasic()
             ImGui::InputFloat3("input float3", vec4a);
         }
 
-        ImGui::SeparatorText("Drags");
+        ImGui::SeparatorText(DemoText("拖动", "Drags"));
 
         {
             IMGUI_DEMO_MARKER("Widgets/Basic/DragInt, DragFloat");
             static int i1 = 50, i2 = 42, i3 = 128;
-            ImGui::DragInt("drag int", &i1, 1);
+            ImGui::DragInt(DemoText("拖动整数", "drag int"), &i1, 1);
             ImGui::SameLine(); HelpMarker(
                 "Click and drag to edit value.\n"
                 "Hold Shift/Alt for faster/slower edit.\n"
@@ -1028,26 +1045,26 @@ static void DemoWindowWidgetsBasic()
             ImGui::DragInt("drag int wrap 100..200", &i3, 1, 100, 200, "%d", ImGuiSliderFlags_WrapAround);
 
             static float f1 = 1.00f, f2 = 0.0067f;
-            ImGui::DragFloat("drag float", &f1, 0.005f);
-            ImGui::DragFloat("drag small float", &f2, 0.0001f, 0.0f, 0.0f, "%.06f ns");
+            ImGui::DragFloat(DemoText("拖动浮点数", "drag float"), &f1, 0.005f);
+            ImGui::DragFloat(DemoText("拖动小浮点数", "drag small float"), &f2, 0.0001f, 0.0f, 0.0f, "%.06f ns");
             //ImGui::DragFloat("drag wrap -1..1", &f3, 0.005f, -1.0f, 1.0f, NULL, ImGuiSliderFlags_WrapAround);
         }
 
-        ImGui::SeparatorText("Sliders");
+        ImGui::SeparatorText(DemoText("滑杆", "Sliders"));
 
         {
             IMGUI_DEMO_MARKER("Widgets/Basic/SliderInt, SliderFloat");
             static int i1 = 0;
-            ImGui::SliderInt("slider int", &i1, -1, 3);
+            ImGui::SliderInt(DemoText("滑杆整数", "slider int"), &i1, -1, 3);
             ImGui::SameLine(); HelpMarker("Ctrl+Click to input value.");
 
             static float f1 = 0.123f, f2 = 0.0f;
-            ImGui::SliderFloat("slider float", &f1, 0.0f, 1.0f, "ratio = %.3f");
+            ImGui::SliderFloat(DemoText("滑杆浮点数", "slider float"), &f1, 0.0f, 1.0f, "ratio = %.3f");
             ImGui::SliderFloat("slider float (log)", &f2, -10.0f, 10.0f, "%.4f", ImGuiSliderFlags_Logarithmic);
 
             IMGUI_DEMO_MARKER("Widgets/Basic/SliderAngle");
             static float angle = 0.0f;
-            ImGui::SliderAngle("slider angle", &angle);
+            ImGui::SliderAngle(DemoText("滑杆角度", "slider angle"), &angle);
 
             // Using the format string to display a name instead of an integer.
             // Here we completely omit '%d' from the format string, so it'll only display a name.
@@ -1061,20 +1078,20 @@ static void DemoWindowWidgetsBasic()
             ImGui::SameLine(); HelpMarker("Using the format string parameter to display a name instead of the underlying integer.");
         }
 
-        ImGui::SeparatorText("Selectors/Pickers");
+        ImGui::SeparatorText(DemoText("选择器/拾色器", "Selectors/Pickers"));
 
         {
             IMGUI_DEMO_MARKER("Widgets/Basic/ColorEdit3, ColorEdit4");
             static float col1[3] = { 1.0f, 0.0f, 0.2f };
             static float col2[4] = { 0.4f, 0.7f, 0.0f, 0.5f };
-            ImGui::ColorEdit3("color 1", col1);
+            ImGui::ColorEdit3(DemoText("颜色 1", "color 1"), col1);
             ImGui::SameLine(); HelpMarker(
                 "Click on the color square to open a color picker.\n"
                 "Click and hold to use drag and drop.\n"
                 "Right-Click on the color square to show options.\n"
                 "Ctrl+Click on individual component to input value.\n");
 
-            ImGui::ColorEdit4("color 2", col2);
+            ImGui::ColorEdit4(DemoText("颜色 2", "color 2"), col2);
         }
 
         {
@@ -1083,7 +1100,7 @@ static void DemoWindowWidgetsBasic()
             IMGUI_DEMO_MARKER("Widgets/Basic/Combo");
             const char* items[] = { "AAAA", "BBBB", "CCCC", "DDDD", "EEEE", "FFFF", "GGGG", "HHHH", "IIIIIII", "JJJJ", "KKKKKKK" };
             static int item_current = 0;
-            ImGui::Combo("combo", &item_current, items, IM_COUNTOF(items));
+            ImGui::Combo(DemoText("下拉框", "combo"), &item_current, items, IM_COUNTOF(items));
             ImGui::SameLine(); HelpMarker(
                 "Using the simplified one-liner Combo API here.\n"
                 "Refer to the \"Combo\" section below for an explanation of how to use the more flexible and general BeginCombo/EndCombo API.");
@@ -1095,7 +1112,7 @@ static void DemoWindowWidgetsBasic()
             IMGUI_DEMO_MARKER("Widgets/Basic/ListBox");
             const char* items[] = { "Apple", "Banana", "Cherry", "Kiwi", "Mango", "Orange", "Pineapple", "Strawberry", "Watermelon" };
             static int item_current = 1;
-            ImGui::ListBox("listbox", &item_current, items, IM_COUNTOF(items), 4);
+            ImGui::ListBox(DemoText("列表框", "listbox"), &item_current, items, IM_COUNTOF(items), 4);
             ImGui::SameLine(); HelpMarker(
                 "Using the simplified one-liner ListBox API here.\n"
                 "Refer to the \"List boxes\" section below for an explanation of how to use the more flexible and general BeginListBox/EndListBox API.");
@@ -4397,7 +4414,7 @@ static void DemoWindowWidgetsVerticalSliders()
 static void DemoWindowWidgets(ImGuiDemoWindowData* demo_data)
 {
     //ImGui::SetNextItemOpen(true, ImGuiCond_Once);
-    if (!ImGui::CollapsingHeader("Widgets"))
+    if (!ImGui::CollapsingHeader(DemoText("控件##DemoWidgets", "Widgets##DemoWidgets")))
         return;
     // IMGUI_DEMO_MARKER("Widgets");
 

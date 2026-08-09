@@ -3,6 +3,7 @@
 #include "ToolInstance.h"
 #include "VisionContext.h"
 
+#include <string>
 #include <vector>
 
 // =====================================================
@@ -21,6 +22,12 @@ namespace ToolExecutor
         bool cacheHit = false;
     };
 
+    struct ToolPreparationFailure
+    {
+        std::string reason;
+        bool skip = false;
+    };
+
     // Worker-safe algorithm phase. The caller owns immutable context and tool snapshots.
     bool ExecuteDetached(ToolInstance& toolSnapshot, VisionContext& context,
         int sourceToolIndex, ToolExecutionOutput& output);
@@ -34,7 +41,7 @@ namespace ToolExecutor
         const std::vector<int>& taskToolIndices,
         const std::vector<ROI>& visibleROIs, int selectedROI,
         const cv::Mat& frozenTemplate, ToolInstance& toolSnapshot,
-        VisionContext& context);
+        VisionContext& context, ToolPreparationFailure* failure = nullptr);
     // UI-thread publication phase. Updates ImageState, history, overlays and runtime result.
     bool PublishDetached(ToolInstance& target, ToolExecutionOutput&& output);
 

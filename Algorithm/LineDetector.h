@@ -17,7 +17,8 @@ namespace LineDetector
         bool showLabels = true;
         cv::Rect roi;
     };
-    std::vector<LineResult> Detect(const cv::Mat &, const Params &);
+    std::vector<LineResult> Detect(const cv::Mat &, const Params &,
+                                   const cv::Mat &domainMask = cv::Mat());
     cv::Mat DrawLines(const cv::Mat &, const std::vector<LineResult> &, const Params &);
     std::string Summary(const std::vector<LineResult> &);
     extern float g_LineTimeMs;

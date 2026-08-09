@@ -23,6 +23,8 @@ public:
     float approxEps = 0.02f;
     int lineThick = 2;
     bool showLabels = true, fillContours = false;
+    bool normalizeDirection = true;
+    bool subpixelBoundary = true;
     bool matchROI = false;
     float matchThresh = 0.1f;
 };
@@ -59,6 +61,8 @@ public:
     int lineThick = 2, method = 0;
     bool showLabels = true;
     int maxResults = 1;
+    bool enableRotation = false;
+    int rotationStart = -45, rotationEnd = 45, rotationStep = 5;
     bool tplGray = false, tplBinary = false;
     int tplBinThresh = 128;
     bool tplBlur = false;

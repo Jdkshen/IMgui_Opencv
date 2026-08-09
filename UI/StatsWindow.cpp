@@ -5,6 +5,7 @@
 #include "../Core/SpcDatabase.h"
 #include "../Core/OpenFileDialog.h"
 #include "../Core/ThemeManager.h"
+#include "../Core/GraphicsBackend.h"
 #include "../Log/LogSystem.h"
 
 #include <algorithm>
@@ -40,7 +41,24 @@ void ShowStatsWindow()
     }
 
     ImGui::SeparatorText("渲染后端");
-    ImGui::Text("Direct3D 12");
+    ImGui::Text("%s", GraphicsBackend::Name());
+    const double gpuUtilization = GraphicsBackend::ProcessGpuUtilization();
+    if (gpuUtilization >= 0.0)
+        ImGui::Text("本进程 GPU 引擎占用: %.1f%%", gpuUtilization);
+    else
+        ImGui::TextDisabled("本进程 GPU 引擎占用: 当前系统不支持读取");
+    const RenderMemoryInfo memory = GraphicsBackend::MemoryInfo();
+    if (memory.available)
+    {
+        constexpr double mib = 1024.0 * 1024.0;
+        ImGui::TextWrapped("显卡: %s", memory.adapterName.c_str());
+        ImGui::Text("显存使用: %.1f / %.1f MiB（预算）",
+            memory.currentUsage / mib, memory.budget / mib);
+        ImGui::TextDisabled("专用显存: %.1f MiB", memory.dedicatedVideoMemory / mib);
+        const float ratio = memory.budget > 0 ? static_cast<float>(
+            static_cast<double>(memory.currentUsage) / memory.budget) : 0.0f;
+        ImGui::ProgressBar(std::clamp(ratio, 0.0f, 1.0f), ImVec2(-1.0f, 0.0f));
+    }
 
     ImGui::SeparatorText("质量统计");
     if (ImGui::CollapsingHeader("SPC 检测历史", ImGuiTreeNodeFlags_DefaultOpen))
