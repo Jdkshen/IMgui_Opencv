@@ -209,9 +209,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	const RECT workArea = monitorInfo.rcWork;  // rcWork = 屏幕区域 − 任务栏区域
 	const int workW = (std::max)(1L, workArea.right - workArea.left);
 	const int workH = (std::max)(1L, workArea.bottom - workArea.top);
-	// 目标窗口大小：1280×800 乘以 DPI 缩放
-	const int desiredW = static_cast<int>(1280.0f * main_scale + 0.5f);
-	const int desiredH = static_cast<int>(800.0f * main_scale + 0.5f);
+	// Per-Monitor DPI Awareness V2 下，Win32 窗口尺寸使用物理像素；
+	// 不再把逻辑基准尺寸重复乘以 DPI，否则 125% 缩放时窗口会超出工作区。
+	const int desiredW = 1280;
+	const int desiredH = 800;
 	// 实际窗口大小不超过工作区
 	const int winW = (std::min)(desiredW, workW);
 	const int winH = (std::min)(desiredH, workH);
@@ -371,18 +372,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		//   3. ImGui::NewFrame() — 初始化 ImGui 内部帧状态（draw list、ID 栈等）
 		GraphicsBackend::NewFrame();
 		ImGui_ImplWin32_NewFrame();
-		RECT clientRect{};
-		if (::GetClientRect(hwnd, &clientRect))
-		{
-			const float clientWidth = static_cast<float>(clientRect.right - clientRect.left);
-			const float clientHeight = static_cast<float>(clientRect.bottom - clientRect.top);
-			if (clientWidth > 0.0f && clientHeight > 0.0f)
-			{
-				const float dpiScale = (std::max)(1.0f, AppRuntimeState::DpiScale());
-				ImGui::GetIO().DisplaySize = ImVec2(
-					clientWidth / dpiScale, clientHeight / dpiScale);
-			}
-		}
 		ImGui::NewFrame();
 
 		// ----- 6.3b 延迟日志启动 -----
