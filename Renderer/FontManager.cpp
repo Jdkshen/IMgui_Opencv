@@ -168,7 +168,7 @@ namespace FontManager
         }
 
         if (loaded > 0)
-            LogSystem::Add(LOG_INFO, "Tool PNG icons merged: %d", loaded);
+            LogSystem::Add(LOG_INFO, "工具 PNG 图标已合并: %d 个", loaded);
     }
 
     ImFont *InitFonts(float)
@@ -189,7 +189,7 @@ namespace FontManager
             font = io.Fonts->AddFontFromFileTTF(
                 preferredFont, kBaseFontSize,
                 nullptr, BuildIconGlyphRanges());
-            LogSystem::Add(LOG_INFO, "Microsoft YaHei UI loaded");
+            LogSystem::Add(LOG_INFO, "微软雅黑 UI 字体已加载");
         }
 
         // Packaged fallback keeps Chinese glyphs available on minimal systems.
@@ -201,7 +201,7 @@ namespace FontManager
                 font = io.Fonts->AddFontFromFileTTF(
                     localFont.c_str(), kBaseFontSize,
                     nullptr, BuildIconGlyphRanges());
-                LogSystem::Add(LOG_INFO, "simsun.ttc fallback loaded");
+                LogSystem::Add(LOG_INFO, "宋体字体已加载（备用）");
             }
         }
 
@@ -223,7 +223,7 @@ namespace FontManager
                 miCfg.PixelSnapH = true;
                 static const ImWchar iconRanges[] = { 0xE000, 0xF8FF, 0 };
                 io.Fonts->AddFontFromFileTTF(miPath.c_str(), 18.0f, &miCfg, iconRanges);
-                LogSystem::Add(LOG_INFO, "MaterialIcons-Regular.ttf merged");
+                LogSystem::Add(LOG_INFO, "Material Icons 图标字体已合并");
             }
         }
 
@@ -238,7 +238,7 @@ namespace FontManager
                 ImVector<ImWchar> emojiRanges;
                 builder.BuildRanges(&emojiRanges);
                 io.Fonts->AddFontFromFileTTF(emojiPath, 16.0f, &emojiCfg, emojiRanges.Data);
-                LogSystem::Add(LOG_INFO, "Segoe UI Emoji merged");
+                LogSystem::Add(LOG_INFO, "Segoe UI Emoji 字体已合并");
             }
         }
 

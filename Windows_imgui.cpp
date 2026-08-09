@@ -319,7 +319,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	//   3. 图标字体（FontAwesome，用于工具栏/菜单图标）
 	// 所有字形合并到一张 GPU 纹理中，缩放因子 = main_scale
 	FontManager::InitFonts(main_scale);
-	LogSystem::Add(LOG_INFO, "APP started");  // 应用启动完成标记
+	LogSystem::Add(LOG_INFO, "应用启动完成");  // 应用启动完成标记
 	AppendStartupLog(std::string("startup completed; renderer=") +
 		GraphicsBackend::Name());
 
@@ -460,7 +460,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	// 清理阶段 — 按依赖关系的逆序释放资源
 	// 黄金法则：先创建的后释放，避免悬空指针和使用已释放资源
 	// ========================================================================
-	LogSystem::Add(LOG_INFO, "APP shutdown begin");
+	LogSystem::Add(LOG_INFO, "应用开始退出");
 
 	// ---- 7.1 等待 GPU 完成所有待处理命令 ----
 	// 防止释放资源时 GPU 仍在访问（导致 TDR 或崩溃）
@@ -486,7 +486,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	::DestroyWindow(hwnd);
 	::UnregisterClassW(wc.lpszClassName, wc.hInstance);
 
-	LogSystem::Add(LOG_INFO, "APP shutdown end");
+	LogSystem::Add(LOG_INFO, "应用退出完成");
 
 	return 0;  // 正常退出
 }
