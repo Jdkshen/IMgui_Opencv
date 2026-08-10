@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <mutex>
 #include <unordered_map>
 #include <windows.h>
 #include <chrono>
@@ -79,6 +80,41 @@ namespace YOLODetector
     static CachedSession *s_Active = nullptr;
     static std::unordered_map<std::string, CachedSession> s_Cache;
     static bool s_LoggedProviders = false;
+
+    struct DetectCacheEntry
+    {
+        bool valid = false;
+        std::string modelKey;
+        std::uint64_t imageHash = 0;
+        int imageWidth = 0;
+        int imageHeight = 0;
+        int imageType = 0;
+        float confidence = 0.0f;
+        float nms = 0.0f;
+        cv::Rect roi;
+        std::vector<DetectedObject> detections;
+    };
+
+    static DetectCacheEntry s_DetectCache;
+    static std::mutex s_DetectCacheMutex;
+
+    static std::uint64_t HashImage(const cv::Mat& image)
+    {
+        constexpr std::uint64_t offset = 1469598103934665603ull;
+        constexpr std::uint64_t prime = 1099511628211ull;
+        std::uint64_t hash = offset;
+        for (int row = 0; row < image.rows; ++row)
+        {
+            const auto* data = image.ptr<unsigned char>(row);
+            const std::size_t bytes = image.cols * image.elemSize();
+            for (std::size_t index = 0; index < bytes; ++index)
+            {
+                hash ^= data[index];
+                hash *= prime;
+            }
+        }
+        return hash;
+    }
 
     static void LogAvailableProvidersOnce()
     {
@@ -311,6 +347,10 @@ namespace YOLODetector
 
             auto [iter, ok] = s_Cache.emplace(cacheKey, std::move(cs));
             s_Active = &iter->second;
+            {
+                std::lock_guard<std::mutex> cacheLock(s_DetectCacheMutex);
+                s_DetectCache.valid = false;
+            }
         }
         catch (const Ort::Exception &e)
         {
@@ -592,6 +632,23 @@ namespace YOLODetector
             else
                 roi &= cv::Rect(0, 0, image.cols, image.rows);
 
+            const std::string modelKey = GetModelPath();
+            const std::uint64_t imageHash = HashImage(image);
+            {
+                std::lock_guard<std::mutex> cacheLock(s_DetectCacheMutex);
+                const DetectCacheEntry& cache = s_DetectCache;
+                if (cache.valid && cache.modelKey == modelKey &&
+                    cache.imageHash == imageHash &&
+                    cache.imageWidth == image.cols &&
+                    cache.imageHeight == image.rows &&
+                    cache.imageType == image.type() &&
+                    cache.confidence == confThreshold &&
+                    cache.nms == nmsThreshold && cache.roi == roi)
+                {
+                    return cache.detections;
+                }
+            }
+
             if (roi.width <= 0 || roi.height <= 0)
             {
                 LogSystem::Add(LOG_ERROR, "YOLO: 无效的 ROI 区域");
@@ -635,6 +692,20 @@ namespace YOLODetector
             const float *outData = outTensor.GetTensorData<float>();
 
             auto result = Postprocess(outData, outShape, confThreshold, nmsThreshold, roi);
+
+            {
+                std::lock_guard<std::mutex> cacheLock(s_DetectCacheMutex);
+                s_DetectCache.valid = true;
+                s_DetectCache.modelKey = modelKey;
+                s_DetectCache.imageHash = imageHash;
+                s_DetectCache.imageWidth = image.cols;
+                s_DetectCache.imageHeight = image.rows;
+                s_DetectCache.imageType = image.type();
+                s_DetectCache.confidence = confThreshold;
+                s_DetectCache.nms = nmsThreshold;
+                s_DetectCache.roi = roi;
+                s_DetectCache.detections = result;
+            }
 
             // 输出分步耗时供外部读取
             auto t3 = std::chrono::steady_clock::now();
@@ -834,6 +905,10 @@ namespace YOLODetector
             delete kv.second.session;
         s_Cache.clear();
         s_Active = nullptr;
+        {
+            std::lock_guard<std::mutex> cacheLock(s_DetectCacheMutex);
+            s_DetectCache.valid = false;
+        }
         delete s_MemInfo;
         s_MemInfo = nullptr;
         delete s_Allocator;

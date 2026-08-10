@@ -83,6 +83,7 @@ static std::string GetRecipesDirA()
 
 // 全局状态变量定义
 bool show_demo_window = false;
+// 默认展开日志窗口，方便调试和现场验收。
 bool g_ShowLog = true;
 bool g_ShowSidebar = false;
 bool g_ShowStats = true;

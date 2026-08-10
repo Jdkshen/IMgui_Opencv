@@ -74,6 +74,7 @@ struct HardwarePanelSettings
     bool plcHoldingRegister = false;
     std::string tcpPassText = "PASS";
     std::string tcpFailText = "FAIL";
+    bool tcpSendQrJson = false;
     bool tcpAppendCrLf = true;
     bool outputInvert = false;
     bool outputAutoPublish = false;

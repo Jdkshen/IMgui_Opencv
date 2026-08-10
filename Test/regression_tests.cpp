@@ -3281,6 +3281,14 @@ void TestHardwareRuntimeAutomation()
     Require(HardwareRuntimeService::PublishConfiguredStatus(ToolResultStatus::Error).success &&
         tcpTransportView->lastText == "NG\r\n" && tcpTransportView->sendCount == 2,
         "TCP text Error output did not use the configured Fail payload");
+    tcpBinding.sendQrJson = true;
+    HardwareRuntimeService::ConfigureOutputBinding(tcpBinding, true);
+    Require(HardwareRuntimeService::PublishInspectionStatus(
+        ToolResultStatus::Pass, tcpBinding, {"SN-001", "SN-002"}).success &&
+        tcpTransportView->lastText ==
+            "{\"result\":\"OK\",\"serial\":\"SN-001\",\"serials\":[\"SN-001\",\"SN-002\"]}\r\n" &&
+        tcpTransportView->sendCount == 3,
+        "TCP QR JSON output did not preserve and escape decoded serials");
 
     HardwareRuntimeService::Shutdown();
     Require(HardwareAdapterService::Camera() == nullptr &&

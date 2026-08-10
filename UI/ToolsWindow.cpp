@@ -1,16 +1,32 @@
+// =============================================================================
+// ToolsWindow.cpp — 工具窗口 UI 实现
+// 负责：工具目录、工具链列表、任务分组管理、工作流图、测量ROI绘制
+// =============================================================================
+
+// ---- UI 框架头文件 ----
 #include "ToolsWindow.h"
 #include "DockSpaceHost.h"
 #include "../Core/ThemeManager.h"
 #include "../Renderer/FontManager.h"
 #include "../Renderer/PreviewTextureCache.h"
+
+// ---- 算法工具头文件 ----
 #include "../Algorithm/ThresholdTool.h"
+
+// ---- ImGui 渲染引擎 ----
 #include "../include/imgui/imgui.h"
 #include "../include/imgui/imgui_internal.h"
+
+// ---- Windows API ----
 #include <windows.h>
+
+// ---- UI 组件 ----
 #include "ImageViewer.h"
 #include "GeometryDrawEditor.h"
 #include "ROIManager.h"
 #include "Tools/BasicToolPanels.h"
+
+// ---- 核心服务层 ----
 #include "../Core/VideoCapture.h"
 #include "../Core/VisionContext.h"
 #include "../Core/ToolExecutor.h"
@@ -33,7 +49,11 @@
 #include "../Core/TemplateState.h"
 #include "../Core/RealtimeDetectionState.h"
 #include "../Core/RecipeAutosaveService.h"
+
+// ---- 日志系统 ----
 #include "../Log/LogSystem.h"
+
+// ---- 算法库（YOLO/轮廓/形状/直线/形态学/颜色）----
 #include "../Algorithm/YOLODetector.h"
 #include "../Algorithm/OpenCVYoloDetector.h"
 #include "../Algorithm/ContourDetector.h"
@@ -42,6 +62,8 @@
 #include "../Algorithm/MorphologyTool.h"
 #include "../Algorithm/ColorAnalyzer.h"
 #include "../Algorithm/MultiColorFinder.h"
+
+// ---- C++ 标准库 ----
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -54,10 +76,15 @@
 #include <sstream>
 #include <vector>
 
-static int s_MeasurementROIDrawOwner = -1;
-static bool s_MeasurementROIModifying = false;
-static std::vector<ROI> s_MeasurementROIPendingBackup;
+// =============================================================================
+// 测量 ROI 绘制状态（文件级静态变量）
+// =============================================================================
+static int s_MeasurementROIDrawOwner = -1;              // 当前测量ROI绘制的所有者工具索引
+static bool s_MeasurementROIModifying = false;           // 是否正在修改测量ROI
+static std::vector<ROI> s_MeasurementROIPendingBackup;   // 待备份的测量ROI列表
 
+// ---- 根据测量模式启动对应的 ROI 绘制序列 ----
+// mode 0:两点  1:矩形  2:双线段  3:圆  4:矩形  5:矩形  6:点+线  7:双线段
 static void BeginMeasurementROIDrawSequence(int mode)
 {
     switch (std::clamp(mode, 0, 7))
@@ -74,19 +101,21 @@ static void BeginMeasurementROIDrawSequence(int mode)
     }
 }
 
+// ---- 将 ROI 类型枚举转换为中文显示名 ----
 static const char* ROITypeDisplayName(int type)
 {
     switch (type)
     {
-    case ROI_TYPE_RECT: return "矩形";
-    case ROI_TYPE_POINT: return "点";
-    case ROI_TYPE_LINE: return "线段";
-    case ROI_TYPE_CIRCLE: return "圆";
+    case ROI_TYPE_RECT:    return "矩形";
+    case ROI_TYPE_POINT:   return "点";
+    case ROI_TYPE_LINE:    return "线段";
+    case ROI_TYPE_CIRCLE:  return "圆";
     case ROI_TYPE_POLYGON: return "多边形";
-    default: return "ROI";
+    default:               return "ROI";
     }
 }
 
+// ---- 同步/移除测量工具的运行时 ROI（委托给 ToolROIService）----
 static bool SyncMeasurementRuntimeROIs(ToolInstance& tool)
 {
     return ToolROIService::SyncMeasurementROIs(tool);
@@ -97,38 +126,44 @@ static void RemoveMeasurementRuntimeROIs(ToolInstance& tool)
     ToolROIService::RemoveMeasurementROIs(tool);
 }
 
+// ---- 命令行参数加引号并转义内部双引号（用于 CreateProcess）----
 static std::string QuoteCommandArg(const std::string& value)
 {
     std::string quoted = "\"";
     for (char ch : value)
-        quoted += (ch == '"') ? "\\\"" : std::string(1, ch);
+        quoted += (ch == '"') ? "\\\"" : std::string(1, ch);  // 双引号转义为 \"
     quoted += "\"";
     return quoted;
 }
 
+// ---- 获取当前可执行文件所在目录路径 ----
 static std::string GetExecutableDir()
 {
     char path[MAX_PATH] = {};
-    GetModuleFileNameA(nullptr, path, MAX_PATH);
-    char* lastSlash = strrchr(path, '\\');
+    GetModuleFileNameA(nullptr, path, MAX_PATH);    // 获取 exe 完整路径
+    char* lastSlash = strrchr(path, '\\');          // 找到最后一个反斜杠
     if (lastSlash)
-        *(lastSlash + 1) = '\0';
+        *(lastSlash + 1) = '\0';                     // 截断为目录路径
     return path;
 }
 
+// ---- 检查文件是否存在（非目录）----
 static bool FileExists(const std::string& path)
 {
     DWORD attrs = GetFileAttributesA(path.c_str());
     return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0;
 }
 
+// ---- 解析 OpenCV5 YOLO Helper 可执行文件路径 ----
+// 优先本地目录，若当前为 Debug 构建则尝试同级 Release 目录
 static std::string ResolveOpenCV5HelperPath()
 {
     const std::string exeDir = GetExecutableDir();
     const std::string localPath = exeDir + "opencv5_helper\\opencv5_yolo_helper.exe";
     if (FileExists(localPath))
-        return localPath;
+        return localPath;                               // 同目录下找到，直接返回
 
+    // Debug 构建时，尝试在同级 Release 目录查找
     std::string releaseDir = exeDir;
     const std::string debugPart = "\\Debug\\";
     size_t pos = releaseDir.rfind(debugPart);
@@ -140,9 +175,10 @@ static std::string ResolveOpenCV5HelperPath()
             return releasePath;
     }
 
-    return localPath;
+    return localPath;                                   // 兜底：返回本地路径
 }
 
+// ---- 将子进程输出按行拆分并写入日志系统 ----
 static void LogProcessOutput(const char* prefix, const std::string& output)
 {
     std::istringstream stream(output);
@@ -150,30 +186,35 @@ static void LogProcessOutput(const char* prefix, const std::string& output)
     while (std::getline(stream, line))
     {
         if (!line.empty() && line.back() == '\r')
-            line.pop_back();
+            line.pop_back();                            // 去掉 Windows 风格的 \r
         if (!line.empty())
             LogSystem::Add(LOG_INFO, "%s%s", prefix, line.c_str());
     }
 }
 
+// ---- 将当前图像以原始像素格式保存到文件（供 OpenCV5 Helper 子进程读取）----
 static bool SaveRawImageForOpenCV5Helper(const std::string& path, int& width, int& height, int& channels)
 {
+    // 检查：必须有已加载的图像
     if (ImageState::Current().empty())
     {
         LogSystem::Add(LOG_WARN, "OpenCV5 helper: 请先加载图片或打开摄像头");
         return false;
     }
+    // 检查：仅支持 8-bit 单通道/三通道/四通道
     if (ImageState::Current().depth() != CV_8U || (ImageState::Current().channels() != 1 && ImageState::Current().channels() != 3 && ImageState::Current().channels() != 4))
     {
         LogSystem::Add(LOG_WARN, "OpenCV5 helper: 当前图像格式不支持 depth=%d channels=%d", ImageState::Current().depth(), ImageState::Current().channels());
         return false;
     }
 
+    // 确保内存连续（非连续则克隆）
     cv::Mat src = ImageState::Current().isContinuous() ? ImageState::Current() : ImageState::Current().clone();
     width = src.cols;
     height = src.rows;
     channels = src.channels();
 
+    // 以二进制方式写入原始像素数据
     std::ofstream out(path, std::ios::binary);
     if (!out)
     {
@@ -189,20 +230,24 @@ static bool SaveRawImageForOpenCV5Helper(const std::string& path, int& width, in
     return true;
 }
 
+// ---- 将当前图像捕获到内存缓冲区（供 OpenCV5 Server 管道传输）----
 static bool CaptureRawImageForOpenCV5Pipe(std::vector<unsigned char>& bytes, int& width, int& height, int& channels)
 {
     bytes.clear();
+    // 检查：必须有已加载的图像
     if (ImageState::Current().empty())
     {
         LogSystem::Add(LOG_WARN, "OpenCV5 server: 请先加载图片或打开摄像头");
         return false;
     }
+    // 检查：仅支持 8-bit 单通道/三通道/四通道
     if (ImageState::Current().depth() != CV_8U || (ImageState::Current().channels() != 1 && ImageState::Current().channels() != 3 && ImageState::Current().channels() != 4))
     {
         LogSystem::Add(LOG_WARN, "OpenCV5 server: 当前图像格式不支持 depth=%d channels=%d", ImageState::Current().depth(), ImageState::Current().channels());
         return false;
     }
 
+    // 确保内存连续，拷贝到输出缓冲区
     cv::Mat src = ImageState::Current().isContinuous() ? ImageState::Current() : ImageState::Current().clone();
     width = src.cols;
     height = src.rows;
@@ -214,29 +259,34 @@ static bool CaptureRawImageForOpenCV5Pipe(std::vector<unsigned char>& bytes, int
     return true;
 }
 
+// ---- 在系统临时目录生成 OpenCV5 原始图像文件的路径 ----
 static std::string MakeOpenCV5RawImagePath()
 {
     char tempDir[MAX_PATH] = {};
-    if (GetTempPathA(MAX_PATH, tempDir) == 0)
+    if (GetTempPathA(MAX_PATH, tempDir) == 0)           // 获取临时目录失败
         return GetExecutableDir() + "opencv5_current_frame.raw";
 
     char filePath[MAX_PATH] = {};
-    if (GetTempFileNameA(tempDir, "ocv5", 0, filePath) == 0)
+    if (GetTempFileNameA(tempDir, "ocv5", 0, filePath) == 0)  // 创建临时文件名失败
         return std::string(tempDir) + "opencv5_current_frame.raw";
     return filePath;
 }
 
+// =============================================================================
+// OpenCV5 Helper 服务端（常驻子进程，通过管道通信避免重复加载模型）
+// =============================================================================
 struct OpenCV5HelperServer
 {
-    HANDLE process = nullptr;
-    HANDLE stdinWrite = nullptr;
-    HANDLE stdoutRead = nullptr;
-    std::string modelPath;
-    std::string engine;
+    HANDLE process = nullptr;       // 子进程句柄
+    HANDLE stdinWrite = nullptr;    // 向子进程写入命令的管道
+    HANDLE stdoutRead = nullptr;    // 从子进程读取输出的管道
+    std::string modelPath;          // 当前加载的模型路径
+    std::string engine;             // 当前使用的推理引擎（ONNX/OpenVINO 等）
 };
 
-static OpenCV5HelperServer g_OpenCV5Server;
+static OpenCV5HelperServer g_OpenCV5Server;  // 全局单例服务端
 
+// ---- 关闭 OpenCV5 服务端子进程（发送 QUIT 命令后等待退出）----
 static void CloseOpenCV5Server()
 {
     if (g_OpenCV5Server.stdinWrite)
@@ -256,6 +306,7 @@ static void CloseOpenCV5Server()
     g_OpenCV5Server = {};
 }
 
+// ---- 从 OpenCV5 服务端逐字符读取一行输出（遇 \n 返回）----
 static bool ReadOpenCV5ServerLine(std::string& line)
 {
     line.clear();
@@ -264,23 +315,26 @@ static bool ReadOpenCV5ServerLine(std::string& line)
     while (ReadFile(g_OpenCV5Server.stdoutRead, &ch, 1, &read, nullptr) && read == 1)
     {
         if (ch == '\n')
-            return true;
+            return true;                                // 读到换行符，一行结束
         if (ch != '\r')
-            line.push_back(ch);
+            line.push_back(ch);                         // 跳过回车符
     }
-    return !line.empty();
+    return !line.empty();                               // 管道关闭时返回剩余内容
 }
 
+// ---- 确保 OpenCV5 服务端已启动（若模型/引擎变更则重启）----
 static bool EnsureOpenCV5Server(const std::string& modelPath, const char* engine)
 {
+    // 已运行且模型/引擎匹配，直接复用
     if (g_OpenCV5Server.process && g_OpenCV5Server.modelPath == modelPath && g_OpenCV5Server.engine == engine)
         return true;
 
-    CloseOpenCV5Server();
+    CloseOpenCV5Server();                                // 关闭旧服务端
 
+    // 创建匿名管道（子进程可继承）
     SECURITY_ATTRIBUTES sa{};
     sa.nLength = sizeof(sa);
-    sa.bInheritHandle = TRUE;
+    sa.bInheritHandle = TRUE;                           // 允许子进程继承句柄
 
     HANDLE stdoutRead = nullptr;
     HANDLE stdoutWrite = nullptr;
@@ -297,22 +351,25 @@ static bool EnsureOpenCV5Server(const std::string& modelPath, const char* engine
         return false;
     }
 
+    // 构建命令行：helper.exe 模型路径 --server 引擎名 图像尺寸
     const std::string helperPath = ResolveOpenCV5HelperPath();
     std::string commandLine = QuoteCommandArg(helperPath) + " " + QuoteCommandArg(modelPath) + " --server " + engine + " 320";
     std::vector<char> cmd(commandLine.begin(), commandLine.end());
     cmd.push_back('\0');
 
+    // 配置启动信息：重定向标准输入/输出到管道
     STARTUPINFOA si{};
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdInput = stdinRead;
-    si.hStdOutput = stdoutWrite;
-    si.hStdError = stdoutWrite;
+    si.hStdInput = stdinRead;                           // 子进程从管道读取命令
+    si.hStdOutput = stdoutWrite;                        // 子进程输出写入管道
+    si.hStdError = stdoutWrite;                         // 错误也写入同一管道
 
     PROCESS_INFORMATION pi{};
     BOOL ok = CreateProcessA(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr,
-        GetExecutableDir().c_str(), &si, &pi);
+        GetExecutableDir().c_str(), &si, &pi);          // 无窗口启动
 
+    // 关闭本端不需要的管道端
     CloseHandle(stdinRead);
     CloseHandle(stdoutWrite);
     if (!ok)
@@ -322,14 +379,16 @@ static bool EnsureOpenCV5Server(const std::string& modelPath, const char* engine
         CloseHandle(stdinWrite);
         return false;
     }
-    CloseHandle(pi.hThread);
+    CloseHandle(pi.hThread);                            // 不需要线程句柄
 
+    // 保存服务端状态
     g_OpenCV5Server.process = pi.hProcess;
     g_OpenCV5Server.stdinWrite = stdinWrite;
     g_OpenCV5Server.stdoutRead = stdoutRead;
     g_OpenCV5Server.modelPath = modelPath;
     g_OpenCV5Server.engine = engine;
 
+    // 等待子进程发送 READY 信号（模型加载完成）
     auto t0 = std::chrono::steady_clock::now();
     std::string line;
     while (ReadOpenCV5ServerLine(line))
@@ -349,6 +408,7 @@ static bool EnsureOpenCV5Server(const std::string& modelPath, const char* engine
     return false;
 }
 
+// ---- 通过管道向常驻 OpenCV5 服务端发送图像进行推理（避免重复加载模型）----
 static int RunOpenCV5HelperServer(const std::string& modelPath, const char* engine, int repeat, float confThreshold, float nmsThreshold)
 {
     if (modelPath.empty())
@@ -357,6 +417,7 @@ static int RunOpenCV5HelperServer(const std::string& modelPath, const char* engi
         return -1;
     }
 
+    // 捕获当前图像到内存缓冲区
     int width = 0;
     int height = 0;
     int channels = 0;
@@ -364,11 +425,12 @@ static int RunOpenCV5HelperServer(const std::string& modelPath, const char* engi
     if (!CaptureRawImageForOpenCV5Pipe(imageBytes, width, height, channels))
         return -1;
 
-    repeat = (std::max)(1, repeat);
+    repeat = (std::max)(1, repeat);                     // 至少运行 1 次
     auto total0 = std::chrono::steady_clock::now();
     if (!EnsureOpenCV5Server(modelPath, engine))
         return -1;
 
+    // 发送 RUNB 命令：宽 高 通道数 置信度阈值 NMS阈值 重复次数 图像字节数
     std::string command = "RUNB " + std::to_string(width) + " " + std::to_string(height) + " " +
         std::to_string(channels) + " " + std::to_string(confThreshold) + " " + std::to_string(nmsThreshold) +
         " " + std::to_string(repeat) + " " + std::to_string(imageBytes.size()) + "\n";
@@ -380,6 +442,7 @@ static int RunOpenCV5HelperServer(const std::string& modelPath, const char* engi
         CloseOpenCV5Server();
         return -1;
     }
+    // 分块发送图像数据（每块最多 1MB），避免管道缓冲区溢出
     size_t offset = 0;
     while (offset < imageBytes.size())
     {
@@ -395,6 +458,7 @@ static int RunOpenCV5HelperServer(const std::string& modelPath, const char* engi
     }
 
     LogSystem::Add(LOG_INFO, "OpenCV5 server: engine=%s repeat=%d run(pipe), image=%dx%dx%d bytes=%zu", engine, repeat, width, height, channels, imageBytes.size());
+    // 读取服务端输出直到 END 标记
     std::string line;
     while (ReadOpenCV5ServerLine(line))
     {
@@ -408,6 +472,7 @@ static int RunOpenCV5HelperServer(const std::string& modelPath, const char* engi
     return 0;
 }
 
+// ---- 以独立子进程方式运行 OpenCV5 Helper 基准测试（每次启动新进程）----
 static int RunOpenCV5HelperBenchmark(const std::string& modelPath, const char* engine, int repeat, float confThreshold, float nmsThreshold)
 {
     const std::string helperPath = ResolveOpenCV5HelperPath();
@@ -417,6 +482,7 @@ static int RunOpenCV5HelperBenchmark(const std::string& modelPath, const char* e
         return -1;
     }
 
+    // 将当前图像保存为临时原始文件
     int width = 0;
     int height = 0;
     int channels = 0;
@@ -425,6 +491,7 @@ static int RunOpenCV5HelperBenchmark(const std::string& modelPath, const char* e
         return -1;
 
     repeat = (std::max)(1, repeat);
+    // 构建完整命令行（含 stderr 重定向）
     const std::string innerCommand = QuoteCommandArg(helperPath) + " " + QuoteCommandArg(modelPath) +
         " " + std::to_string(repeat) + " " + engine + " 320 --raw-bgr " + QuoteCommandArg(rawPath) + " " +
         std::to_string(width) + " " + std::to_string(height) + " " + std::to_string(channels) + " " +
@@ -432,7 +499,7 @@ static int RunOpenCV5HelperBenchmark(const std::string& modelPath, const char* e
     const std::string command = "\"" + innerCommand + " 2>&1\"";
 
     LogSystem::Add(LOG_INFO, "OpenCV5 helper: engine=%s repeat=%d start, image=%dx%dx%d", engine, repeat, width, height, channels);
-    FILE* pipe = _popen(command.c_str(), "r");
+    FILE* pipe = _popen(command.c_str(), "r");          // 打开管道读取子进程输出
     if (!pipe)
     {
         LogSystem::Add(LOG_ERROR, "OpenCV5 helper: 启动失败 %s", helperPath.c_str());
@@ -442,68 +509,90 @@ static int RunOpenCV5HelperBenchmark(const std::string& modelPath, const char* e
     std::array<char, 512> buffer{};
     std::string output;
     while (fgets(buffer.data(), (int)buffer.size(), pipe))
-        output += buffer.data();
+        output += buffer.data();                        // 收集所有输出
 
-    int code = _pclose(pipe);
+    int code = _pclose(pipe);                           // 等待子进程结束
     LogProcessOutput("OpenCV5 helper: ", output);
     LogSystem::Add(code == 0 ? LOG_INFO : LOG_WARN, "OpenCV5 helper: engine=%s repeat=%d exit=%d", engine, repeat, code);
-    DeleteFileA(rawPath.c_str());
+    DeleteFileA(rawPath.c_str());                       // 清理临时图像文件
     return code;
 }
 
+// =============================================================================
+// UI 命名空间 —— 工具窗口所有 UI 渲染逻辑
+// =============================================================================
 namespace UI
 {
+    // ---- 全局工具注册表：定义所有可用工具的类型、名称、分类、图标和描述 ----
     const std::vector<ToolMeta> g_ToolRegistry = {
-        {12, "原图", ToolCategory::Base, "▣", "恢复本轮输入原图"},
-        {3, "阈值调试", ToolCategory::Base, "◐", "灰度或颜色阈值分割"},
-        {8, "形态学", ToolCategory::Base, "▦", "腐蚀、膨胀与开闭运算"},
-        {0, "边缘检测", ToolCategory::Base, "◧", "提取灰度图像边缘"},
+        // 输入与预处理 (Base)
+        {12, "原图",          ToolCategory::Base,      "▣", "恢复本轮输入原图"},
+        {3,  "阈值调试",      ToolCategory::Base,      "◐", "灰度或颜色阈值分割"},
+        {8,  "形态学",        ToolCategory::Base,      "▦", "腐蚀、膨胀与开闭运算"},
+        {0,  "边缘检测",      ToolCategory::Base,      "◧", "提取灰度图像边缘"},
 
-        {1, "模板匹配", ToolCategory::Detection, "□", "在搜索区域定位模板"},
-        {4, "YOLO检测", ToolCategory::Detection, "◎", "ONNX 通用目标检测"},
-        {6, "形状匹配", ToolCategory::Detection, "△", "按轮廓形状定位目标"},
-        {13, "文字识别", ToolCategory::Detection, "T", "识别图片中的文字"},
+        // 定位与识别 (Detection)
+        {1,  "模板匹配",      ToolCategory::Detection, "□", "在搜索区域定位模板"},
+        {4,  "YOLO检测",      ToolCategory::Detection, "◎", "ONNX 通用目标检测"},
+        {6,  "形状匹配",      ToolCategory::Detection, "△", "按轮廓形状定位目标"},
+        {13, "文字识别",      ToolCategory::Detection, "T",  "识别图片中的文字"},
         {14, "二维码/条码识别", ToolCategory::Detection, "▣", "识别二维码及常用条码"},
 
-        {2, "Blob分析", ToolCategory::Geometry, "●", "提取连通区域及面积"},
-        {5, "轮廓分析", ToolCategory::Geometry, "◇", "分析轮廓、凸包与形状"},
-        {7, "直线检测", ToolCategory::Geometry, "▬", "检测直线与线段"},
-        {17, "几何绘制", ToolCategory::Geometry, "G", "绘制辅助几何标记"},
+        // 区域与几何 (Geometry)
+        {2,  "Blob分析",      ToolCategory::Geometry,  "●", "提取连通区域及面积"},
+        {5,  "轮廓分析",      ToolCategory::Geometry,  "◇", "分析轮廓、凸包与形状"},
+        {7,  "直线检测",      ToolCategory::Geometry,  "▬", "检测直线与线段"},
+        {17, "几何绘制",      ToolCategory::Geometry,  "G",  "绘制辅助几何标记"},
 
-        {9, "颜色分析", ToolCategory::Analysis, "◆", "统计颜色范围与占比"},
-        {10, "多点找色", ToolCategory::Analysis, "◉", "按多个参考颜色点定位"},
-        {16, "图像差分", ToolCategory::Analysis, "Δ", "比较参考图与当前图"},
-        {15, "工业测量", ToolCategory::Analysis, "M", "距离、角度、直径与公差"},
+        // 分析与测量 (Analysis)
+        {9,  "颜色分析",      ToolCategory::Analysis,  "◆", "统计颜色范围与占比"},
+        {10, "多点找色",      ToolCategory::Analysis,  "◉", "按多个参考颜色点定位"},
+        {16, "图像差分",      ToolCategory::Analysis,  "Δ", "比较参考图与当前图"},
+        {15, "工业测量",      ToolCategory::Analysis,  "M",  "距离、角度、直径与公差"},
 
+        // 实验工具 (Experimental)
         {11, "YOLO OpenCV 5.0", ToolCategory::Experimental, "✦", "OpenCV DNN 实验后端"},
     };
 
+    // ---- 工具类型 → UI 渲染函数的映射表 ----
     static std::unordered_map<int, ToolUIFn> g_ToolUIMap;
 
+    // ---- 将"原图"工具移到工具链最前面 ----
     void MoveOriginalToolToFront()
     {
         ToolChainState::MoveOriginalToolToFront();
     }
 
+    // =========================================================================
+    // 匿名命名空间 —— UI 状态变量和辅助函数（仅本文件可见）
+    // =========================================================================
     namespace
     {
-        std::uint64_t s_selectedTaskGroupId = 0;
-        std::uint64_t s_renameTaskGroupId = 0;
-        char s_taskGroupNameBuffer[96]{};
-        int s_pendingTaskGroupDelete = -1;
-        std::string s_taskGroupError;
-        bool s_showTaskGroupListWindow = true;
-        bool s_showTaskGroupToolsWindow = false;
-        bool s_requestTaskGroupListDock = true;
-        bool s_requestTaskGroupToolsDock = false;
-        std::string s_taskGroupToolFilter;
-        bool s_taskGroupToolFilterUngrouped = false;
-        bool s_requestToolsWindowFocus = false;
-        bool s_showWorkflowWindow = false;
-        bool s_requestWorkflowWindowFocus = false;
-        bool s_requestWorkflowWindowDock = true;
-        char s_toolCatalogFilter[96]{};
+        // ---- 任务分组相关状态 ----
+        std::uint64_t s_selectedTaskGroupId = 0;        // 当前选中的任务组 ID
+        std::uint64_t s_renameTaskGroupId = 0;          // 正在重命名的任务组 ID
+        char s_taskGroupNameBuffer[96]{};                // 任务组名称输入缓冲区
+        int s_pendingTaskGroupDelete = -1;               // 待删除的任务组索引（-1 表示无）
+        std::string s_taskGroupError;                    // 任务组操作错误消息
 
+        // ---- 窗口可见性与停靠请求 ----
+        bool s_showTaskGroupListWindow = true;           // 显示任务列表窗口
+        bool s_showTaskGroupToolsWindow = false;         // 显示工具分配窗口
+        bool s_requestTaskGroupListDock = true;          // 请求停靠任务列表窗口
+        bool s_requestTaskGroupToolsDock = false;        // 请求停靠工具分配窗口
+
+        // ---- 工具筛选状态 ----
+        std::string s_taskGroupToolFilter;               // 按任务组筛选工具
+        bool s_taskGroupToolFilterUngrouped = false;     // 是否筛选未分组工具
+
+        // ---- 工具窗口与工作流图状态 ----
+        bool s_requestToolsWindowFocus = false;          // 请求工具窗口获取焦点
+        bool s_showWorkflowWindow = false;               // 显示工作流图窗口
+        bool s_requestWorkflowWindowFocus = false;       // 请求工作流图窗口获取焦点
+        bool s_requestWorkflowWindowDock = true;         // 请求停靠工作流图窗口
+        char s_toolCatalogFilter[96]{};                  // 工具目录搜索过滤文本
+
+        // ---- 将字符串中 ASCII 字符转为小写（用于大小写不敏感搜索）----
         std::string AsciiLower(std::string value)
         {
             for (char& ch : value)
@@ -515,26 +604,30 @@ namespace UI
             return value;
         }
 
+        // ---- 检查工具是否匹配目录搜索过滤条件 ----
         bool ToolMatchesCatalogFilter(const ToolMeta& meta)
         {
             if (s_toolCatalogFilter[0] == '\0')
-                return true;
+                return true;                            // 无过滤条件，全部通过
             const std::string needle = AsciiLower(s_toolCatalogFilter);
             const std::string haystack = AsciiLower(
                 std::string(meta.name) + " " + meta.description);
-            return haystack.find(needle) != std::string::npos;
+            return haystack.find(needle) != std::string::npos;  // 在名称+描述中搜索
         }
 
+        // ---- 在工具视图中选中一个任务组（加载其关联图片、重置分步执行）----
         void SelectTaskGroupInTools(std::uint64_t groupId, const std::string& groupName)
         {
             const bool selectionChanged = s_selectedTaskGroupId != groupId;
             s_selectedTaskGroupId = groupId;
+            // groupId==0 表示"未分组"，清空筛选条件
             s_taskGroupToolFilter = groupId == 0 ? std::string{} : groupName;
             s_taskGroupToolFilterUngrouped = groupId == 0;
             if (selectionChanged)
-                ToolController::RequestStepReset();
+                ToolController::RequestStepReset();      // 切换任务组时重置分步执行
             if (selectionChanged && groupId != 0)
             {
+                // 加载任务组关联的图片
                 const int groupIndex = ToolChainState::TaskGroupIndexByName(groupName);
                 if (groupIndex >= 0)
                 {
@@ -553,20 +646,22 @@ namespace UI
                     }
                 }
             }
-            s_requestToolsWindowFocus = true;
+            s_requestToolsWindowFocus = true;           // 聚焦工具窗口
             g_ShowTools = true;
-            ToolChainState::SetActiveIndex(-1);
+            ToolChainState::SetActiveIndex(-1);          // 取消工具展开
         }
 
+        // ---- 去除任务组名称首尾空白字符 ----
         std::string TrimTaskGroupName(std::string value)
         {
             const std::size_t first = value.find_first_not_of(" \t\r\n");
             if (first == std::string::npos)
-                return {};
+                return {};                              // 全是空白，返回空字符串
             const std::size_t last = value.find_last_not_of(" \t\r\n");
             return value.substr(first, last - first + 1);
         }
 
+        // ---- 根据任务组 ID 查找其在列表中的索引 ----
         int TaskGroupIndexById(std::uint64_t id)
         {
             const auto& groups = ToolChainState::ReadOnlyTaskGroups();
@@ -575,9 +670,10 @@ namespace UI
                 if (groups[index].id == id)
                     return index;
             }
-            return -1;
+            return -1;                                  // 未找到
         }
 
+        // ---- 获取指定窗口的停靠 ID（用于窗口停靠布局）----
         ImGuiID WindowDockId(const char* primaryWindow, const char* fallbackWindow = nullptr)
         {
             if (ImGuiWindow* window = ImGui::FindWindowByName(primaryWindow))
@@ -727,11 +823,13 @@ namespace UI
             ImGui::EndPopup();
         }
 
+        // ---- 绘制任务列表窗口（左侧面板）----
         void DrawTaskGroupListWindow()
         {
             if (!s_showTaskGroupListWindow)
                 return;
 
+            // 设置窗口初始位置和大小（居中偏左）
             ImGuiViewport* viewport = ImGui::GetMainViewport();
             const float defaultHeight = (std::clamp)(viewport->WorkSize.y * 0.76f, 500.0f, 820.0f);
             ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + 18.0f,
@@ -740,6 +838,7 @@ namespace UI
             ImGui::SetNextWindowSize(ImVec2(360.0f, defaultHeight), ImGuiCond_FirstUseEver);
             ImGui::SetNextWindowSizeConstraints(ImVec2(300.0f, 420.0f),
                 ImVec2(600.0f, FLT_MAX));
+            // 请求停靠到侧边栏
             if (s_requestTaskGroupListDock)
             {
                 const ImGuiID dockId = WindowDockId("侧边栏");
@@ -756,6 +855,7 @@ namespace UI
                 return;
             }
 
+            // "新建任务"按钮（达到上限时禁用）
             const bool canCreate = ToolChainState::ReadOnlyTaskGroups().size() <
                 ToolChainState::MaximumTaskGroups();
             ImGui::BeginDisabled(!canCreate);
@@ -780,6 +880,7 @@ namespace UI
                 s_requestTaskGroupToolsDock = true;
             }
 
+            // 检查是否有未分组工具（用于显示"未分组"选项）
             const bool hasUngroupedTools = std::any_of(
                 ToolChainState::ReadOnlyTools().begin(),
                 ToolChainState::ReadOnlyTools().end(),
@@ -787,6 +888,7 @@ namespace UI
                 {
                     return tool.groupName.empty();
                 });
+            // 无未分组工具且未选中任何任务组时，自动选中第一个任务组
             const auto& availableGroups = ToolChainState::ReadOnlyTaskGroups();
             if (!hasUngroupedTools && s_selectedTaskGroupId == 0 &&
                 !availableGroups.empty())
@@ -797,12 +899,15 @@ namespace UI
 
             int selectedGroupIndex = NormalizeSelectedTaskGroupIndex();
             ImGui::SeparatorText("任务列表");
+            // 根据是否选中任务组动态调整列表高度
             const float settingsHeight = selectedGroupIndex >= 0 ? 342.0f : 58.0f;
             const float listHeight = (std::max)(160.0f,
                 ImGui::GetContentRegionAvail().y - settingsHeight);
+            // 任务列表可滚动区域
             if (ImGui::BeginChild("##task_group_list", ImVec2(0.0f, listHeight),
                 ImGuiChildFlags_Borders))
             {
+                // "未分组" 选项（有未分组工具时显示）
                 if (hasUngroupedTools)
                 {
                     const bool ungroupedSelected = s_selectedTaskGroupId == 0;
@@ -811,20 +916,63 @@ namespace UI
                     {
                         SelectTaskGroupInTools(0, {});
                     }
-                    DrawTaskGroupDropTarget(-1);
+                    DrawTaskGroupDropTarget(-1);        // 拖放目标：未分组区域
                 }
 
+                // 渲染每个任务组条目
                 const auto& groups = ToolChainState::ReadOnlyTaskGroups();
                 for (int index = 0; index < static_cast<int>(groups.size()); ++index)
                 {
                     const TaskGroupDefinition& group = groups[index];
                     ImGui::PushID(static_cast<int>(group.id));
+                    // 统计该任务组下的工具数量
                     int toolCount = 0;
                     for (const ToolInstance& tool : ToolChainState::ReadOnlyTools())
                     {
                         if (tool.groupName == group.name)
                             ++toolCount;
                     }
+
+                    ImVec4 taskStatusColor = ImVec4(0.92f, 0.66f, 0.18f, 1.0f);
+                    const char* taskStatusText = "未配置";
+                    if (!group.enabled)
+                    {
+                        taskStatusColor = ImVec4(0.48f, 0.53f, 0.58f, 1.0f);
+                        taskStatusText = "未启用";
+                    }
+                    else if (toolCount > 0)
+                    {
+                        bool hasError = false;
+                        bool allPassed = true;
+                        bool hasResult = false;
+                        for (const ToolInstance& tool : ToolChainState::ReadOnlyTools())
+                        {
+                            if (tool.groupName != group.name)
+                                continue;
+                            if (!tool.hasLastResult)
+                            {
+                                allPassed = false;
+                                continue;
+                            }
+                            hasResult = true;
+                            if (tool.lastResult.status == ToolResultStatus::Error ||
+                                tool.lastResult.status == ToolResultStatus::Fail)
+                                hasError = true;
+                            if (tool.lastResult.status != ToolResultStatus::Pass)
+                                allPassed = false;
+                        }
+                        if (hasError)
+                        {
+                            taskStatusColor = ImVec4(0.82f, 0.22f, 0.18f, 1.0f);
+                            taskStatusText = "错误";
+                        }
+                        else if (hasResult && allPassed)
+                        {
+                            taskStatusColor = ImVec4(0.16f, 0.66f, 0.38f, 1.0f);
+                            taskStatusText = "正常";
+                        }
+                    }
+                    // 构建来源标签：相机/文件夹/单张图片
                     std::string sourceTags;
                     const int boundCameraIndex = group.cameraIndex >= 0
                         ? group.cameraIndex : (group.cameraPreferred ? 0 : -1);
@@ -842,22 +990,29 @@ namespace UI
                     char rowLabel[192]{};
                     std::snprintf(rowLabel, sizeof(rowLabel), "%s  (%d)%s",
                         group.name.c_str(), toolCount, sourceTags.c_str());
+					ImGui::AlignTextToFramePadding();
+					ImGui::TextColored(taskStatusColor, "●");
+					if (ImGui::IsItemHovered())
+						ImGui::SetTooltip("状态：%s", taskStatusText);
+					ImGui::SameLine(0.0f, 5.0f);
                     if (ImGui::Selectable(rowLabel, s_selectedTaskGroupId == group.id,
                         0, ImVec2(0.0f, 34.0f)))
                     {
                         SelectTaskGroupInTools(group.id, group.name);
                     }
-                    DrawTaskGroupDropTarget(index);
+                    DrawTaskGroupDropTarget(index);     // 拖放目标：具体任务组
                     ImGui::PopID();
                 }
             }
             ImGui::EndChild();
 
+            // ===== 任务设置面板 =====
             selectedGroupIndex = NormalizeSelectedTaskGroupIndex();
             if (selectedGroupIndex >= 0)
             {
                 const TaskGroupDefinition& selectedGroup =
                     ToolChainState::ReadOnlyTaskGroups()[selectedGroupIndex];
+                // 同步重命名缓冲区
                 if (s_renameTaskGroupId != selectedGroup.id)
                 {
                     std::snprintf(s_taskGroupNameBuffer, sizeof(s_taskGroupNameBuffer),
@@ -867,6 +1022,7 @@ namespace UI
                 }
 
                 ImGui::SeparatorText("任务设置");
+                // 任务名称输入框（回车或失去焦点时提交）
                 ImGui::SetNextItemWidth(-1.0f);
                 const bool renameSubmitted = ImGui::InputText("##task_group_name",
                     s_taskGroupNameBuffer, IM_ARRAYSIZE(s_taskGroupNameBuffer),
@@ -886,18 +1042,22 @@ namespace UI
                         s_taskGroupError = "名称不能为空，也不能与其他任务重复";
                     }
                 }
+                // 显示重命名错误
                 if (!s_taskGroupError.empty())
                 {
                     ImGui::TextColored(ImVec4(0.92f, 0.34f, 0.20f, 1.0f),
                         "%s", s_taskGroupError.c_str());
                 }
 
+                // 启用/禁用任务开关
                 bool enabled = selectedGroup.enabled;
                 if (ImGui::Checkbox("启用该任务", &enabled) &&
                     ToolChainState::SetTaskGroupEnabled(selectedGroupIndex, enabled))
                 {
                     CommitTaskGroupChange();
                 }
+
+                // 相机绑定下拉框
                 int cameraIndex = selectedGroup.cameraIndex >= 0
                     ? selectedGroup.cameraIndex
                     : (selectedGroup.cameraPreferred ? 0 : -1);
@@ -942,6 +1102,7 @@ namespace UI
                     }
                     ImGui::EndTable();
                 }
+                // 相机绑定状态提示
                 if (cameraIndex >= 0)
                 {
                     const HardwareRuntimeSnapshot hardware =
@@ -950,8 +1111,8 @@ namespace UI
                             DeviceConnectionState::Connected &&
                         hardware.cameraSlotIndex == cameraIndex;
                     ImGui::PushStyleColor(ImGuiCol_Text, cameraConnected
-                        ? ImVec4(0.24f, 0.86f, 0.48f, 1.0f)
-                        : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                        ? ImVec4(0.24f, 0.86f, 0.48f, 1.0f)    // 绿色：已连接
+                        : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));  // 灰色
                     ImGui::TextWrapped("%s", cameraConnected
                         ? "绑定相机已连接：相机 → 任务图片 → 公共图片"
                         : "执行时自动连接绑定相机；失败则使用任务图片或公共图片");
@@ -959,11 +1120,13 @@ namespace UI
                 }
                 else
                 {
+                    // 无相机绑定：显示输入优先级
                     ImGui::PushStyleColor(ImGuiCol_Text,
                         ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
                     ImGui::TextWrapped("输入优先级：任务图片 → 公共图片");
                     ImGui::PopStyleColor();
                 }
+                // 显示任务关联的图片信息
                 const std::size_t imageSlash = selectedGroup.imagePath.find_last_of("\\/");
                 const char* imageName = selectedGroup.imagePath.empty()
                     ? "未设置（使用当前公共图片）"
@@ -971,6 +1134,7 @@ namespace UI
                         (imageSlash == std::string::npos ? 0 : imageSlash + 1);
                 if (!selectedGroup.imageFolderPath.empty())
                 {
+                    // 文件夹模式：显示文件夹名和当前图片索引
                     const std::size_t folderSlash =
                         selectedGroup.imageFolderPath.find_last_of("\\/");
                     const char* folderName = selectedGroup.imageFolderPath.c_str() +
@@ -986,10 +1150,12 @@ namespace UI
                 }
                 else
                 {
+                    // 单图片模式
                     ImGui::TextDisabled("任务图片: %s", imageName);
                     if (!selectedGroup.imagePath.empty())
                         ImGui::SetItemTooltip("%s", selectedGroup.imagePath.c_str());
                 }
+                // ---- 图片操作按钮行 ----
                 if (ImGui::Button("选择单张图片"))
                 {
                     const std::string imagePath = OpenFileDialog();
@@ -1047,7 +1213,8 @@ namespace UI
                     CommitTaskGroupChange();
                 }
                 ImGui::EndDisabled();
-                ImGui::BeginDisabled(selectedGroupIndex <= 0);
+                // ---- 任务排序/删除按钮 ----
+                ImGui::BeginDisabled(selectedGroupIndex <= 0);   // 第一个任务不可上移
                 if (ImGui::Button("上移"))
                 {
                     if (ToolChainState::MoveTaskGroup(
@@ -1060,7 +1227,7 @@ namespace UI
                 ImGui::SameLine();
                 ImGui::BeginDisabled(selectedGroupIndex + 1 >=
                     static_cast<int>(ToolChainState::ReadOnlyTaskGroups().size()));
-                if (ImGui::Button("下移"))
+                if (ImGui::Button("下移"))                       // 最后一个任务不可下移
                 {
                     if (ToolChainState::MoveTaskGroup(
                         selectedGroupIndex, selectedGroupIndex + 1))
@@ -1071,10 +1238,11 @@ namespace UI
                 ImGui::EndDisabled();
                 ImGui::SameLine();
                 if (ImGui::Button("删除任务"))
-                    s_pendingTaskGroupDelete = selectedGroupIndex;
+                    s_pendingTaskGroupDelete = selectedGroupIndex;  // 触发确认弹窗
             }
             else
             {
+                // 未选中任务组时的提示
                 ImGui::SeparatorText("未分组");
                 ImGui::TextDisabled("把右侧工具拖到任意任务即可分组。");
             }
@@ -1208,17 +1376,20 @@ namespace UI
             return s_taskGroupToolFilterUngrouped ? "未分组" : "全部工具";
         }
 
+        // ---- 绘制工作流图节点画布（网格布局 + 连线 + 依赖关系）----
         void DrawWorkflowGraphCanvas(const char* childId,
             const std::vector<int>& visibleToolIndices, float childHeight)
         {
-            constexpr float nodeWidth = 170.0f;
-            constexpr float nodeHeight = 78.0f;
-            constexpr float horizontalGap = 18.0f;
-            constexpr float verticalGap = 44.0f;
-            constexpr float sidePadding = 14.0f;
-            constexpr float topPadding = 50.0f;
-            constexpr float bottomPadding = 12.0f;
+            // 节点布局常量
+            constexpr float nodeWidth = 170.0f;          // 节点宽度
+            constexpr float nodeHeight = 78.0f;          // 节点高度
+            constexpr float horizontalGap = 18.0f;       // 水平间距
+            constexpr float verticalGap = 44.0f;         // 垂直间距
+            constexpr float sidePadding = 14.0f;         // 左右内边距
+            constexpr float topPadding = 50.0f;          // 顶部内边距
+            constexpr float bottomPadding = 12.0f;        // 底部内边距
 
+            // 计算网格列数（自适应宽度）
             const float availableWidth = (std::max)(1.0f,
                 ImGui::GetContentRegionAvail().x);
             const float usableWidth = (std::max)(nodeWidth,
@@ -1227,6 +1398,7 @@ namespace UI
                 (usableWidth + horizontalGap) / (nodeWidth + horizontalGap)));
             const int rows = (static_cast<int>(visibleToolIndices.size()) +
                 columns - 1) / columns;
+            // 画布尺寸
             const float gridWidth = columns * nodeWidth +
                 (columns - 1) * horizontalGap;
             const float canvasWidth = (std::max)(availableWidth,
@@ -1234,11 +1406,14 @@ namespace UI
             const float canvasHeight = topPadding + rows * nodeHeight +
                 (std::max)(0, rows - 1) * verticalGap + bottomPadding;
 
+            // 创建可滚动画布子区域
             ImGui::BeginChild(childId, ImVec2(0.0f, childHeight),
                 ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
-            const ImVec2 origin = ImGui::GetCursorScreenPos();
-            ImGui::Dummy(ImVec2(canvasWidth, canvasHeight));
+            const ImVec2 origin = ImGui::GetCursorScreenPos();  // 画布原点
+            ImGui::Dummy(ImVec2(canvasWidth, canvasHeight));     // 占位撑开画布
             ImDrawList* workflowDraw = ImGui::GetWindowDrawList();
+
+            // 辅助：根据序号计算节点左上角坐标
             auto nodePosition = [&](int ordinal)
             {
                 const int row = ordinal / columns;
@@ -1247,6 +1422,7 @@ namespace UI
                     origin.x + sidePadding + column * (nodeWidth + horizontalGap),
                     origin.y + topPadding + row * (nodeHeight + verticalGap));
             };
+            // 辅助：工具索引 → 可见序号
             auto visibleOrdinal = [&](int toolIndex)
             {
                 const auto found = std::find(visibleToolIndices.begin(),
@@ -1254,6 +1430,8 @@ namespace UI
                 return found == visibleToolIndices.end() ? -1 :
                     static_cast<int>(found - visibleToolIndices.begin());
             };
+
+            // ---- 绘制工具链顺序连线（灰色箭头）----
             for (int ordinal = 1; ordinal < static_cast<int>(visibleToolIndices.size()); ++ordinal)
             {
                 const ImVec2 previous = nodePosition(ordinal - 1);
@@ -1261,18 +1439,20 @@ namespace UI
                 const bool sameRow = ordinal / columns == (ordinal - 1) / columns;
                 if (sameRow)
                 {
+                    // 同行：水平箭头
                     const ImVec2 from(previous.x + nodeWidth,
                         previous.y + nodeHeight * 0.5f);
                     const ImVec2 to(current.x, current.y + nodeHeight * 0.5f);
                     workflowDraw->AddLine(from, to,
                         IM_COL32(105, 125, 140, 180), 2.0f);
-                    workflowDraw->AddTriangleFilled(to,
+                    workflowDraw->AddTriangleFilled(to,          // 箭头尖端
                         ImVec2(to.x - 7.0f, to.y - 4.0f),
                         ImVec2(to.x - 7.0f, to.y + 4.0f),
                         IM_COL32(105, 125, 140, 220));
                 }
                 else
                 {
+                    // 换行：L 形连线（下→右→下）
                     const ImVec2 from(previous.x + nodeWidth * 0.5f,
                         previous.y + nodeHeight);
                     const ImVec2 to(current.x + nodeWidth * 0.5f, current.y);
@@ -1283,12 +1463,13 @@ namespace UI
                         ImVec2(to.x, middleY), IM_COL32(105, 125, 140, 180), 2.0f);
                     workflowDraw->AddLine(ImVec2(to.x, middleY), to,
                         IM_COL32(105, 125, 140, 180), 2.0f);
-                    workflowDraw->AddTriangleFilled(to,
+                    workflowDraw->AddTriangleFilled(to,          // 向下箭头
                         ImVec2(to.x - 4.0f, to.y - 7.0f),
                         ImVec2(to.x + 4.0f, to.y - 7.0f),
                         IM_COL32(105, 125, 140, 220));
                 }
             }
+            // ---- 绘制工具间依赖关系（Fixture=橙色, Result ROI=紫色）----
             const std::vector<ToolChainDependency> workflowDependencies =
                 ToolChainValidator::DescribeDependencies(ToolChainState::ReadOnlyTools());
             for (const ToolChainDependency& dependency : workflowDependencies)
@@ -1301,22 +1482,25 @@ namespace UI
                     continue;
                 const ImVec2 source = nodePosition(sourceOrdinal);
                 const ImVec2 consumer = nodePosition(consumerOrdinal);
+                // Fixture=橙色, Result ROI=紫色
                 const ImU32 color = dependency.kind == ToolDependencyKind::Fixture
                     ? IM_COL32(255, 170, 55, 230) : IM_COL32(170, 100, 255, 230);
                 const int sourceRow = sourceOrdinal / columns;
                 const int consumerRow = consumerOrdinal / columns;
                 if (sourceRow == consumerRow)
                 {
+                    // 同行：向上拱起的贝塞尔曲线
                     const ImVec2 from(source.x + nodeWidth * 0.5f, source.y);
                     const ImVec2 to(consumer.x + nodeWidth * 0.5f, consumer.y);
                     const float arch = 22.0f +
-                        std::abs(consumerOrdinal - sourceOrdinal) * 7.0f;
+                        std::abs(consumerOrdinal - sourceOrdinal) * 7.0f;  // 跨度越大拱越高
                     workflowDraw->AddBezierCubic(from,
                         ImVec2(from.x, from.y - arch),
                         ImVec2(to.x, to.y - arch), to, color, 2.0f);
                 }
                 else
                 {
+                    // 跨行：垂直 S 形贝塞尔曲线
                     const ImVec2 from(source.x + nodeWidth * 0.5f,
                         source.y + nodeHeight);
                     const ImVec2 to(consumer.x + nodeWidth * 0.5f, consumer.y);
@@ -1327,6 +1511,7 @@ namespace UI
                         ImVec2(to.x, to.y - controlOffset), to, color, 2.0f);
                 }
             }
+            // ---- 渲染每个工具节点 ----
             for (int ordinal = 0; ordinal < static_cast<int>(visibleToolIndices.size()); ++ordinal)
             {
                 const int toolIndex = visibleToolIndices[ordinal];
@@ -1334,24 +1519,30 @@ namespace UI
                 if (!tool)
                     continue;
                 const ImVec2 p = nodePosition(ordinal);
-                ImU32 fill = tool->enabled ? IM_COL32(35, 68, 78, 245) :
-                    IM_COL32(65, 65, 65, 220);
+
+                // 节点背景色：根据工具状态决定
+                ImU32 fill = tool->enabled ? IM_COL32(35, 68, 78, 245) :     // 启用：深蓝绿
+                    IM_COL32(65, 65, 65, 220);                                // 禁用：灰色
                 if (tool->hasLastResult)
                 {
                     if (tool->lastResult.status == ToolResultStatus::Pass)
-                        fill = IM_COL32(35, 105, 70, 245);
+                        fill = IM_COL32(35, 105, 70, 245);                    // 通过：绿色
                     else if (tool->lastResult.status == ToolResultStatus::Fail)
-                        fill = IM_COL32(125, 55, 45, 245);
+                        fill = IM_COL32(125, 55, 45, 245);                    // 失败：红色
                     else if (tool->lastResult.status == ToolResultStatus::Error)
-                        fill = IM_COL32(130, 75, 30, 245);
+                        fill = IM_COL32(130, 75, 30, 245);                    // 错误：橙色
                 }
+                // 绘制圆角矩形背景
                 workflowDraw->AddRectFilled(p,
                     ImVec2(p.x + nodeWidth, p.y + nodeHeight), fill, 7.0f);
+                // 绘制边框（激活的节点加粗高亮）
                 workflowDraw->AddRect(p,
                     ImVec2(p.x + nodeWidth, p.y + nodeHeight),
                     toolIndex == ToolChainState::ActiveIndex()
                         ? IM_COL32(90, 220, 245, 255) : IM_COL32(125, 155, 165, 230),
                     7.0f, 0, toolIndex == ToolChainState::ActiveIndex() ? 3.0f : 1.0f);
+
+                // 节点文字内容
                 const char* registryName = tool->type == 12 ? "Original" :
                     ToolRegistry::GetName(tool->type);
                 const std::string title = std::to_string(toolIndex + 1) + ". " +
@@ -1360,11 +1551,11 @@ namespace UI
                 workflowDraw->PushClipRect(ImVec2(p.x + 8.0f, p.y + 5.0f),
                     ImVec2(nodeMax.x - 8.0f, nodeMax.y - 5.0f), true);
                 workflowDraw->AddText(ImVec2(p.x + 8.0f, p.y + 8.0f),
-                    IM_COL32_WHITE, title.c_str());
+                    IM_COL32_WHITE, title.c_str());          // 工具标题
                 const char* inputName = tool->inputSourceMode == 0 ? "上一原图" :
                     (tool->inputSourceMode == 1 ? "上一处理图" : "原图工具");
                 workflowDraw->AddText(ImVec2(p.x + 8.0f, p.y + 32.0f),
-                    IM_COL32(190, 215, 220, 255), inputName);
+                    IM_COL32(190, 215, 220, 255), inputName); // 输入来源
                 if (tool->fixture.enabled)
                     workflowDraw->AddText(ImVec2(p.x + 8.0f, p.y + 53.0f),
                         IM_COL32(255, 190, 80, 255), "Fixture");
@@ -1372,6 +1563,8 @@ namespace UI
                     workflowDraw->AddText(ImVec2(p.x + 8.0f, p.y + 53.0f),
                         IM_COL32(190, 125, 255, 255), "Result ROI");
                 workflowDraw->PopClipRect();
+
+                // 透明按钮覆盖整个节点（点击跳转到工具卡片）
                 ImGui::SetCursorScreenPos(p);
                 ImGui::PushID(toolIndex);
                 if (ImGui::InvisibleButton("##workflow_node", ImVec2(nodeWidth, nodeHeight)))
@@ -1450,18 +1643,24 @@ namespace UI
         return true;
     }
 
+    // =========================================================================
+    // ShowToolsWindow —— 工具窗口主渲染入口（每帧调用）
+    // 包含：工具目录弹窗、工具卡片列表、批量操作、分组筛选、配方状态等
+    // =========================================================================
     void ShowToolsWindow()
     {
-        static cv::Mat g_PersistOriginal; // 持久保存原始图
+        static cv::Mat g_PersistOriginal;               // 持久保存原始图（跨帧）
         if (GeometryDrawEditor::ConsumeChanged())
-            SaveCurrentRecipe();
+            SaveCurrentRecipe();                        // 几何编辑变更后自动保存配方
 
+        // 清理不再使用的预览纹理缓存
         std::vector<std::uint64_t> activeToolIds;
         activeToolIds.reserve(ToolChainState::Count());
         for (const ToolInstance& tool : ToolChainState::ReadOnlyTools())
             activeToolIds.push_back(tool.toolId);
         PreviewTextureCache::Prune(activeToolIds);
 
+        // 渲染任务分组管理窗口和工作流图
         DrawTaskGroupManagerWindows();
         DrawWorkflowWindow();
 
@@ -1477,12 +1676,14 @@ namespace UI
         ImGui::Begin("功能窗口", &g_ShowTools,
             ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
+        // 工具分类名称（中文）
         const char *kCatNames[] = {
             "输入与预处理", "定位与识别", "区域与几何",
             "分析与测量", "实验工具"
         };
-        bool isDark = (g_CurrentTheme == 0);
+        bool isDark = (g_CurrentTheme == 0);            // 当前是否为暗色主题
 
+        // ---- 根据工具类型返回对应的强调色 ----
         auto ToolAccentColor = [](int type) -> ImU32
         {
             switch (type)
@@ -1508,6 +1709,7 @@ namespace UI
             }
         };
 
+        // ---- 用 ImDrawList 直接绘制工具图标（程序化绘制，不依赖字体图标）----
         auto DrawToolIcon = [](ImDrawList *drawList, int type, ImVec2 p, float size, ImU32 accent)
         {
             const float r = size * 0.5f;
@@ -1590,22 +1792,26 @@ namespace UI
             drawList->AddRect(p, ImVec2(p.x + size, p.y + size), stroke, 3.0f);
         };
 
-        // ---- 调度器：每帧消费执行队列（替代旧 ExecState 状态机） ----
+        // ===== 调度器：每帧消费执行队列（替代旧 ExecState 状态机）=====
         ToolController::Tick();
 
+        // 收集所有任务组名称（用于筛选下拉框）
         std::vector<std::string> toolGroups;
         toolGroups.reserve(ToolChainState::ReadOnlyTaskGroups().size());
         for (const TaskGroupDefinition& group : ToolChainState::ReadOnlyTaskGroups())
             toolGroups.push_back(group.name);
 
+        // 根据当前筛选条件获取可见工具索引
         const std::vector<int> visibleToolIndices =
             CollectVisibleWorkflowToolIndices();
         const std::string chainTitle = WorkflowChainTitle();
+        // 工具链标题（主题色高亮）
         ImGui::TextColored(isDark ? ImVec4(0.42f, 0.78f, 0.84f, 1.0f) : ImVec4(0.05f, 0.39f, 0.46f, 1.0f),
             "%s · 工具链", chainTitle.c_str());
         ImGui::SameLine();
         ImGui::TextDisabled("%zu 个", visibleToolIndices.size());
 
+        // 工作流图窗口切换按钮
         const char* workflowButtonLabel = s_showWorkflowWindow
             ? "切换到工具流程图##workflow_graph_window"
             : "打开工具流程图##workflow_graph_window";
@@ -1615,6 +1821,7 @@ namespace UI
             s_requestWorkflowWindowFocus = true;
         }
 
+        // 任务分组管理 + 批量操作（并排两个等宽按钮）
         const bool hasTools = !ToolChainState::Empty();
         const float topActionGap = ImGui::GetStyle().ItemSpacing.x;
         const float topActionWidth = (std::max)(90.0f,
@@ -1627,7 +1834,7 @@ namespace UI
             s_requestTaskGroupToolsDock = true;
         }
         ImGui::SameLine(0.0f, topActionGap);
-        ImGui::BeginDisabled(!hasTools);
+        ImGui::BeginDisabled(!hasTools);                // 无工具时禁用批量操作
         if (ImGui::Button("批量操作", ImVec2(topActionWidth, 0.0f)))
             ImGui::OpenPopup("ToolBatchActions");
         ImGui::EndDisabled();
@@ -1709,6 +1916,7 @@ namespace UI
             }
             ImGui::EndPopup();
         }
+        // ---- 分组筛选下拉框 ----
         if (toolGroups.empty())
         {
             ImGui::TextDisabled("暂无分组");
@@ -1757,6 +1965,7 @@ namespace UI
             ImGui::SetItemTooltip("筛选工具分组");
         }
 
+        // ---- 配方保存状态显示 ----
         const RecipeAutosaveSnapshot recipeSave = RecipeAutosaveService::Snapshot();
         ImGui::TextDisabled("当前配方: %s", CurrentRecipeName());
         ImGui::SetItemTooltip("%s%s%s%s%s", CurrentRecipePath().c_str(),
@@ -1773,14 +1982,12 @@ namespace UI
             : ImVec4(0.35f, 0.78f, 0.48f, 1.0f),
             "%s", saveFailed ? "保存失败" : saveBusy ? "保存中" : "已保存");
 
+        // ---- 添加工具按钮（打开工具目录弹窗）----
         if (ImGui::Button("+ 添加工具", ImVec2(-1, 0)))
             ImGui::OpenPopup("AddToolPopup");
 
-        // Keep the tool catalogue inside the monitor work area. With every
-        // category expanded its natural height is larger than common 768p and
-        // 900p industrial displays; constraining it enables ImGui's internal
-        // vertical scrolling instead of letting the last tools fall behind the
-        // taskbar or the bottom edge of the screen.
+        // 限制工具目录弹窗高度在显示器工作区内，避免在 768p/900p 工控屏上
+        // 底部工具被任务栏遮挡。使用 ImGui 内部垂直滚动代替。
         const ImGuiViewport* toolPopupViewport = ImGui::GetWindowViewport();
         const float workTop = toolPopupViewport
             ? toolPopupViewport->WorkPos.y : 0.0f;
@@ -1796,11 +2003,13 @@ namespace UI
             ImVec2(330.0f, 0.0f), ImVec2(430.0f, toolPopupMaxHeight));
         if (ImGui::BeginPopup("AddToolPopup"))
         {
+            // 搜索框
             ImGui::SetNextItemWidth(-1.0f);
             ImGui::InputTextWithHint("##tool_catalog_filter",
                 "搜索工具名称或用途...", s_toolCatalogFilter,
                 IM_ARRAYSIZE(s_toolCatalogFilter));
 
+            // 统计每个分类下可见的工具数量
             std::array<int, static_cast<int>(ToolCategory::COUNT)> visibleCounts{};
             int visibleToolCount = 0;
             int visibleCategoryCount = 0;
@@ -1823,6 +2032,7 @@ namespace UI
                 ImGui::TextDisabled("没有匹配的工具");
             }
 
+            // 按分类折叠面板渲染工具条目
             for (int c = 0; c < (int)ToolCategory::COUNT; c++)
             {
                 if (visibleCounts[c] == 0)
@@ -1830,16 +2040,18 @@ namespace UI
 
                 const bool filterActive = s_toolCatalogFilter[0] != '\0';
                 if (filterActive)
-                    ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+                    ImGui::SetNextItemOpen(true, ImGuiCond_Always);  // 搜索时强制展开所有分类
 
                 char categoryLabel[96]{};
                 std::snprintf(categoryLabel, sizeof(categoryLabel),
                     "%s  %d 个###tool_category_%d",
                     kCatNames[c], visibleCounts[c], c);
+                // 前两个分类（预处理/检测）默认展开
                 const ImGuiTreeNodeFlags categoryFlags = c <= static_cast<int>(ToolCategory::Detection)
                     ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None;
                 if (ImGui::CollapsingHeader(categoryLabel, categoryFlags))
                 {
+                    // 遍历当前分类下的所有工具条目
                     for (const auto &meta : g_ToolRegistry)
                     {
                         if (meta.category != (ToolCategory)c ||
@@ -1850,6 +2062,7 @@ namespace UI
                         ImVec2 rowPos = ImGui::GetCursorScreenPos();
                         const float rowH = (std::max)(
                             42.0f, ImGui::GetTextLineHeightWithSpacing() * 2.0f);
+                        // 点击工具条目：创建工具实例并添加到工具链
                         if (ImGui::Selectable(itemId, false, 0, ImVec2(0.0f, rowH)))
                         {
                             ToolInstance tool{};
@@ -1909,12 +2122,14 @@ namespace UI
 
         ImGui::Separator();
 
+        // ---- 从完整路径提取文件名 ----
         auto FileName = [](const std::string &path) -> std::string
         {
             size_t p = path.find_last_of("\\/");
             return (p != std::string::npos) ? path.substr(p + 1) : path;
         };
 
+        // ---- 根据工具类型 ID 查找注册表中的显示名称 ----
         auto ToolName = [](int type) -> const char *
         {
             for (const auto &m : g_ToolRegistry)
@@ -1923,6 +2138,7 @@ namespace UI
             return "?";
         };
 
+        // ---- 捕获工具持久化状态（用于检测 UI 变更后自动保存）----
         auto CaptureToolPersistentState = [](const ToolInstance& tool)
         {
             nlohmann::json state = tool.ToRecipeJson();
@@ -1938,7 +2154,9 @@ namespace UI
             return state;
         };
 
-        // ---- UI 辅助：统一视觉风格 ----
+        // ---- UI 辅助 lambda：统一视觉风格 ----
+
+        // 分区标题（主题色文字 + 分隔线）
         auto SectionHeader = [isDark](const char *label)
         {
             ImGui::PushStyleColor(ImGuiCol_Text, isDark
@@ -1950,6 +2168,7 @@ namespace UI
             ImGui::SeparatorText(label);
             ImGui::PopStyleColor(2);
         };
+        // 主要操作按钮（青色调，占满宽度）
         auto PrimaryButton = [isDark](const char *label) -> bool
         {
             ImGui::PushStyleColor(ImGuiCol_Button, isDark
@@ -1966,6 +2185,7 @@ namespace UI
             ImGui::PopStyleColor(4);
             return clicked;
         };
+        // 从工具卡片触发单步执行
         auto RunToolFromCard = [](int inst) -> bool
         {
             if (ImageState::Current().empty())
@@ -1976,10 +2196,12 @@ namespace UI
             ToolController::RequestRun(inst);
             return true;
         };
+        // 次要按钮（无特殊样式）
         auto SecondaryButton = [](const char *label, float w = 0) -> bool
         {
             return ImGui::Button(label, ImVec2(w, 0));
         };
+        // 参数标签（自动对齐到固定宽度，空间不足时换行）
         auto ParamLabel = [](const char* label, float labelW = 0.0f)
         {
             const float rowStartX = ImGui::GetCursorPosX();
@@ -4831,20 +5053,24 @@ TemplateState::ClearResults();
             : bottomActionRowsH + bottomLoopSettingsH + bottomParallelStatusH +
               bottomModeH + bottomTimeH + preflightBlockH +
               bottomSeparatorH + style.ItemSpacing.y * 5.0f + bottomPaddingH;
+        // 工具列表可滚动区域（底部预留执行按钮空间）
         ImGui::BeginChild("##ToolList", ImVec2(0, -bottomH), false,
             ImGuiWindowFlags_AlwaysVerticalScrollbar);
 
+        // ---- 空状态：无工具时显示引导提示 ----
         if (visibleToolIndices.empty())
         {
             ImVec2 avail = ImGui::GetContentRegionAvail();
             ImVec2 start = ImGui::GetCursorScreenPos();
             float cardH = (avail.y > 130.0f) ? 120.0f : avail.y;
             ImDrawList* drawList = ImGui::GetWindowDrawList();
+            // 空状态卡片背景
             ImU32 bg = ImGui::ColorConvertFloat4ToU32(isDark ? ImVec4(0.10f, 0.11f, 0.13f, 1.0f) : ImVec4(0.82f, 0.86f, 0.91f, 1.0f));
             ImU32 border = ImGui::ColorConvertFloat4ToU32(isDark ? ImVec4(0.24f, 0.27f, 0.32f, 1.0f) : ImVec4(0.62f, 0.67f, 0.74f, 1.0f));
             drawList->AddRectFilled(start, ImVec2(start.x + avail.x, start.y + cardH), bg, 6.0f);
             drawList->AddRect(start, ImVec2(start.x + avail.x, start.y + cardH), border, 6.0f);
 
+            // 三行空状态提示文字（居中）
             const char* emptyLines[] = {
                 "暂无工具",
                 "点击上方 [+ 添加工具] 组成处理链。",
@@ -4861,23 +5087,31 @@ TemplateState::ClearResults();
                 const float lineX = start.x + (std::max)(12.0f, (avail.x - textW) * 0.5f);
                 ImGui::SetCursorScreenPos(ImVec2(lineX, lineY));
                 if (line == 0)
-                    ImGui::TextDisabled("%s", emptyLines[line]);
+                    ImGui::TextDisabled("%s", emptyLines[line]);    // 第一行灰色
                 else
                     ImGui::TextUnformatted(emptyLines[line]);
                 lineY += lineH + lineGap;
             }
+
+            const float addButtonW = (std::min)(220.0f, (std::max)(150.0f, avail.x - 32.0f));
+            ImGui::SetCursorScreenPos(ImVec2(
+                start.x + (avail.x - addButtonW) * 0.5f, start.y + cardH - 40.0f));
+            if (ImGui::Button("+ 添加第一个工具", ImVec2(addButtonW, 28.0f)))
+                ImGui::OpenPopup("AddToolPopup");
         }
         else
         {
+            // 紧凑间距模式
             const float compactSpacingY = (std::max)(1.0f, style.ItemSpacing.y * 0.5f);
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
                 ImVec2(style.ItemSpacing.x, compactSpacingY));
-            int selectedForRemove = -1;
-            int moveFrom = -1;
-            int moveTo = -1;
-            static int s_scrollOpenedToolToTop = -1;
-            static int s_lastFollowedExecutionIndex = -1;
+            int selectedForRemove = -1;                  // 待删除的工具索引
+            int moveFrom = -1;                           // 拖拽排序：来源索引
+            int moveTo = -1;                             // 拖拽排序：目标索引
+            static int s_scrollOpenedToolToTop = -1;     // 滚动到展开工具的顶部
+            static int s_lastFollowedExecutionIndex = -1; // 上次跟随执行的索引
 
+            // 第一遍：计算序号和类型标签的最大宽度（用于对齐）
             float maxIndexWidth = 0.0f;
             float maxTypeWidth = 0.0f;
             for (int visiblePosition = 0;
@@ -4899,6 +5133,7 @@ TemplateState::ClearResults();
                     ImGui::CalcTextSize(typeText).x);
             }
 
+            // 卡片头部布局常量
             const float headerControlSize = ImGui::GetFrameHeight();
             const float headerHeight = headerControlSize + compactSpacingY;
             const float headerControlPad = style.FramePadding.x;
@@ -4909,12 +5144,13 @@ TemplateState::ClearResults();
             const float headerIconGap = style.ItemInnerSpacing.x;
             const float headerColumnGap = style.ItemInnerSpacing.x;
 
+            // 执行状态追踪（用于高亮当前执行的工具卡片）
             const int stepToolIndex = ToolController::GetStepToolIndex();
             const bool batchExecutionActive = !ToolController::IsRuntimeMode() &&
                 ToolController::GetMode() != ToolController::Mode::Idle;
             const int executionFollowIndex = batchExecutionActive
-                ? ToolController::GetCurrentIndex()
-                : stepToolIndex;
+                ? ToolController::GetCurrentIndex()       // 批量执行：跟随当前索引
+                : stepToolIndex;                          // 分步执行：跟随步骤索引
             if (executionFollowIndex < 0)
                 s_lastFollowedExecutionIndex = -1;
             const bool executionTargetChanged = executionFollowIndex >= 0 &&
@@ -4941,9 +5177,9 @@ TemplateState::ClearResults();
                     s_scrollOpenedToolToTop = -1;
                 }
 
-                const bool batchHl = inst == executionFollowIndex;
+                const bool batchHl = inst == executionFollowIndex;  // 批量执行高亮
 
-                // ---- 卡片头部（始终可见） ----
+                // ========== 卡片头部（始终可见）==========
                 char cardId[32];
                 snprintf(cardId, sizeof(cardId), "##toolhdr%d", inst);
 
@@ -4979,7 +5215,7 @@ TemplateState::ClearResults();
                 float childH = ImGui::GetWindowHeight();
                 const float controlY = (childH - headerControlSize) * 0.5f;
 
-                // 透明点击区避开右侧删除按钮
+                // 透明点击区（避开右侧删除按钮），点击展开/折叠工具卡片
                 ImGui::InvisibleButton(cardId,
                     ImVec2((std::max)(0.0f, childW - headerRightSlotWidth), childH));
                 const bool headerHovered = ImGui::IsItemHovered();
@@ -4990,9 +5226,10 @@ TemplateState::ClearResults();
                     if (!expanded)
                         s_scrollOpenedToolToTop = inst;
                 }
+                // 右键上下文菜单
                 if (ImGui::BeginPopupContextItem(cardId)) {
                     const int firstMovable = ToolChainState::FirstMovableIndex();
-                    const bool canMove = inst >= firstMovable;
+                    const bool canMove = inst >= firstMovable;    // 原图工具不可移动
                     const bool canMoveUp = canMove && visiblePosition > 0 &&
                         visibleToolIndices[visiblePosition - 1] >= firstMovable;
                     const bool canMoveDown = canMove &&
@@ -5360,10 +5597,9 @@ TemplateState::ClearResults();
             if (RunActionButton("全部执行", ImVec2(runW, actionButtonH),
                 runBase, runHover, runActive))
             {
-                if (ImageState::Current().empty())
-                    LogSystem::Add(LOG_WARN, "请先加载图片");
-                else
-                    ToolController::RequestRunAll(loopEnabled);
+                // 全部执行也优先请求绑定相机取帧，取帧完成后再执行完整工具链。
+                // 无相机或取帧失败时由控制器回退到已有任务图片并执行前置检查。
+                ToolController::RequestRunAll(loopEnabled, true);
             }
             ImGui::SameLine();
 
@@ -5371,10 +5607,10 @@ TemplateState::ClearResults();
             if (RunActionButton("执行当前任务", ImVec2(runW, actionButtonH),
                 runBase, runHover, runActive))
             {
-                if (ImageState::Current().empty())
-                    LogSystem::Add(LOG_WARN, "请先加载图片");
-                else
-                    ToolController::RequestRunTaskGroup(s_taskGroupToolFilter, loopEnabled);
+                // 当前任务优先请求绑定相机取帧；取帧完成后再执行任务组。
+                // 控制器负责在相机不可用时回退到任务图片并进行前置检查。
+                ToolController::RequestRunTaskGroup(
+                    s_taskGroupToolFilter, loopEnabled, true, true);
             }
             ImGui::EndDisabled();
 

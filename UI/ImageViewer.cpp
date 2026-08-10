@@ -13,6 +13,9 @@
 #include "../Core/ImageImportService.h"
 #include "../Core/ResultOverlayState.h"
 #include "../Core/ToolResultUtils.h"
+#include "../Core/ToolChainState.h"
+#include "../Core/HardwareRuntimeService.h"
+#include "../Core/RecipeAutosaveService.h"
 #include "../Core/ThemeManager.h"
 #include "../Algorithm/ITool.h"
 #include "../Log/LogSystem.h"
@@ -361,6 +364,35 @@ namespace UI
 				ImGui::TextColored(toolbarLabelColor, "%s", label);
 				ImGui::SameLine(0.0f, 6.0f);
 			};
+			auto DrawToolbarSeparator = []()
+			{
+				ImGui::SameLine(0.0f, 8.0f);
+				const ImVec2 p = ImGui::GetCursorScreenPos();
+				const ImVec4 color = ImGui::GetStyleColorVec4(ImGuiCol_Border);
+				ImGui::GetWindowDrawList()->AddLine(
+					ImVec2(p.x + 0.5f, p.y + 2.0f),
+					ImVec2(p.x + 0.5f, p.y + ImGui::GetFrameHeight() - 2.0f),
+					ImGui::ColorConvertFloat4ToU32(color));
+				ImGui::Dummy(ImVec2(1.0f, ImGui::GetFrameHeight()));
+				ImGui::SameLine(0.0f, 8.0f);
+			};
+			auto OpenSingleImage = []()
+			{
+				std::string selectedPath = OpenFileDialog();
+				if (selectedPath.empty())
+					return;
+				const ImageImportResult result = ImageImportService::ImportSingleImage(selectedPath);
+				if (result.success)
+				{
+					BindImportedImageToSelectedTask(result);
+					LogSystem::Add(LOG_INFO, kImageLogColor, "选择图片路径: %s", selectedPath.c_str());
+				}
+				else
+				{
+					LogSystem::Add(LOG_ERROR, kImageLogColor, "%s", result.message.c_str());
+					ReportImageImportError(result.message);
+				}
+			};
 
 			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 6));
 			ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 5));
@@ -382,7 +414,7 @@ namespace UI
 			ImGui::SameLine();
 			if (ImGui::Button("适合窗口"))
 				FitImageToWindow();
-			ImGui::SameLine(0.0f, 14.0f);
+			DrawToolbarSeparator();
 			ToolbarLabel("编辑");
 			if (ImGui::Button("清空ROI"))
 			{
@@ -408,7 +440,10 @@ namespace UI
 			ImGui::SameLine();
 			if (ImGui::Button("打开摄像头"))
 				FrameNavigation::OpenCameraSource(0);
-			ImGui::SameLine(0.0f, 14.0f);
+			ImGui::SameLine();
+			if (ImGui::Button("选择图片"))
+				OpenSingleImage();
+			DrawToolbarSeparator();
 			ToolbarLabel("显示");
 			if (gZoom >= 3.0f)
 			{
@@ -688,11 +723,36 @@ namespace UI
 		if (!GraphicsBackend::HasMainTexture() || ImageState::Width() <= 0 || ImageState::Height() <= 0)
 		{
 			ImVec2 avail = ImGui::GetContentRegionAvail();
-			ImVec2 textSize = ImGui::CalcTextSize("暂无图片");
-			ImGui::SetCursorPos(ImVec2(
-				(std::max)(0.0f, (avail.x - textSize.x) * 0.5f),
-				(std::max)(0.0f, (avail.y - textSize.y) * 0.5f)));
-			ImGui::TextDisabled("暂无图片");
+			const float cardW = (std::min)(420.0f, (std::max)(280.0f, avail.x - 36.0f));
+			const float cardH = 170.0f;
+			const ImVec2 cardPos(
+				ImGui::GetCursorScreenPos().x + (std::max)(0.0f, (avail.x - cardW) * 0.5f),
+				ImGui::GetCursorScreenPos().y + (std::max)(0.0f, (avail.y - cardH) * 0.5f));
+			ImDrawList* drawList = ImGui::GetWindowDrawList();
+			const bool isDark = g_CurrentTheme == 0;
+			drawList->AddRectFilled(cardPos, ImVec2(cardPos.x + cardW, cardPos.y + cardH),
+				ImGui::ColorConvertFloat4ToU32(isDark ? ImVec4(0.10f, 0.13f, 0.15f, 1.0f) : ImVec4(0.86f, 0.90f, 0.93f, 1.0f)), 10.0f);
+			drawList->AddRect(cardPos, ImVec2(cardPos.x + cardW, cardPos.y + cardH),
+				ImGui::ColorConvertFloat4ToU32(isDark ? ImVec4(0.20f, 0.42f, 0.46f, 1.0f) : ImVec4(0.43f, 0.68f, 0.72f, 1.0f)), 10.0f, 0, 1.5f);
+			ImGui::SetCursorScreenPos(ImVec2(cardPos.x, cardPos.y + 24.0f));
+			const char* title = "请加载图片或连接相机";
+			ImGui::SetCursorPosX(cardPos.x - ImGui::GetWindowPos().x + (cardW - ImGui::CalcTextSize(title).x) * 0.5f);
+			ImGui::TextColored(isDark ? ImVec4(0.55f, 0.86f, 0.88f, 1.0f) : ImVec4(0.05f, 0.43f, 0.48f, 1.0f), "%s", title);
+			const char* hint = "支持：打开视频 / 打开摄像头 / 选择图片";
+			ImGui::SetCursorPosX(cardPos.x - ImGui::GetWindowPos().x + (cardW - ImGui::CalcTextSize(hint).x) * 0.5f);
+			ImGui::TextDisabled("%s", hint);
+			ImGui::SetCursorPosX(cardPos.x - ImGui::GetWindowPos().x + (cardW - 300.0f) * 0.5f);
+			if (ImGui::Button("打开视频", ImVec2(92.0f, 0.0f)))
+			{
+				std::string path = OpenVideoDialog();
+				if (!path.empty()) FrameNavigation::OpenVideoSource(path);
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("打开摄像头", ImVec2(92.0f, 0.0f)))
+				FrameNavigation::OpenCameraSource(0);
+			ImGui::SameLine();
+			if (ImGui::Button("选择图片", ImVec2(92.0f, 0.0f)))
+				OpenSingleImage();
 		}
 
 		// 处理ROI交互 + 绘制匹配结果
@@ -768,27 +828,7 @@ namespace UI
 		ImGui::SameLine();
 
 		if (ImGui::Button("选择图片", ImVec2(buttonWidth, 0)))
-		{
-			std::string selectedPath = OpenFileDialog();
-			if (!selectedPath.empty())
-			{
-					const ImageImportResult result = ImageImportService::ImportSingleImage(selectedPath);
-					if (result.success)
-					{
-						BindImportedImageToSelectedTask(result);
-						LogSystem::Add(LOG_INFO, kImageLogColor, "选择图片路径: %s", selectedPath.c_str());
-					}
-					else
-					{
-						LogSystem::Add(LOG_ERROR, kImageLogColor, "%s", result.message.c_str());
-						ReportImageImportError(result.message);
-					}
-			}
-			else
-			{
-				LogSystem::Add(LOG_WARN, kImageLogColor, "选择图片 - 用户取消了选择或路径为空");
-			}
-		}
+			OpenSingleImage();
 
 		// ===== 右侧信息栏：尺寸 | 格式 | 像素坐标 | RGB值 =====
 		{
@@ -850,6 +890,19 @@ namespace UI
 				}
 			}
 		}
+
+		ImGui::Separator();
+		const HardwareRuntimeSnapshot hardware = HardwareRuntimeService::Snapshot();
+		const bool cameraConnected = hardware.cameraState == DeviceConnectionState::Connected;
+		const RecipeAutosaveSnapshot recipe = RecipeAutosaveService::Snapshot();
+		const char* cameraText = cameraConnected ? "已连接" : "未连接";
+		const char* imageText = ImageState::HasImage() ? "已加载" : "未加载";
+		const char* recipeText = recipe.lastError.empty() && !recipe.dirty && !recipe.pending && !recipe.saving
+			? "已保存" : recipe.lastError.empty() ? "保存中" : "保存失败";
+		ImGui::TextColored(toolbarLabelColor, "状态");
+		ImGui::SameLine();
+		ImGui::Text("相机：%s  |  图片：%s  |  工具：%zu  |  配方：%s",
+			cameraText, imageText, ToolChainState::Count(), recipeText);
 
 		ImGui::End();
 	}

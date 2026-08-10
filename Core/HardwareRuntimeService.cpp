@@ -16,6 +16,7 @@
 #include "ToolChainState.h"
 #include "VideoCapture.h"
 #include "../Log/LogSystem.h"
+#include <nlohmann/json.hpp>
 
 #include <opencv2/core/mat.hpp>
 #include <opencv2/imgproc.hpp>
@@ -79,12 +80,41 @@ struct PendingOutput
 {
     ToolResultStatus status = ToolResultStatus::Error;
     HardwareOutputBinding binding;
+    std::vector<std::string> qrSerials;
     DeviceEndpoint endpoint;
     int retryCount = 2;
     int retryDelayMs = 150;
     bool reconnectBeforeRetry = true;
     std::uint64_t sequence = 0;
 };
+
+std::vector<std::string> ExtractQrSerials(const std::vector<ToolResult>& results)
+{
+    std::vector<std::string> serials;
+    for (const ToolResult& result : results)
+    {
+        if (result.toolName.find("二维码") == std::string::npos &&
+            result.toolName.find("条码") == std::string::npos)
+            continue;
+        for (const ToolResult::TextItem& text : result.texts)
+        {
+            if (!text.text.empty())
+                serials.push_back(text.text);
+        }
+    }
+    return serials;
+}
+
+std::string BuildQrJsonPayload(ToolResultStatus status,
+    const std::vector<std::string>& serials)
+{
+    nlohmann::json payload;
+    payload["result"] = status == ToolResultStatus::Pass ? "OK" :
+        status == ToolResultStatus::Fail ? "NG" : "ERROR";
+    payload["serial"] = serials.empty() ? "" : serials.front();
+    payload["serials"] = serials;
+    return payload.dump();
+}
 
 std::thread s_outputWorker;
 std::mutex s_outputWorkerMutex;
@@ -802,7 +832,7 @@ void OutputWorkerLoop()
             for (int attempt = 0; attempt <= retries; ++attempt)
             {
                 result = HardwareRuntimeService::PublishInspectionStatus(
-                    pending.status, pending.binding);
+                    pending.status, pending.binding, pending.qrSerials);
                 if (result.success)
                     break;
                 if (attempt < retries)
@@ -1642,6 +1672,13 @@ DeviceOperationResult GrabCameraFrame(int timeoutMs, const std::string& sourceNa
 DeviceOperationResult PublishInspectionStatus(ToolResultStatus status,
     const HardwareOutputBinding& binding)
 {
+    return PublishInspectionStatus(status, binding, {});
+}
+
+DeviceOperationResult PublishInspectionStatus(ToolResultStatus status,
+    const HardwareOutputBinding& binding,
+    const std::vector<std::string>& qrSerials)
+{
     std::lock_guard<std::mutex> adapterLock(s_outputAdapterMutex);
     IDeviceAdapter* adapter = HardwareAdapterService::Find(binding.adapterKey);
     if (!adapter)
@@ -1685,7 +1722,9 @@ DeviceOperationResult PublishInspectionStatus(ToolResultStatus status,
         auto* tcpText = dynamic_cast<ITcpTextAdapter*>(adapter);
         if (!tcpText)
             return {false, "设备适配器不支持 TCP 文本发送"};
-        std::string payload = pass ? binding.passText : binding.failText;
+        std::string payload = binding.sendQrJson
+            ? BuildQrJsonPayload(status, qrSerials)
+            : (pass ? binding.passText : binding.failText);
         if (binding.appendCrLf)
             payload += "\r\n";
         return tcpText->SendText(payload);
@@ -1803,6 +1842,13 @@ ToolResultStatus AggregateInspectionStatus(const std::vector<ToolResult>& result
 
 DeviceOperationResult EnqueueConfiguredStatus(ToolResultStatus status)
 {
+    return EnqueueConfiguredResults({ToolResult{.status = status}});
+}
+
+DeviceOperationResult EnqueueConfiguredResults(const std::vector<ToolResult>& results)
+{
+    const ToolResultStatus status = AggregateInspectionStatus(results);
+    const std::vector<std::string> qrSerials = ExtractQrSerials(results);
     StartOutputWorker();
     std::lock_guard<std::mutex> lock(s_outputWorkerMutex);
     const std::size_t maximumQueue = static_cast<std::size_t>((std::max)(1,
@@ -1817,6 +1863,7 @@ DeviceOperationResult EnqueueConfiguredStatus(ToolResultStatus status)
         PendingOutput pending;
         pending.status = status;
         pending.binding = config.binding;
+        pending.qrSerials = qrSerials;
         pending.endpoint = config.endpoint;
         pending.retryCount = config.retryCount;
         pending.retryDelayMs = config.retryDelayMs;
@@ -1879,7 +1926,36 @@ DeviceOperationResult PublishConfiguredStatus(ToolResultStatus status)
 
 DeviceOperationResult PublishInspectionResults(const std::vector<ToolResult>& results)
 {
-    return PublishConfiguredStatus(AggregateInspectionStatus(results));
+    const ToolResultStatus status = AggregateInspectionStatus(results);
+    const std::vector<std::string> qrSerials = ExtractQrSerials(results);
+    std::vector<HardwareOutputBinding> bindings;
+    {
+        std::lock_guard<std::mutex> lock(s_outputWorkerMutex);
+        if (!s_outputBinding.adapterKey.empty())
+            bindings.push_back(s_outputBinding);
+        for (const HardwareOutputConnectionConfig& config : s_auxiliaryOutputConfigs)
+        {
+            if (config.enabled)
+                bindings.push_back(config.binding);
+        }
+    }
+    if (bindings.empty())
+        return {false, "没有已配置的输出通道"};
+
+    DeviceOperationResult aggregate{true, "所有输出通道发送成功"};
+    for (const HardwareOutputBinding& binding : bindings)
+    {
+        const DeviceOperationResult result = PublishInspectionStatus(
+            status, binding, qrSerials);
+        std::lock_guard<std::mutex> lock(s_outputWorkerMutex);
+        if (binding.adapterKey == s_outputAdapterKey)
+            s_lastOutputOperation = result;
+        else
+            s_auxiliaryOutputOperations[binding.adapterKey] = result;
+        if (!result.success && aggregate.success)
+            aggregate = result;
+    }
+    return aggregate;
 }
 
 bool WaitForOutputIdle(int timeoutMs)

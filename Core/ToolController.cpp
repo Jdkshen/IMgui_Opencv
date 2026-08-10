@@ -280,8 +280,7 @@ namespace ToolController
             if (tool.hasLastResult)
                 results.push_back(tool.lastResult);
         }
-        const DeviceOperationResult published = HardwareRuntimeService::EnqueueConfiguredStatus(
-            HardwareRuntimeService::AggregateInspectionStatus(results));
+        const DeviceOperationResult published = HardwareRuntimeService::EnqueueConfiguredResults(results);
         LogHardwarePublish(published, quiet);
     }
 

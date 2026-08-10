@@ -20,6 +20,7 @@
 #include <iomanip>
 #include <sstream>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace UI
@@ -89,6 +90,14 @@ namespace
     bool g_autoShow = true;
     bool g_autoShowPreferenceLoaded = false;
     std::uint64_t g_seenBatchSerial = 0;
+    enum class DashboardFilter
+    {
+        All,
+        Pass,
+        Fail,
+        Error
+    };
+    DashboardFilter g_dashboardFilter = DashboardFilter::All;
     constexpr std::size_t kMaximumGroupResultWindows =
         ToolChainState::MaximumTaskGroups();
 
@@ -298,6 +307,32 @@ namespace
                 << result.debugImage.rows << "｜通道 " << result.debugImage.channels();
         }
         return details.str();
+    }
+
+    bool DashboardFilterMatches(DashboardFilter filter, ToolResultStatus status)
+    {
+        switch (filter)
+        {
+        case DashboardFilter::Pass: return status == ToolResultStatus::Pass;
+        case DashboardFilter::Fail: return status == ToolResultStatus::Fail;
+        case DashboardFilter::Error: return status == ToolResultStatus::Error;
+        case DashboardFilter::All:
+        default: return true;
+        }
+    }
+
+    std::string SnapshotFailureReason(const RunResultSnapshot& snapshot)
+    {
+        for (const RunResultRow& row : snapshot.rows)
+        {
+            if (row.status == ToolResultStatus::Fail ||
+                row.status == ToolResultStatus::Error)
+            {
+                if (!row.summary.empty())
+                    return row.name + "：" + row.summary;
+            }
+        }
+        return {};
     }
 
     RunResultSnapshot BuildSnapshot(const std::string* groupFilter = nullptr)
@@ -542,7 +577,8 @@ namespace
             text);
     }
 
-    void DrawResultImageThumbnail(float height, const RunResultSnapshot& snapshot);
+    void DrawResultImageThumbnail(float height, const RunResultSnapshot& snapshot,
+        bool* doubleClicked = nullptr);
 
     PreviewTextureView GetSnapshotTexture(const RunResultSnapshot& snapshot,
         int maxDimension)
@@ -620,6 +656,23 @@ namespace
                     bannerMin.y + 48.0f),
                 IM_COL32(255, 255, 255, 225), description);
 
+            const std::string reason = SnapshotFailureReason(snapshot);
+            ImGui::BeginChild("##task_failure_reason", ImVec2(0.0f, 22.0f),
+                ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+            if (!reason.empty())
+            {
+                const std::string displayReason = reason.size() > 56
+                    ? reason.substr(0, 53) + "..." : reason;
+                ImGui::TextColored(StatusTextColor(snapshot.overallStatus, isDark),
+                    "原因：%s", displayReason.c_str());
+                ImGui::SetItemTooltip("%s", reason.c_str());
+            }
+            else
+            {
+                ImGui::TextDisabled(" ");
+            }
+            ImGui::EndChild();
+
             char totalText[16]{};
             char passText[16]{};
             char issueText[16]{};
@@ -644,7 +697,16 @@ namespace
             // 总览卡始终显示自己的运行图像，不复用详情页的图像/结果切换状态。
             const float previewHeight = ImGui::GetContentRegionAvail().y;
             if (previewHeight > 1.0f)
-                DrawResultImageThumbnail(previewHeight, snapshot);
+            {
+                bool imageDoubleClicked = false;
+                DrawResultImageThumbnail(previewHeight, snapshot, &imageDoubleClicked);
+                if (imageDoubleClicked)
+                {
+                    g_expandedGroupId = groupWindow.id;
+                    g_groupDashboardView.maximized = true;
+                    openDetail = true;
+                }
+            }
         }
         ImGui::EndChild();
         ImGui::PopStyleColor();
@@ -798,7 +860,8 @@ namespace
     }
 
     void DrawResultImageOverlays(const RunResultSnapshot& snapshot,
-        const ImVec2& imageMin, const ImVec2& imageMax, float scale)
+        const ImVec2& imageMin, const ImVec2& imageMax, float scale,
+        bool allowLabels)
     {
         if (snapshot.overlayResults.empty())
             return;
@@ -813,6 +876,14 @@ namespace
         int labelCount = 0;
         const int maximumLabels = ResultOverlayState::MaxVisibleLabels();
         std::vector<RunResultLayout::Rect> occupiedLabels;
+        std::unordered_set<std::string> drawnLabelTexts;
+        auto CanDrawLabel = [&labelCount, maximumLabels, &drawnLabelTexts](const std::string& text)
+        {
+            if (labelCount >= maximumLabels || !drawnLabelTexts.insert(text).second)
+                return false;
+            ++labelCount;
+            return true;
+        };
         drawList->PushClipRect(imageMin, imageMax, true);
         for (std::size_t resultIndex = 0;
             resultIndex < snapshot.overlayResults.size(); ++resultIndex)
@@ -821,7 +892,8 @@ namespace
             if (result.skipped)
                 continue;
             const ImU32 color = ResultOverlayColor(result, resultIndex);
-            const bool showLabels = ResultOverlayState::ShouldDrawResultLabels(result) &&
+            const bool showLabels = allowLabels &&
+                ResultOverlayState::ShouldDrawResultLabels(result) &&
                 maximumLabels > 0;
             const bool showDetectionLabels = showLabels && result.texts.empty();
             const bool showRegionLabels = showLabels && result.texts.empty() &&
@@ -835,7 +907,7 @@ namespace
                     static_cast<float>(detection.box.x + detection.box.width),
                     static_cast<float>(detection.box.y + detection.box.height));
                 drawList->AddRect(boxMin, boxMax, color, 2.0f, 0, thickness);
-                if (showDetectionLabels && labelCount++ < maximumLabels)
+                if (showDetectionLabels)
                 {
                     char label[192]{};
                     const char* name = detection.label.empty()
@@ -847,8 +919,9 @@ namespace
                             displayName.c_str(), detection.score);
                     else
                         std::snprintf(label, sizeof(label), "%s", displayName.c_str());
-                    DrawOverlayLabel(drawList, boxMin, label, color,
-                        imageMin, imageMax, occupiedLabels);
+                    if (CanDrawLabel(label))
+                        DrawOverlayLabel(drawList, boxMin, label, color,
+                            imageMin, imageMax, occupiedLabels);
                 }
             }
 
@@ -874,7 +947,8 @@ namespace
                 // to the most informative type only: text, detection, then region.
                 if (showRegionLabels &&
                     ResultOverlayState::ShouldDrawRegionLabel(result, region.label) &&
-                    labelCount++ < maximumLabels)
+                    CanDrawLabel(region.label.empty()
+                        ? result.toolName : region.label))
                 {
                     char label[192]{};
                     const char* name = region.label.empty()
@@ -899,7 +973,7 @@ namespace
                     static_cast<float>(text.box.x + text.box.width),
                     static_cast<float>(text.box.y + text.box.height));
                 drawList->AddRect(boxMin, boxMax, color, 2.0f, 0, thickness);
-                if (showLabels && labelCount++ < maximumLabels)
+                if (showLabels)
                 {
                     char label[256]{};
                     const char* recognized = text.text.empty()
@@ -911,8 +985,9 @@ namespace
                             displayText.c_str(), text.confidence);
                     else
                         std::snprintf(label, sizeof(label), "%s", displayText.c_str());
-                    DrawOverlayLabel(drawList, boxMin, label, color,
-                        imageMin, imageMax, occupiedLabels);
+                    if (CanDrawLabel(label))
+                        DrawOverlayLabel(drawList, boxMin, label, color,
+                            imageMin, imageMax, occupiedLabels);
                 }
             }
 
@@ -923,20 +998,24 @@ namespace
                 const ImVec2 p1 = ToScreen(static_cast<float>(line.p1.x), static_cast<float>(line.p1.y));
                 const ImVec2 p2 = ToScreen(static_cast<float>(line.p2.x), static_cast<float>(line.p2.y));
                 drawList->AddLine(p1, p2, color, thickness);
-                if (showLabels && !lineLabelDrawn && labelCount++ < maximumLabels)
+                if (showLabels && !lineLabelDrawn)
                 {
                     const std::string lineLabel =
                         BuildToolResultLineOverlayLabel(result);
-                    DrawOverlayLabel(drawList, p1, lineLabel.c_str(),
-                        color, imageMin, imageMax, occupiedLabels);
-                    lineLabelDrawn = true;
+                    if (CanDrawLabel(lineLabel))
+                    {
+                        DrawOverlayLabel(drawList, p1, lineLabel.c_str(),
+                            color, imageMin, imageMax, occupiedLabels);
+                        lineLabelDrawn = true;
+                    }
                 }
             }
         }
         drawList->PopClipRect();
     }
 
-    void DrawResultImageThumbnail(float height, const RunResultSnapshot& snapshot)
+    void DrawResultImageThumbnail(float height, const RunResultSnapshot& snapshot,
+        bool* doubleClicked)
     {
         const PreviewTextureView texture = GetSnapshotTexture(snapshot, 1024);
         const bool imageReady = texture.ready && texture.textureId != ImTextureID_Invalid &&
@@ -953,6 +1032,9 @@ namespace
         const ImVec2 canvasMin = ImGui::GetCursorScreenPos();
         const ImVec2 canvasSize = ImGui::GetContentRegionAvail();
         ImGui::InvisibleButton("##task_result_thumbnail_canvas", canvasSize);
+        if (doubleClicked && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
+            ImGui::IsItemHovered())
+            *doubleClicked = true;
         const ImVec2 canvasMax(canvasMin.x + canvasSize.x, canvasMin.y + canvasSize.y);
         ImDrawList* drawList = ImGui::GetWindowDrawList();
 
@@ -975,7 +1057,7 @@ namespace
                     g_CurrentTheme == 0 ? ImVec4(0.30f, 0.34f, 0.38f, 1.0f)
                                         : ImVec4(0.58f, 0.64f, 0.68f, 1.0f)),
                 3.0f, 0, 1.0f);
-            DrawResultImageOverlays(snapshot, imageMin, imageMax, scale);
+            DrawResultImageOverlays(snapshot, imageMin, imageMax, scale, false);
             drawList->PopClipRect();
         }
         else
@@ -1140,7 +1222,7 @@ namespace
                     g_CurrentTheme == 0 ? ImVec4(0.30f, 0.34f, 0.38f, 1.0f)
                                         : ImVec4(0.58f, 0.64f, 0.68f, 1.0f)),
                 4.0f, 0, 1.0f);
-            DrawResultImageOverlays(snapshot, imageMin, imageMax, scale);
+            DrawResultImageOverlays(snapshot, imageMin, imageMax, scale, true);
             drawList->PopClipRect();
         }
         else
@@ -1412,6 +1494,71 @@ namespace
         }
         ImGui::Separator();
 
+        int passTasks = 0;
+        int failTasks = 0;
+        int errorTasks = 0;
+        for (const std::string& groupName : currentGroups)
+        {
+            const auto it = std::find_if(g_groupWindows.begin(), g_groupWindows.end(),
+                [&groupName](const GroupResultWindow& window)
+                {
+                    return window.groupName == groupName && window.snapshot.valid;
+                });
+            if (it == g_groupWindows.end())
+                continue;
+            if (it->snapshot.overallStatus == ToolResultStatus::Pass)
+                ++passTasks;
+            else if (it->snapshot.overallStatus == ToolResultStatus::Fail)
+                ++failTasks;
+            else
+                ++errorTasks;
+        }
+        auto DrawFilterButton = [](const char* label, DashboardFilter filter)
+        {
+            const bool selected = g_dashboardFilter == filter;
+            if (selected)
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                    g_CurrentTheme == 0 ? ImVec4(0.08f, 0.42f, 0.48f, 1.0f)
+                                        : ImVec4(0.12f, 0.52f, 0.58f, 1.0f));
+            if (ImGui::SmallButton(label))
+                g_dashboardFilter = filter;
+            if (selected)
+                ImGui::PopStyleColor();
+            ImGui::SameLine(0.0f, 4.0f);
+        };
+        if (ImGui::BeginTable("##dashboard_summary_bar", 2,
+            ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody))
+        {
+            ImGui::TableSetupColumn("##dashboard_stats", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("##dashboard_filters", ImGuiTableColumnFlags_WidthFixed, 250.0f);
+            ImGui::TableNextColumn();
+            ImGui::TextColored(StatusTextColor(ToolResultStatus::Pass, g_CurrentTheme == 0),
+                "总任务 %zu", currentGroups.size());
+            ImGui::SameLine(0.0f, 14.0f);
+            ImGui::TextColored(StatusTextColor(ToolResultStatus::Pass, g_CurrentTheme == 0),
+                "OK %d", passTasks);
+            ImGui::SameLine(0.0f, 14.0f);
+            ImGui::TextColored(StatusTextColor(ToolResultStatus::Fail, g_CurrentTheme == 0),
+                "NG %d", failTasks);
+            ImGui::SameLine(0.0f, 14.0f);
+            ImGui::TextColored(StatusTextColor(ToolResultStatus::Error, g_CurrentTheme == 0),
+                "异常 %d", errorTasks);
+            if (g_snapshot.valid && !ToolController::WasLastRunTaskGroup())
+            {
+                ImGui::SameLine(0.0f, 14.0f);
+                ImGui::TextDisabled("总耗时 %s",
+                    RunResultLayout::FormatDuration(g_snapshot.totalTimeMs).c_str());
+            }
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("筛选");
+            ImGui::SameLine(0.0f, 5.0f);
+            DrawFilterButton("全部", DashboardFilter::All);
+            DrawFilterButton("OK", DashboardFilter::Pass);
+            DrawFilterButton("NG", DashboardFilter::Fail);
+            DrawFilterButton("异常", DashboardFilter::Error);
+            ImGui::EndTable();
+        }
+
         if (expandedGroup)
         {
             if (DrawExpandedGroupContent(*expandedGroup))
@@ -1430,11 +1577,14 @@ namespace
                 {
                     return window.groupName == groupName;
                 });
-            if (groupWindow != g_groupWindows.end() && groupWindow->snapshot.valid)
+            if (groupWindow != g_groupWindows.end() && groupWindow->snapshot.valid &&
+                DashboardFilterMatches(g_dashboardFilter,
+                    groupWindow->snapshot.overallStatus))
                 visibleGroups.push_back(&*groupWindow);
         }
 
-        const float footerHeight = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.y;
+        const float footerHeight = ImGui::GetFrameHeight() +
+            ImGui::GetStyle().ItemSpacing.y;
         const float gridHeight = (std::max)(220.0f,
             ImGui::GetContentRegionAvail().y - footerHeight);
         if (ImGui::BeginChild("##task_dashboard_grid", ImVec2(0.0f, gridHeight),

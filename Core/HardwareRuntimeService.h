@@ -25,6 +25,7 @@ struct HardwareOutputBinding
     bool invert = false;
     std::string passText = "PASS";
     std::string failText = "FAIL";
+    bool sendQrJson = false;
     bool appendCrLf = true;
 };
 
@@ -217,6 +218,9 @@ namespace HardwareRuntimeService
 
     DeviceOperationResult PublishInspectionStatus(ToolResultStatus status,
         const HardwareOutputBinding& binding);
+    DeviceOperationResult PublishInspectionStatus(ToolResultStatus status,
+        const HardwareOutputBinding& binding,
+        const std::vector<std::string>& qrSerials);
     DeviceOperationResult TestIoMapping(std::size_t mappingIndex, bool active);
     DeviceOperationResult RequestHandshakeTest(ToolResultStatus status = ToolResultStatus::Pass);
     DeviceOperationResult RequestTaskInspection(const std::string& taskGroupName,
@@ -224,6 +228,7 @@ namespace HardwareRuntimeService
 
     ToolResultStatus AggregateInspectionStatus(const std::vector<ToolResult>& results);
     DeviceOperationResult EnqueueConfiguredStatus(ToolResultStatus status);
+    DeviceOperationResult EnqueueConfiguredResults(const std::vector<ToolResult>& results);
     DeviceOperationResult PublishConfiguredStatus(ToolResultStatus status);
     DeviceOperationResult PublishInspectionResults(const std::vector<ToolResult>& results);
     bool WaitForOutputIdle(int timeoutMs = 3000);

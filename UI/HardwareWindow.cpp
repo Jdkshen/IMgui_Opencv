@@ -157,6 +157,7 @@ struct AuxiliaryOutputUiState
     bool plcHoldingRegister = false;
     char passText[128] = "PASS";
     char failText[128] = "FAIL";
+    bool sendQrJson = false;
     bool appendCrLf = true;
     bool invert = false;
     bool autoPublish = true;
@@ -187,6 +188,7 @@ void LoadAuxiliaryOutputUi(AuxiliaryOutputUiState& target,
         source.binding.passText.c_str());
     std::snprintf(target.failText, sizeof(target.failText), "%s",
         source.binding.failText.c_str());
+    target.sendQrJson = source.binding.sendQrJson;
     target.appendCrLf = source.binding.appendCrLf;
     target.invert = source.binding.invert;
     target.autoPublish = source.autoPublish;
@@ -212,6 +214,7 @@ HardwareOutputConnectionConfig BuildAuxiliaryOutputConfig(
     config.binding.address = ClampAddress(source.mappingAddress);
     config.binding.passText = source.passText;
     config.binding.failText = source.failText;
+    config.binding.sendQrJson = source.sendQrJson;
     config.binding.appendCrLf = source.appendCrLf;
     config.binding.invert = source.invert;
     config.plcUseHoldingRegister = source.plcHoldingRegister;
@@ -411,6 +414,7 @@ void DrawHardwarePanel(int page)
     static bool plcHoldingRegister = false;
     static char tcpPassText[128] = "PASS";
     static char tcpFailText[128] = "FAIL";
+    static bool tcpSendQrJson = false;
     static bool tcpAppendCrLf = true;
     static bool outputInvert = false;
     static bool outputAutoPublish = false;
@@ -481,6 +485,7 @@ void DrawHardwarePanel(int page)
         plcHoldingRegister = settings.plcHoldingRegister;
         std::snprintf(tcpPassText, sizeof(tcpPassText), "%s", settings.tcpPassText.c_str());
         std::snprintf(tcpFailText, sizeof(tcpFailText), "%s", settings.tcpFailText.c_str());
+        tcpSendQrJson = settings.tcpSendQrJson;
         tcpAppendCrLf = settings.tcpAppendCrLf;
         outputInvert = settings.outputInvert;
         outputAutoPublish = settings.outputAutoPublish;
@@ -1174,10 +1179,16 @@ void DrawHardwarePanel(int page)
 
         if (outputType == 3)
         {
+            hardwareSettingsChanged |= ImGui::Checkbox(
+                "发送二维码序列号 JSON##tcp_qr_json", &tcpSendQrJson);
+            ImGui::SetItemTooltip(
+                "发送 {result, serial, serials} JSON；序列号来自二维码/条码识别工具");
             PropertyRow("Pass 文本");
+            ImGui::BeginDisabled(tcpSendQrJson);
             hardwareSettingsChanged |= ImGui::InputText("##tcp_pass_text", tcpPassText, sizeof(tcpPassText));
             PropertyRow("Fail 文本");
             hardwareSettingsChanged |= ImGui::InputText("##tcp_fail_text", tcpFailText, sizeof(tcpFailText));
+            ImGui::EndDisabled();
         }
 
         PropertyRow("输出选项");
@@ -1333,12 +1344,18 @@ void DrawHardwarePanel(int page)
         }
         if (auxiliary.type == 3)
         {
+            hardwareSettingsChanged |= ImGui::Checkbox(
+                "发送二维码序列号 JSON##aux_qr_json", &auxiliary.sendQrJson);
+            ImGui::SetItemTooltip(
+                "发送 {result, serial, serials} JSON；序列号来自二维码/条码识别工具");
             PropertyRow("Pass 文本");
+            ImGui::BeginDisabled(auxiliary.sendQrJson);
             hardwareSettingsChanged |= ImGui::InputText(
                 "##aux_pass", auxiliary.passText, sizeof(auxiliary.passText));
             PropertyRow("Fail 文本");
             hardwareSettingsChanged |= ImGui::InputText(
                 "##aux_fail", auxiliary.failText, sizeof(auxiliary.failText));
+            ImGui::EndDisabled();
         }
 
         PropertyRow("连接超时");
@@ -1737,6 +1754,7 @@ void DrawHardwarePanel(int page)
         config.binding.invert = outputInvert;
         config.binding.passText = tcpPassText;
         config.binding.failText = tcpFailText;
+        config.binding.sendQrJson = tcpSendQrJson;
         config.binding.appendCrLf = tcpAppendCrLf;
         config.plcUseHoldingRegister = plcHoldingRegister;
         config.autoPublish = outputAutoPublish;
@@ -1822,6 +1840,7 @@ void DrawHardwarePanel(int page)
         settings.plcHoldingRegister = plcHoldingRegister;
         settings.tcpPassText = tcpPassText;
         settings.tcpFailText = tcpFailText;
+        settings.tcpSendQrJson = tcpSendQrJson;
         settings.tcpAppendCrLf = tcpAppendCrLf;
         settings.outputInvert = outputInvert;
         settings.outputAutoPublish = outputAutoPublish;

@@ -558,6 +558,7 @@ HardwarePanelSettings Load(const std::string& path)
                     "plcHoldingRegister", config.plcUseHoldingRegister);
                 config.binding.passText = item.value("passText", config.binding.passText);
                 config.binding.failText = item.value("failText", config.binding.failText);
+                config.binding.sendQrJson = item.value("sendQrJson", config.binding.sendQrJson);
                 config.binding.appendCrLf = item.value(
                     "appendCrLf", config.binding.appendCrLf);
                 config.binding.invert = item.value("invert", config.binding.invert);
@@ -583,6 +584,7 @@ HardwarePanelSettings Load(const std::string& path)
         settings.plcHoldingRegister = output.value("plcHoldingRegister", settings.plcHoldingRegister);
         settings.tcpPassText = output.value("passText", settings.tcpPassText);
         settings.tcpFailText = output.value("failText", settings.tcpFailText);
+        settings.tcpSendQrJson = output.value("sendQrJson", settings.tcpSendQrJson);
         settings.tcpAppendCrLf = output.value("appendCrLf", settings.tcpAppendCrLf);
         settings.outputInvert = output.value("invert", settings.outputInvert);
         settings.outputAutoPublish = output.value("autoPublish", settings.outputAutoPublish);
@@ -719,6 +721,7 @@ bool Save(const HardwarePanelSettings& source, const std::string& path, std::str
                         {"plcHoldingRegister", config.plcUseHoldingRegister},
                         {"passText", config.binding.passText},
                         {"failText", config.binding.failText},
+                        {"sendQrJson", config.binding.sendQrJson},
                         {"appendCrLf", config.binding.appendCrLf},
                         {"invert", config.binding.invert},
                         {"autoPublish", config.autoPublish},
@@ -742,6 +745,7 @@ bool Save(const HardwarePanelSettings& source, const std::string& path, std::str
                 {"plcHoldingRegister", settings.plcHoldingRegister},
                 {"passText", settings.tcpPassText},
                 {"failText", settings.tcpFailText},
+                {"sendQrJson", settings.tcpSendQrJson},
                 {"appendCrLf", settings.tcpAppendCrLf},
                 {"invert", settings.outputInvert},
                 {"autoPublish", settings.outputAutoPublish},
