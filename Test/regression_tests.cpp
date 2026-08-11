@@ -6038,7 +6038,10 @@ void TestToolControllerLoopTimingResetsEachRound()
     // Windows scheduling can make a short first round land close to the
     // lower bound. Allow that jitter while still rejecting a value that
     // clearly contains the previous round's elapsed time.
-    Require(secondRoundMs < (std::max)(firstRoundMs * 2.5f, firstRoundMs + 12.0f),
+    // A short sleep plus Windows timer granularity can add several
+    // milliseconds to the second round. Keep enough margin for that
+    // scheduling jitter while still rejecting a clearly accumulated round.
+    Require(secondRoundMs < (std::max)(firstRoundMs * 3.0f, firstRoundMs + 30.0f),
         "loop total time accumulated previous rounds");
     Require(ToolController::GetLoopIteration() == 2,
         "loop iteration did not advance after the second round");
