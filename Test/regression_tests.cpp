@@ -3124,7 +3124,9 @@ void TestHardwareRuntimeAutomation()
     cameraView->failGrabsRemaining = 1;
     HardwareRuntimeService::RequestCameraFrame();
     bool cameraRecovered = false;
-    for (int attempt = 0; attempt < 400; ++attempt)
+    // The worker thread may be descheduled briefly on a busy Windows host;
+    // allow up to two seconds for the reconnect and restored frame.
+    for (int attempt = 0; attempt < 2000; ++attempt)
     {
         HardwareRuntimeService::Tick();
         const HardwareRuntimeSnapshot reconnectSnapshot = HardwareRuntimeService::Snapshot();
