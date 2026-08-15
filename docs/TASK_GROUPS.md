@@ -1,6 +1,6 @@
 # 任务分组与执行说明
 
-> 文档同步日期：2026-08-09。本文对应 `ToolChainState`、`ToolController`、`ToolsWindow`、`RunResultWindow` 和 `RecipeManager` 的当前实现；PLC 指定任务触发另见 [HARDWARE_INTEGRATION.md](HARDWARE_INTEGRATION.md)。
+> 文档同步日期：2026-08-16。本文对应当前任务分组和执行实现；任务按绑定相机槽取帧见 [MULTI_CAMERA.md](MULTI_CAMERA.md)，PLC 指定任务触发见 [HARDWARE_INTEGRATION.md](HARDWARE_INTEGRATION.md)。
 
 ## 1. 任务分组
 

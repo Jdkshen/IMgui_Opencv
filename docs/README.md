@@ -1,13 +1,13 @@
 # 项目文档索引
 
-> 文档同步日期：2026-08-09。这里用于区分当前使用说明、开发规范、状态快照和历史设计稿。
+> 文档同步日期：2026-08-16。这里用于区分当前使用说明、开发规范、状态快照和历史设计稿；正式运行包统一为一个固定名称。
 
 ## 建议阅读顺序
 
 1. [根目录 README](../README.md)：项目能力、工具列表和快速入口。
 2. [任务分组与执行](TASK_GROUPS.md)：任务管理、独立输入、相机优先、单步、并行和结果总览。
 3. [硬件接入](HARDWARE_INTEGRATION.md)：工业相机、16 任务 PLC Trigger、Busy/Done/ACK 时序和模拟器。
-4. [当前项目状态](STATUS_2026-08-09.md)：最新构建、回归、发布包和未闭环验收项。
+4. [当前项目状态](STATUS_2026-08-16.md)：最新构建、回归、唯一发布包和未闭环验收项。
 5. [界面整理与发布资源状态](STATUS_2026-08-02.md)：独立流程图窗口、工具对齐和图标复制。
 6. [工具链统一检查状态](STATUS_2026-08-05.md)：输入、ROI、上下游结果和输出显示。
 7. [双图形后端状态](STATUS_2026-07-30.md)：DX12 优先、DX11 回退、统一接口和验证结果。
@@ -25,6 +25,7 @@
 | [HARDWARE_INTEGRATION.md](HARDWARE_INTEGRATION.md) | 相机、TCP、Modbus、PLC 和 OPC UA 接入 |
 | [PLC 模拟器](../tools/plc_simulator/README.md) | 无真实 PLC 时测试独立任务拍照和整套握手 |
 | [VIDEO_AUDIO.md](VIDEO_AUDIO.md) | 视频与音频播放模块及当前接入边界 |
+| [MULTI_CAMERA.md](MULTI_CAMERA.md) | 16 个独立相机槽、任务取帧和在线状态说明 |
 | [OPENCV5_EXPERIMENT.md](OPENCV5_EXPERIMENT.md) | OpenCV 5 DNN 实验工具和 helper |
 | [recipe_examples/README.md](recipe_examples/README.md) | 可运行案例配方说明 |
 | [多任务中文案例](recipe_examples/task_series/README.md) | 2、4、6、8、10、12、16 任务完整案例、共用配图和逐项解析 |
@@ -55,7 +56,8 @@
 ## 状态快照与历史资料
 
 - [STATUS_2026-08-02.md](STATUS_2026-08-02.md)：独立流程图窗口、任务/工具布局、字体/图标资源、代码清理和标准 Release 构建快照。
-- [STATUS_2026-08-09.md](STATUS_2026-08-09.md)：当前构建、回归、运行包、UI 冒烟、稳定性和硬件验收总状态。
+- [STATUS_2026-08-16.md](STATUS_2026-08-16.md)：当前构建、回归、唯一运行包、视频 YOLO、多相机、高 DPI 和未闭环验收总状态。
+- [STATUS_2026-08-09.md](STATUS_2026-08-09.md)：上一轮工具链与发布准备状态，现作为历史快照保留。
 - [STATUS_2026-08-05.md](STATUS_2026-08-05.md)：工具输入、ROI、上下游结果、输出显示和运行包收尾验证。
 - [STATUS_2026-07-30.md](STATUS_2026-07-30.md)：DX12 优先、DX11 自动回退、公共渲染接口、双配置构建、双后端冒烟和发布包快照。
 - [STATUS_2026-07-28.md](STATUS_2026-07-28.md)：PLC 单槽收敛、ACK 超时复位、Trigger 映射同步及本轮干净构建与回归快照。

@@ -15,6 +15,7 @@
 #include "../Core/ResultExporter.h"
 #include "../Core/ToolChainState.h"
 #include "../Core/ToolController.h"
+#include "../Core/AppRuntimeState.h"
 #include "../Log/LogSystem.h"
 #include "../include/imgui/imgui_internal.h"
 #include <shellapi.h>
@@ -94,8 +95,14 @@ bool g_ShowHardware = false;
 
 namespace UI
 {
-    static char g_CurrentRecipeName[64] = "默认配方";
     static bool g_ResetDockLayout = false;
+
+    void RequestDockLayoutReset()
+    {
+        g_ResetDockLayout = true;
+    }
+
+    static char g_CurrentRecipeName[64] = "默认配方";
     static bool g_OpenRenameRecipePopup = false;
     static char g_RenameRecipeName[64] = "";
     static bool g_AutoRunAfterRecipeLoad = false;
@@ -747,9 +754,13 @@ TemplateState::ClearResults();
 
             ImGuiID top, main, left, right, bottom;
 
-            float leftPixels = ClampFloat(dockSize.x * 0.18f, 300.0f, 360.0f);
-            float rightPixels = ClampFloat(dockSize.x * 0.28f, 360.0f, 460.0f);
-            float bottomPixels = ClampFloat(dockSize.y * 0.18f, 145.0f, 205.0f);
+            const float dpiScale = AppRuntimeState::DpiScale();
+            float leftPixels = ClampFloat(
+                dockSize.x * 0.18f, 300.0f * dpiScale, 360.0f * dpiScale);
+            float rightPixels = ClampFloat(
+                dockSize.x * 0.28f, 360.0f * dpiScale, 460.0f * dpiScale);
+            float bottomPixels = ClampFloat(
+                dockSize.y * 0.18f, 145.0f * dpiScale, 205.0f * dpiScale);
 
             // 底部日志/统计先横贯全宽，再在上方切左/中/右。
             // 这样全屏时不会出现左右栏一直空到底的竖条。

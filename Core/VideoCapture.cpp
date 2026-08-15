@@ -31,6 +31,7 @@ namespace VideoCapture
     static int s_FrameCount = 0;
     static int s_CurrentFrame = 0;
     static double s_FPS = 30.0;
+    static std::uint64_t s_SourceGeneration = 0;
 
     // 播放计时
     static std::chrono::steady_clock::time_point s_LastFrameTime;
@@ -121,6 +122,7 @@ namespace VideoCapture
             s_FPS = 30.0;
         s_CurrentFrame = 0;
         s_Loop = false;
+        ++s_SourceGeneration;
 
         LogSystem::Add(LOG_INFO, "视频已打开: %d帧, %.1ffps", s_FrameCount, s_FPS);
 
@@ -128,7 +130,7 @@ namespace VideoCapture
         ReadFrame();
         FrameNavigation::FitImageToWindow();
         ROIState::ClearInteraction();
-TemplateState::ClearResults();
+        TemplateState::ClearResults();
 
         // 打开音频流（如果有的话）
         AudioPlayer::Open(path);
@@ -156,13 +158,14 @@ TemplateState::ClearResults();
         s_FPS = 30.0;
         s_CurrentFrame = 0;
         s_Loop = false;
+        ++s_SourceGeneration;
 
         LogSystem::Add(LOG_INFO, "摄像头 #%d 已打开", index);
 
         ReadFrame();
         FrameNavigation::FitImageToWindow();
         ROIState::ClearInteraction();
-TemplateState::ClearResults();
+        TemplateState::ClearResults();
         Play(); // 摄像头自动开始播放
 
         return true;
@@ -172,6 +175,7 @@ TemplateState::ClearResults();
     {
         if (s_Open)
         {
+            ++s_SourceGeneration;
             Pause();
             AudioPlayer::Close();
             s_Cap.release();
@@ -202,6 +206,7 @@ TemplateState::ClearResults();
     bool IsOpen() { return s_Open; }
     bool IsPlaying() { return s_Playing; }
     bool IsCamera() { return s_IsCamera; }
+    std::uint64_t SourceGeneration() { return s_SourceGeneration; }
 
     void Play()
     {

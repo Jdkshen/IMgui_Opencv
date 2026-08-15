@@ -1,4 +1,6 @@
 #pragma once
+
+#include <cstdint>
 #include <string>
 
 namespace VideoCapture
@@ -16,6 +18,10 @@ namespace VideoCapture
     bool IsOpen();
     bool IsPlaying();
     bool IsCamera();
+    // Changes whenever the active video/camera source is closed or replaced.
+    // Async tools use this to distinguish normal frame advance from a real
+    // input-source change.
+    std::uint64_t SourceGeneration();
 
     // 播放控制
     void Play();

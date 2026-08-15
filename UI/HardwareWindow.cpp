@@ -518,7 +518,24 @@ void DrawHardwarePanel(int page)
     }
 
     HardwareRuntimeSnapshot snapshot = HardwareRuntimeService::Snapshot();
-    connectedCameraIndex = snapshot.cameraSlotIndex;
+    connectedCameraIndex = -1;
+    auto cameraSlotSnapshot = [&snapshot](int index)
+        -> const HardwareCameraSlotSnapshot*
+    {
+        const auto found = std::find_if(snapshot.cameraSlots.begin(),
+            snapshot.cameraSlots.end(),
+            [index](const HardwareCameraSlotSnapshot& item)
+            {
+                return item.slotIndex == index;
+            });
+        return found == snapshot.cameraSlots.end() ? nullptr : &*found;
+    };
+    if (const HardwareCameraSlotSnapshot* selectedSlot =
+        cameraSlotSnapshot(snapshot.cameraSlotIndex))
+    {
+        if (selectedSlot->state == DeviceConnectionState::Connected)
+            connectedCameraIndex = snapshot.cameraSlotIndex;
+    }
     bool hardwareSettingsChanged = false;
     CameraUiState& selectedCamera = cameraStates[static_cast<std::size_t>(selectedCameraIndex)];
     auto& cameraAddress = selectedCamera.address;
@@ -574,8 +591,6 @@ void DrawHardwarePanel(int page)
 
     if (showCamera)
     {
-    if (snapshot.cameraState != DeviceConnectionState::Connected)
-        connectedCameraIndex = -1;
     DrawSectionTitle("16 路工业相机");
     const ImVec4 selectedSlotColor = g_CurrentTheme == 0
         ? ImVec4(0.08f, 0.40f, 0.46f, 1.0f)
@@ -588,6 +603,10 @@ void DrawHardwarePanel(int page)
             ImGui::TableNextColumn();
             ImGui::PushID(index);
             const bool selected = selectedCameraIndex == index;
+            const HardwareCameraSlotSnapshot* slotSnapshot =
+                cameraSlotSnapshot(index);
+            const bool slotOnline = slotSnapshot &&
+                slotSnapshot->state == DeviceConnectionState::Connected;
             if (selected)
             {
                 ImGui::PushStyleColor(ImGuiCol_Button, selectedSlotColor);
@@ -596,7 +615,7 @@ void DrawHardwarePanel(int page)
             }
             char label[32];
             std::snprintf(label, sizeof(label), "相机 %02d%s", index + 1,
-                connectedCameraIndex == index ? " · 在线" : "");
+                slotOnline ? " · 在线" : "");
             if (ImGui::Button(label, ImVec2(-1.0f, 30.0f)))
             {
                 selectedCameraIndex = index;
@@ -609,9 +628,10 @@ void DrawHardwarePanel(int page)
         ImGui::EndTable();
     }
 
-    const bool cameraConnected =
-        snapshot.cameraState == DeviceConnectionState::Connected &&
-        connectedCameraIndex == selectedCameraIndex;
+    const HardwareCameraSlotSnapshot* selectedSlotSnapshot =
+        cameraSlotSnapshot(selectedCameraIndex);
+    const bool cameraConnected = selectedSlotSnapshot &&
+        selectedSlotSnapshot->state == DeviceConnectionState::Connected;
     ImGui::Text("当前配置：相机 %02d", selectedCameraIndex + 1);
     ImGui::SameLine();
     ImGui::TextColored(ConnectionStateColor(cameraConnected

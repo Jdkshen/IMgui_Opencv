@@ -1,6 +1,6 @@
 # 任务执行说明
 
-> 文档同步日期：2026-08-09。本文中的“任务”主要指开发工作项；产品内任务分组见 [TASK_GROUPS.md](TASK_GROUPS.md)，PLC 触发时序见 [HARDWARE_INTEGRATION.md](HARDWARE_INTEGRATION.md)。
+> 文档同步日期：2026-08-16。本文中的“任务”主要指开发工作项；产品内任务分组见 [TASK_GROUPS.md](TASK_GROUPS.md)，多相机见 [MULTI_CAMERA.md](MULTI_CAMERA.md)，PLC 时序见 [HARDWARE_INTEGRATION.md](HARDWARE_INTEGRATION.md)。
 
 
 本文档用于给开发者或 AI 助手派发项目任务。目标是让每个任务都有明确输入、修改范围、验收标准和文档同步要求。
@@ -15,8 +15,8 @@
 | --- | --- | --- | --- |
 | P0-1 | 原图删除与输入源一致性 | ✅ 已完成：原图可删除；单工具、单步、批量执行统一输入回退；删除/移动清理执行缓存和结果 | `Core/ToolController.*`、`Core/ToolChainState.*`、`UI/ToolsWindow.*` |
 | P0-1a | 图片/文件夹导入稳定性 | ✅ Core 导入服务统一单图、递归文件夹、空目录、缺失路径和导航状态清理；异步有效/失败解码均有回归 | `Core/ImageImportService.*`、`Core/AsyncImageLoader.*`、`UI/ImageViewer.*` |
-| P0-2 | 案例配方自动加载执行 | ✅ 已完成回归：案例路径可迁移，OCR 模型相对路径解析，`case_pipeline` 自动执行验证 | `Core/RecipeManager.*`、`Test/regression_tests.cpp`、`docs/recipe_examples/` |
-| P0-3 | 完整回归基线 | ✅ 已完成：完整 `RegressionTests.exe` 通过，不只运行专项参数 | `Test/RegressionTests.vcxproj`、`Test/regression_tests.cpp` |
+| P0-2 | 案例配方自动加载执行 | ✅ 路径迁移、模型相对路径、图片解码后 ROI 恢复和文件图片禁用相机触发均已覆盖；`--examples-only` 专项通过 | `Core/RecipeManager.*`、`Test/regression_tests.cpp`、`docs/recipe_examples/` |
+| P0-3 | 完整回归基线 | ⚠️ Release 回归工程可编译，案例专项已通过；完整运行当前在任务文件夹输入回归结束阶段触发 `0xC0000409` Fast-Fail，不得用历史通过记录代替本轮结果 | `Test/RegressionTests.vcxproj`、`Test/regression_tests.cpp` |
 | P1-1 | 稳定工具身份 | ✅ `ToolInstance.toolId`、`ToolResult.sourceToolId`、配方字段和上游 ID 优先解析；UI 的活动工具/实时检测引用别名已删除 | `Core/ToolInstance.h`、`Core/ToolChainState.*`、`Core/ToolExecutor.cpp` |
 | P1-2 | ImageViewer/Core 边界 | ✅ ImageViewer 通过 `ImageState`、`FrameNavigation`、`ImageImportService`、`ImageViewState`、`ResultOverlayState` 获取图像、播放和叠加状态，不再直接调用视频/实时检测/工具链全局状态 | `UI/ImageViewer.*`、`Core/FrameNavigation.*`、`Core/ResultOverlayState.*` |
 | P1-3 | 模板匹配去全局状态 | ✅ `TemplateMatchingTool` 由实例参数和 Core 资产服务驱动，不再依赖全局 UI 状态 | `Algorithm/TemplateMatchingTool.*`、`Core/ToolAssetService.*` |
@@ -26,9 +26,9 @@
 | P2-2 | 标定与 Fixture 产品化 | ✅ 多点 X/Y 比例拟合、透视拟合、逐点残差、RMS/最大残差、标定文件导入导出和 Fixture 坐标轴已接入；后续补镜头畸变标定 | `Core/CalibrationFitter.*`、`Core/CalibrationModel.*`、`Core/FixtureTransform.*`, `UI/ImageViewer.*` |
 | P2-3 | SPC 与报表 | ✅ 均值、标准差、Cp/Cpk、测量项选择、统计窗口、趋势图和 CSV 导出 | `Core/ResultExporter.*`、`Core/InspectionHistory.*`、`UI/StatsWindow.*` |
 | P3-1 | 工具链体验 | ✅ 启用/禁用、Core 工具剪贴板复制粘贴、稳定 ID、运行前检查、依赖显示/循环校验、分组筛选、批量操作、公共表单对齐、PNG 图标和独立流程图窗口 | `Core/ToolChainPreflight.*`、`Core/ToolChainValidator.*`、`Core/ToolChainState.*`、`UI/ToolsWindow.*`、`Renderer/FontManager.*` |
-| P3-2 | 多任务配方 | ✅ 最多 16 个任务；任务级单图/文件夹、相机优先、全部/当前任务/单步、最多 4 任务并行及任务结果总览均已接入并回归 | `Core/ToolChainState.*`、`Core/ToolController.*`、`UI/ToolsWindow.cpp`、`UI/RunResultWindow.cpp` |
-| P4-1 | 工程发布 | ✅ GitHub clean runner 已完成主程序、回归工程、完整测试、运行包校验和 artifact 上传；Git LFS 与可迁移案例资源已验证 | `.github/workflows/`、`scripts/`、`docs/RELEASE.md` |
-| P4-2 | 设备平台化 | ✅ 通用途径已完成并接入主程序：OpenCV/UVC/RTSP 相机、TCP、Modbus TCP、Modbus PLC、OPC UA；Modbus IO 表支持 Trigger/Busy/Done/OK/NG/Error/Heartbeat/ACK、单任务拍照触发、单点/整套握手测试、超时报警和指数退避重连；厂商专用 SDK 由目标设备适配 | `Core/HardwareRuntimeService.*`、`Core/HardwareSettingsService.*`、`Core/ModbusTcpAdapter.*`、`UI/HardwareWindow.*` |
+| P3-2 | 多任务配方 | ✅ 最多 16 个任务；任务级单图/文件夹、绑定相机槽、全部/当前任务/单步、最多 4 任务并行及任务结果总览均已接入；完整回归状态以最新状态页为准 | `Core/ToolChainState.*`、`Core/ToolController.*`、`UI/ToolsWindow.cpp`、`UI/RunResultWindow.cpp` |
+| P4-1 | 工程发布 | ⚠️ 主程序、回归工程和唯一运行包可构建并校验；完整回归仍有任务文件夹 Fast-Fail 未闭环，满足发布门槛前不得标记全部完成 | `.github/workflows/`、`scripts/`、`docs/RELEASE.md` |
+| P4-2 | 设备平台化 | ✅ OpenCV/UVC/RTSP、海康/华睿入口、TCP、Modbus TCP/PLC 和 OPC UA 已接入；16 个相机槽独立维护采集线程、连接/重连、触发、帧缓存和状态，任务按绑定槽取帧；真实设备稳定性仍需现场验收 | `Core/HardwareRuntimeService.*`、`Core/HardwareSettingsService.*`、`Core/ModbusTcpAdapter.*`、`UI/HardwareWindow.*` |
 
 ## 任务描述模板
 

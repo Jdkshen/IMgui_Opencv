@@ -24,13 +24,12 @@ extern bool g_ShowHardware;
 // =====================================================
 // UI 命名空间 - 窗口函数声明
 // =====================================================
-// =====================================================
-// UI 命名空间 - 窗口函数声明
-// =====================================================
 namespace UI
 {
     // 绘制主停靠空间（菜单栏 + DockSpace 容器）
     void DrawDockSpaceHost();
+    // Rebuild the default dock split using the current monitor DPI.
+    void RequestDockLayoutReset();
     bool SaveCurrentRecipe();
     void MarkCurrentRecipeDirty();
     void MarkCurrentRecipeAssetsDirty();

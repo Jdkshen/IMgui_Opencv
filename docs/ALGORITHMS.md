@@ -1,6 +1,6 @@
 # 视觉算法与工具说明
 
-> 文档同步日期：2026-08-09。本文以当前 type 0-17、`VisionContext`、`ITool`、`ToolResult` 和任务执行链为准；18 类工具的结果能力、结果 ROI、Fixture 和统一显示已按当前代码复核。
+> 文档同步日期：2026-08-16。本文以当前 type 0-17、`VisionContext`、`ITool`、`ToolResult` 和任务执行链为准；18 类工具的输入、ROI、上下游、结果能力、Fixture 和统一显示已按当前代码复核。
 
 ## 1. 统一执行契约
 

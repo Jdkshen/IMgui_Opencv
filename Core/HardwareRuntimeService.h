@@ -131,6 +131,26 @@ struct CameraDiscoveryResult
     std::vector<CameraDeviceInfo> devices;
 };
 
+struct HardwareCameraSlotSnapshot
+{
+    int slotIndex = -1;
+    DeviceConnectionState state = DeviceConnectionState::Disconnected;
+    std::string adapterName;
+    bool autoCapture = false;
+    bool capturePending = false;
+    bool reconnecting = false;
+    int frameIndex = 0;
+    int consecutiveFailures = 0;
+    int reconnectAttempts = 0;
+    int reconnectDelayMs = 0;
+    bool hasFrame = false;
+    CameraTriggerConfig trigger;
+    CameraFrameMetadata frameMetadata;
+    CameraCapabilities capabilities;
+    CameraStatistics statistics;
+    DeviceOperationResult lastOperation;
+};
+
 struct HardwareRuntimeSnapshot
 {
     DeviceConnectionState cameraState = DeviceConnectionState::Disconnected;
@@ -174,6 +194,7 @@ struct HardwareRuntimeSnapshot
     CameraStatistics cameraStatistics;
     DeviceOperationResult lastCameraOperation;
     DeviceOperationResult lastOutputOperation;
+    std::vector<HardwareCameraSlotSnapshot> cameraSlots;
 };
 
 namespace HardwareRuntimeService
@@ -182,6 +203,7 @@ namespace HardwareRuntimeService
     DeviceOperationResult ActivateCameraSlot(int cameraIndex);
     DeviceOperationResult StartCameraCapture(const HardwareCameraConnectionConfig& config);
     void DisconnectCamera();
+    void DisconnectCameraSlot(int cameraIndex);
     void SetCameraAutoCapture(bool enabled);
     bool CameraAutoCaptureEnabled();
     void SetCameraTriggerOnInspection(bool enabled);
@@ -197,7 +219,15 @@ namespace HardwareRuntimeService
         const std::string& selector, const std::string& ipAddress,
         const std::string& subnetMask, const std::string& defaultGateway);
     void RequestCameraFrame(bool runToolChainAfterCapture = false, bool loop = false);
+    void RequestCameraFrameForSlot(int cameraIndex,
+        bool runToolChainAfterCapture = false, bool loop = false);
     void CancelPendingCameraToolRun();
+
+    // Returns the most recent complete frame captured by the requested slot.
+    // The returned matrix is independent from the worker's cache and can be
+    // safely used as a task input while the camera keeps streaming.
+    bool AcquireLatestCameraFrame(int cameraIndex, cv::Mat& frame,
+        CameraFrameMetadata* metadata = nullptr);
 
     DeviceOperationResult ConnectOutput(const HardwareOutputConnectionConfig& config);
     void DisconnectOutput();

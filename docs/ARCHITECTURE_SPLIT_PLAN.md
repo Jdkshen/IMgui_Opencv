@@ -1,6 +1,6 @@
 # 大文件渐进拆分边界
 
-> 文档同步日期：2026-08-09。旧 `FrameRenderer`、`OpenCVTest` 和 `TemplateMatch` 实现已清理；界面调整继续集中在 `ToolsWindow`/公共工具表单，后续拆分仍遵循本文边界。
+> 文档同步日期：2026-08-16。旧 `FrameRenderer`、`OpenCVTest` 和 `TemplateMatch` 实现已清理；多相机运行时、视频检测和 DPI 调整继续遵循 Core/UI 边界。
 
 拆分遵循“先提取无状态服务，再迁移状态所有权，最后缩减兼容入口”的顺序；
 每一批必须保持完整回归通过，避免同时重写 UI、执行状态机和硬件线程。

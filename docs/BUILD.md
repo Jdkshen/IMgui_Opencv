@@ -1,6 +1,6 @@
 # IMgui_Opencv 构建基线
 
-> 文档同步日期：2026-08-09。双后端基线见 [STATUS_2026-07-30.md](STATUS_2026-07-30.md)，当前构建、回归和发布包状态见 [STATUS_2026-08-09.md](STATUS_2026-08-09.md)。
+> 文档同步日期：2026-08-16。双后端基线见 [STATUS_2026-07-30.md](STATUS_2026-07-30.md)，当前构建、回归和唯一发布包状态见 [STATUS_2026-08-16.md](STATUS_2026-08-16.md)。
 
 
 本项目是基于 Dear ImGui、DirectX 12 / DirectX 11、OpenCV 5.0 和 ONNX Runtime 的 Windows 桌面视觉工具。默认优先使用 DX12，初始化失败时由 `GraphicsBackend` 自动回退 DX11。
@@ -57,7 +57,7 @@ msbuild Windows_imgui.slnx /p:Configuration=Release /p:Platform=x64 /m
 | 主程序 | `x64\Release\Windows_imgui.exe` |
 | 回归测试 | `Test\x64\Release\RegressionTests.exe` |
 
-> 最新主程序大小、SHA256、构建、回归和界面验收结果统一记录在 [STATUS_2026-08-09.md](STATUS_2026-08-09.md)，避免多个文档中的哈希过期。
+> 最新正式 ZIP 大小、SHA256、构建、回归和界面验收结果统一记录在 [STATUS_2026-08-16.md](STATUS_2026-08-16.md)，避免多个文档中的哈希过期。
 
 若构建被中断后出现 `LNK1103: 调试信息损坏`，应先对对应工程执行 Clean，再完整 Build；不要继续复用可能损坏的 OBJ/PDB 增量链接。
 
@@ -117,6 +117,7 @@ Test\x64\Release\RegressionTests.exe --policy-only
 Test\x64\Release\RegressionTests.exe --caliper-only
 Test\x64\Release\RegressionTests.exe --qr-only
 Test\x64\Release\RegressionTests.exe --task-images-only
+Test\x64\Release\RegressionTests.exe --examples-only
 Test\x64\Release\RegressionTests.exe --hardware-camera-only
 Test\x64\Release\RegressionTests.exe --plc-handshake-only
 ```

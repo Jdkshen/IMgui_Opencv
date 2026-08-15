@@ -23,6 +23,7 @@
 #include <filesystem>
 #include <fstream>
 #include <cstdlib>
+#include <cmath>
 // ---- 静态链接库（链接时自动解析，无需 LoadLibrary）----
 #pragma comment(lib, "dwmapi.lib")       // 桌面窗口管理器：DwmSetWindowAttribute（圆角窗口）
 #pragma comment(lib, "d3d11.lib")         // DirectX 11 核心库：设备创建、渲染管线
@@ -209,10 +210,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	const RECT workArea = monitorInfo.rcWork;  // rcWork = 屏幕区域 − 任务栏区域
 	const int workW = (std::max)(1L, workArea.right - workArea.left);
 	const int workH = (std::max)(1L, workArea.bottom - workArea.top);
-	// Per-Monitor DPI Awareness V2 下，Win32 窗口尺寸使用物理像素；
-	// 不再把逻辑基准尺寸重复乘以 DPI，否则 125% 缩放时窗口会超出工作区。
-	const int desiredW = 1280;
-	const int desiredH = 800;
+	// Per-Monitor DPI Awareness V2 下 CreateWindow 使用物理像素，因此把
+	// 1280x800 的逻辑设计尺寸换算为当前显示器的物理像素。最终仍受工作区
+	// 限制，低分辨率工业屏不会越界，高分屏也不会显示成一个过小窗口。
+	const int desiredW = static_cast<int>(std::lround(1280.0f * main_scale));
+	const int desiredH = static_cast<int>(std::lround(800.0f * main_scale));
 	// 实际窗口大小不超过工作区
 	const int winW = (std::min)(desiredW, workW);
 	const int winH = (std::min)(desiredH, workH);
@@ -319,6 +321,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	//   3. 图标字体（FontAwesome，用于工具栏/菜单图标）
 	// 所有字形合并到一张 GPU 纹理中，缩放因子 = main_scale
 	FontManager::InitFonts(main_scale);
+	LogSystem::Add(LOG_INFO, "DPI 适配: %.0f%% | 初始窗口 %dx%d",
+		main_scale * 100.0f, winW, winH);
 	LogSystem::Add(LOG_INFO, "应用启动完成");  // 应用启动完成标记
 	AppendStartupLog(std::string("startup completed; renderer=") +
 		GraphicsBackend::Name());
@@ -365,6 +369,32 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			::Sleep(10);
 			continue;
 		}
+
+		// 更新输入帧和待上传纹理必须发生在本帧 UI 构建之前。原来放在
+		// ImGui::Render() 之后时，摄像头帧可能在“旧绘制数据”和“新纹理”
+		// 之间跨帧切换，放大/缩小时容易出现一帧空白或闪烁。
+		try
+		{
+			VideoCapture::Update();
+			HardwareRuntimeService::Tick();
+		}
+		catch (const cv::Exception& e)
+		{
+			LogSystem::Add(LOG_ERROR, "视频帧异常: %s", e.what());
+		}
+		catch (...)
+		{
+			LogSystem::Add(LOG_ERROR, "视频帧未知异常");
+		}
+		LiveYoloRunner::Update();
+		ImageLoadController::Update();
+		if (ImageState::NeedUploadRef())
+		{
+			if (GraphicsBackend::UploadMainTexture(ImageState::PendingUploadRef()))
+				ImageState::NeedUploadRef() = false;
+		}
+		PreviewTextureCache::UploadPending();
+
 		// ----- 6.3 开启新的 ImGui 帧 -----
 		// 三步启动帧：
 		//   1. GraphicsBackend::NewFrame() — DX 后端准备渲染目标
@@ -402,50 +432,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		// ImGui::Render() 将所有窗口的 DrawList 转换为顶点缓冲 + 索引缓冲，
 		// 并生成相应的绘制命令（纹理切换、裁剪矩形）
 		ImGui::Render();
-
-		// =========================
-		// 6.6 视频/摄像头帧更新 — 在 GPU 上传之前捕获最新帧
-		// VideoCapture::Update() 从相机/视频文件抓取一帧存入 ImageState
-		// HardwareRuntimeService::Tick() 处理 PLC 通信心跳、硬件状态轮询
-		// =========================
-		try
-		{
-			VideoCapture::Update();
-			HardwareRuntimeService::Tick();
-		}
-		catch (const cv::Exception &e)
-		{
-			LogSystem::Add(LOG_ERROR, "视频帧异常: %s", e.what());
-		}
-		catch (...)
-		{
-			LogSystem::Add(LOG_ERROR, "视频帧未知异常");
-		}
-
-		// =========================
-		// 6.7 YOLO 实时检测 — 对当前帧运行 ONNX 目标检测
-		// LiveYoloRunner::Update() 异步提交推理，结果叠加到预览图像
-		// =========================
-		LiveYoloRunner::Update();
-
-		// =========================
-		// 6.8 图片异步加载调度 — 检查是否有后台解码完成的图片
-		// ImageLoadController::Update() 轮询异步加载完成事件，
-		// 触发回调将解码后的 cv::Mat 交付给 ImageState
-		// =========================
-		ImageLoadController::Update();
-
-		// =========================
-		// 6.9 GPU 纹理上传 — 将 CPU 端的 cv::Mat 像素数据上传到 GPU 显存
-		// 只在图像数据发生变化（脏标记）时才执行上传，避免每帧重复传输
-		// =========================
-		if (ImageState::NeedUploadRef())  // 检查脏标记：图像内容是否被修改
-		{
-			// UploadMainTexture：创建/更新主纹理的 D3D 资源（纹理2D + SRV）
-			if (GraphicsBackend::UploadMainTexture(ImageState::PendingUploadRef()))
-				ImageState::NeedUploadRef() = false;  // 上传成功，清除脏标记
-		}
-		PreviewTextureCache::UploadPending();  // 上传预览缩略图缓存中的待处理纹理
 
 		// ----- 6.10 交换链呈现 — 将渲染结果提交到屏幕 -----
 		// GraphicsBackend::RenderAndPresent 内部流程：
@@ -514,6 +500,34 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 	// 步骤2：ImGui 未消费的事件，由应用程序自行处理
 	switch (msg)
 	{
+	case WM_DPICHANGED:
+	{
+		const float oldScale = AppRuntimeState::DpiScale();
+		const float newScale = static_cast<float>(HIWORD(wParam)) / 96.0f;
+		if (newScale > 0.0f && std::abs(newScale - oldScale) > 0.001f)
+		{
+			if (ImGui::GetCurrentContext() != nullptr && oldScale > 0.0f)
+			{
+				ImGuiStyle& style = ImGui::GetStyle();
+				style.ScaleAllSizes(newScale / oldScale);
+				style.FontScaleDpi = newScale;
+			}
+			AppRuntimeState::SetDpiScale(newScale);
+			UI::RequestDockLayoutReset();
+		}
+
+		const RECT* suggested = reinterpret_cast<const RECT*>(lParam);
+		if (suggested)
+		{
+			::SetWindowPos(hWnd, nullptr,
+				suggested->left, suggested->top,
+				suggested->right - suggested->left,
+				suggested->bottom - suggested->top,
+				SWP_NOZORDER | SWP_NOACTIVATE);
+		}
+		return 0;
+	}
+
 	case WM_SIZE:
 		// 窗口尺寸改变时，通知图形后端重建交换链和渲染目标
 		// SIZE_MINIMIZED 时不处理（避免为最小化的窗口创建 0×0 的渲染目标）

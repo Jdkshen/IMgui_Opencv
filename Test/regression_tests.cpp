@@ -5059,6 +5059,11 @@ void TestExampleRecipesLoadAndExecute()
             "example recipe did not request its image");
         Require(std::filesystem::exists(std::filesystem::path(imagePath)),
             "example recipe image path was not resolved");
+        cv::Mat exampleImage = cv::imread(imagePath, cv::IMREAD_COLOR);
+        Require(!exampleImage.empty(), "example recipe image failed to decode");
+        ImageState::SetImage(exampleImage);
+        Require(ROIState::ApplyQueuedRestore(),
+            "example recipe ROI was not restored after loading its image");
         Require(!ROIState::ReadOnlyItems().empty(),
             "example recipe did not restore ROI state");
         for (const ToolInstance& tool : ToolChainState::ReadOnlyTools())
@@ -5173,18 +5178,52 @@ void TestExampleRecipesLoadAndExecute()
     cv::Mat image = cv::imread(imagePath, cv::IMREAD_COLOR);
     Require(!image.empty(), "pipeline example image failed to decode");
     ImageState::SetImage(image);
+    Require(ROIState::ApplyQueuedRestore(),
+        "pipeline example ROI was not restored after loading its image");
 
-    ToolController::RequestRunAll(false);
-    const int maxTicks = static_cast<int>(ToolChainState::ReadOnlyTools().size()) + 4;
-    for (int i = 0; i < maxTicks && ToolController::GetMode() != ToolController::Mode::Idle; ++i)
+    const ToolChainPreflightResult preflight = ToolChainPreflight::Check(
+        ToolChainState::ReadOnlyTools(), ImageState::HasImage(),
+        ROIState::ReadOnlyItems().size());
+    std::string preflightErrors;
+    for (const ToolChainPreflightIssue& issue : preflight.issues)
+    {
+        if (!preflightErrors.empty())
+            preflightErrors += "; ";
+        preflightErrors += issue.message;
+    }
+    const std::string preflightMessage =
+        "pipeline example failed preflight: " + preflightErrors;
+    Require(preflight.valid(), preflightMessage.c_str());
+
+    // This recipe explicitly supplies a file image. Do not inherit a camera
+    // trigger left connected by an earlier hardware regression.
+    ToolController::RequestRunAll(false, false);
+    Require(ToolController::GetRunProgressTotal() ==
+        static_cast<int>(ToolChainState::ReadOnlyTools().size()),
+        "pipeline example execution plan omitted tools");
+    const auto executionDeadline = std::chrono::steady_clock::now() +
+        std::chrono::seconds(10);
+    while (ToolController::GetMode() != ToolController::Mode::Idle &&
+        std::chrono::steady_clock::now() < executionDeadline)
+    {
         ToolController::Tick();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     Require(ToolController::GetMode() == ToolController::Mode::Idle,
         "pipeline example execution did not finish");
+    std::string missingResults;
     for (const ToolInstance& tool : ToolChainState::ReadOnlyTools())
     {
-        if (tool.type != 12)
-            Require(tool.hasLastResult, "pipeline example left a tool without a result");
+        if (tool.type != 12 && !tool.hasLastResult)
+        {
+            if (!missingResults.empty())
+                missingResults += ", ";
+            missingResults += tool.label;
+        }
     }
+    const std::string missingResultMessage =
+        "pipeline example left tools without a result: " + missingResults;
+    Require(missingResults.empty(), missingResultMessage.c_str());
 
     ToolController::OnToolChainChanged();
     ToolChainState::ClearTools();
@@ -6770,6 +6809,11 @@ int main(int argc, char** argv)
             TestToolControllerAdvancesTaskFolderImages();
             TestToolControllerRunsTaskGroupsInParallel();
             std::cout << "regression_tests: independent task image checks passed\n";
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]) == "--examples-only") {
+            TestExampleRecipesLoadAndExecute();
+            std::cout << "regression_tests: recipe example checks passed\n";
             return 0;
         }
         if (argc > 1 && std::string(argv[1]) == "--roi-domain-only") {

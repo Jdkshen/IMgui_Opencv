@@ -22,6 +22,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -45,6 +46,45 @@ struct PendingCameraFrame
     double timestampMs = 0.0;
     CameraFrameMetadata metadata;
 };
+
+// Each configured camera owns its adapter, worker, reconnect state and latest
+// complete frame. The legacy single-camera variables below are retained for
+// compatibility with the existing manual-run handshake while all public
+// camera connections use these slot runtimes.
+struct CameraSlotRuntime
+{
+    explicit CameraSlotRuntime(int slot) : index(slot),
+        adapterKey("camera-slot-" + std::to_string(slot)) {}
+
+    int index = -1;
+    std::string adapterKey;
+    HardwareCameraConnectionConfig config;
+    std::thread worker;
+    mutable std::mutex mutex;
+    std::mutex adapterMutex;
+    std::condition_variable condition;
+    PendingCameraFrame pending;
+    bool hasPending = false;
+    bool stop = false;
+    bool busy = false;
+    bool frameRequested = false;
+    bool autoCapture = false;
+    int scheduledFrameIndex = 0;
+    int frameIndex = 0;
+    int consecutiveFailures = 0;
+    int reconnectAttempts = 0;
+    int reconnectDelayMs = 0;
+    bool reconnecting = false;
+    cv::Mat latestFrame;
+    CameraFrameMetadata latestMetadata;
+    DeviceOperationResult lastOperation;
+};
+
+std::array<std::unique_ptr<CameraSlotRuntime>, kHardwareCameraCount>
+    s_cameraSlotRuntimes;
+std::mutex s_cameraSlotsMutex;
+std::atomic<int> s_selectedCameraSlot{-1};
+int s_cameraToolRunSlot = -1;
 
 HardwareCameraConnectionConfig s_cameraConfig;
 std::atomic<int> s_cameraOrientation{0};
@@ -199,6 +239,27 @@ DeviceOperationResult NotConnected(const char* name)
     return {false, std::string(name) + " 未连接"};
 }
 
+CameraSlotRuntime* EnsureCameraSlot(int cameraIndex)
+{
+    if (cameraIndex < 0 ||
+        cameraIndex >= static_cast<int>(kHardwareCameraCount))
+        return nullptr;
+    std::lock_guard<std::mutex> lock(s_cameraSlotsMutex);
+    auto& slot = s_cameraSlotRuntimes[static_cast<std::size_t>(cameraIndex)];
+    if (!slot)
+        slot = std::make_unique<CameraSlotRuntime>(cameraIndex);
+    return slot.get();
+}
+
+CameraSlotRuntime* FindCameraSlot(int cameraIndex)
+{
+    if (cameraIndex < 0 ||
+        cameraIndex >= static_cast<int>(kHardwareCameraCount))
+        return nullptr;
+    std::lock_guard<std::mutex> lock(s_cameraSlotsMutex);
+    return s_cameraSlotRuntimes[static_cast<std::size_t>(cameraIndex)].get();
+}
+
 void PublishFrame(const cv::Mat& frame, const std::string& sourceName,
     int frameIndex, double timestampMs)
 {
@@ -296,6 +357,242 @@ DeviceOperationResult ApplyCameraBufferPolicy(
     if (!camera->Capabilities().queueControl)
         return {false, "selected camera does not support frame buffer control"};
     return camera->ConfigureBufferPolicy(config.bufferPolicy);
+}
+
+cv::Mat OrientCameraFrame(const cv::Mat& frame, int orientation)
+{
+    cv::Mat orientedFrame;
+    switch (orientation)
+    {
+    case 1: cv::rotate(frame, orientedFrame, cv::ROTATE_90_CLOCKWISE); break;
+    case 2: cv::rotate(frame, orientedFrame, cv::ROTATE_180); break;
+    case 3: cv::rotate(frame, orientedFrame, cv::ROTATE_90_COUNTERCLOCKWISE); break;
+    case 4: cv::flip(frame, orientedFrame, 1); break;
+    case 5: cv::flip(frame, orientedFrame, 0); break;
+    default: break;
+    }
+    return orientedFrame.empty() ? frame : orientedFrame;
+}
+
+void MultiCameraWorkerLoop(CameraSlotRuntime* slot, ICameraAdapter* camera)
+{
+    std::unique_lock<std::mutex> lock(slot->mutex);
+    while (!slot->stop)
+    {
+        if (!slot->frameRequested)
+        {
+            if (slot->autoCapture)
+            {
+                slot->condition.wait_for(lock,
+                    std::chrono::milliseconds((std::max)(1,
+                        slot->config.captureIntervalMs)),
+                    [slot]
+                    {
+                        return slot->stop || slot->frameRequested ||
+                            !slot->autoCapture;
+                    });
+            }
+            else
+            {
+                slot->condition.wait(lock, [slot]
+                {
+                    return slot->stop || slot->frameRequested ||
+                        slot->autoCapture;
+                });
+            }
+        }
+        if (slot->stop)
+            break;
+        if (!slot->frameRequested && !slot->autoCapture)
+            continue;
+
+        slot->frameRequested = false;
+        slot->busy = true;
+        const int timeoutMs = (std::max)(1, slot->config.grabTimeoutMs);
+        const int frameIndex = ++slot->scheduledFrameIndex;
+        const std::string sourceName = slot->config.sourceName.empty()
+            ? camera->AdapterName() : slot->config.sourceName;
+        const CameraTriggerConfig triggerConfig = slot->config.trigger;
+        lock.unlock();
+
+        PendingCameraFrame pending;
+        pending.sourceName = sourceName;
+        pending.frameIndex = frameIndex;
+        pending.timestampMs = CurrentTimestampMs();
+        {
+            std::lock_guard<std::mutex> adapterLock(slot->adapterMutex);
+            if (triggerConfig.mode == CameraTriggerMode::Software)
+                pending.operation = camera->ExecuteSoftwareTrigger();
+            else
+                pending.operation = {true, {}};
+            if (pending.operation.success)
+            {
+                pending.operation = camera->GrabFrame(
+                    pending.frame, pending.metadata, timeoutMs);
+            }
+        }
+        if (pending.metadata.frameNumber > 0)
+            pending.frameIndex = static_cast<int>(pending.metadata.frameNumber);
+        const std::uint64_t timestampNs =
+            pending.metadata.hardwareTimestampNanoseconds > 0
+            ? pending.metadata.hardwareTimestampNanoseconds
+            : pending.metadata.receivedTimestampNanoseconds;
+        if (timestampNs > 0)
+            pending.timestampMs = static_cast<double>(timestampNs) / 1000000.0;
+
+        lock.lock();
+        const bool frameOk = pending.operation.success && !pending.frame.empty();
+        if (frameOk)
+        {
+            slot->consecutiveFailures = 0;
+            slot->reconnectDelayMs = 0;
+            slot->reconnecting = false;
+            slot->latestFrame = OrientCameraFrame(
+                pending.frame, slot->config.orientation).clone();
+            slot->latestMetadata = pending.metadata;
+            slot->frameIndex = pending.frameIndex;
+        }
+        else
+        {
+            ++slot->consecutiveFailures;
+            slot->lastOperation = pending.operation;
+            LogSystem::Add(LOG_ERROR,
+                "event=camera_slot_frame_failure slot=%d source=%s frame=%d consecutive=%d error=%s",
+                slot->index + 1, sourceName.c_str(), pending.frameIndex,
+                slot->consecutiveFailures, pending.operation.message.c_str());
+            const int failureThreshold = (std::max)(1,
+                slot->config.reconnectFailureThreshold);
+            if (slot->config.autoReconnect &&
+                slot->consecutiveFailures >= failureThreshold)
+            {
+                const int initialDelay = (std::max)(1,
+                    slot->config.reconnectInitialDelayMs);
+                const int maximumDelay = (std::max)(initialDelay,
+                    slot->config.reconnectMaxDelayMs);
+                slot->reconnectDelayMs = slot->reconnectDelayMs <= 0
+                    ? initialDelay
+                    : (std::min)(maximumDelay, slot->reconnectDelayMs * 2);
+                const int reconnectDelay = slot->reconnectDelayMs;
+                const HardwareCameraConnectionConfig reconnectConfig = slot->config;
+                slot->reconnecting = true;
+                ++slot->reconnectAttempts;
+                slot->pending = std::move(pending);
+                slot->hasPending = true;
+                slot->busy = false;
+                const bool stopped = slot->condition.wait_for(lock,
+                    std::chrono::milliseconds(reconnectDelay), [slot]
+                    {
+                        return slot->stop;
+                    });
+                if (stopped)
+                    break;
+                lock.unlock();
+                DeviceOperationResult reconnect;
+                {
+                    std::lock_guard<std::mutex> adapterLock(slot->adapterMutex);
+                    camera->StopStream();
+                    camera->Disconnect();
+                    reconnect = camera->Connect(reconnectConfig.endpoint);
+                    if (reconnect.success)
+                        reconnect = ApplyCameraPtp(camera, reconnectConfig);
+                    if (reconnect.success)
+                        reconnect = ApplyCameraTrigger(camera, reconnectConfig);
+                    if (reconnect.success)
+                        reconnect = ApplyCameraBufferPolicy(camera, reconnectConfig);
+                    if (reconnect.success)
+                        reconnect = camera->StartStream();
+                    if (reconnect.success)
+                        ApplyCameraControls(camera, reconnectConfig);
+                }
+                lock.lock();
+                slot->reconnecting = false;
+                slot->lastOperation = reconnect;
+                if (reconnect.success)
+                {
+                    slot->consecutiveFailures = 0;
+                    slot->reconnectDelayMs = 0;
+                    slot->frameRequested = true;
+                    LogSystem::Add(LOG_INFO,
+                        "event=camera_slot_reconnected slot=%d source=%s attempt=%d",
+                        slot->index + 1, sourceName.c_str(), slot->reconnectAttempts);
+                }
+                continue;
+            }
+        }
+        slot->busy = false;
+        slot->lastOperation = pending.operation;
+        slot->pending = std::move(pending);
+        slot->hasPending = true;
+    }
+}
+
+void StopMultiCameraSlot(int cameraIndex)
+{
+    CameraSlotRuntime* slot = EnsureCameraSlot(cameraIndex);
+    if (!slot)
+        return;
+    {
+        std::lock_guard<std::mutex> lock(slot->mutex);
+        slot->stop = true;
+        slot->autoCapture = false;
+        slot->frameRequested = false;
+    }
+    slot->condition.notify_all();
+    if (slot->worker.joinable())
+        slot->worker.join();
+    {
+        std::lock_guard<std::mutex> lock(slot->mutex);
+        slot->busy = false;
+        slot->stop = false;
+        slot->hasPending = false;
+        slot->pending = {};
+        slot->reconnecting = false;
+    }
+}
+
+DeviceOperationResult StartMultiCameraSlot(
+    CameraSlotRuntime* slot, ICameraAdapter* camera,
+    const HardwareCameraConnectionConfig& rawConfig)
+{
+    if (!slot || !camera)
+        return {false, "工业相机槽位或适配器为空"};
+    StopMultiCameraSlot(slot->index);
+    HardwareCameraConnectionConfig config = rawConfig;
+    config.slotIndex = slot->index;
+    config.grabTimeoutMs = (std::max)(1, config.grabTimeoutMs);
+    config.captureIntervalMs = (std::max)(1, config.captureIntervalMs);
+    config.reconnectFailureThreshold = (std::max)(1, config.reconnectFailureThreshold);
+    config.reconnectInitialDelayMs = (std::max)(1, config.reconnectInitialDelayMs);
+    config.reconnectMaxDelayMs = (std::max)(config.reconnectInitialDelayMs,
+        config.reconnectMaxDelayMs);
+    DeviceOperationResult result = ApplyCameraPtp(camera, config);
+    if (result.success)
+        result = ApplyCameraTrigger(camera, config);
+    if (result.success)
+        result = ApplyCameraBufferPolicy(camera, config);
+    if (result.success)
+        result = camera->StartStream();
+    if (result.success)
+        ApplyCameraControls(camera, config);
+    if (!result.success)
+        return result;
+
+    {
+        std::lock_guard<std::mutex> lock(slot->mutex);
+        slot->config = config;
+        slot->autoCapture = config.autoCapture;
+        slot->scheduledFrameIndex = 0;
+        slot->frameIndex = 0;
+        slot->consecutiveFailures = 0;
+        slot->reconnectAttempts = 0;
+        slot->reconnectDelayMs = 0;
+        slot->reconnecting = false;
+        slot->frameRequested = true;
+        slot->lastOperation = {true, "工业相机已连接"};
+    }
+    slot->worker = std::thread(MultiCameraWorkerLoop, slot, camera);
+    slot->condition.notify_all();
+    return {true, "工业相机已连接"};
 }
 
 void CameraWorkerLoop(ICameraAdapter* camera)
@@ -1011,10 +1308,9 @@ DeviceOperationResult ForceCameraIp(const std::string& backend,
 
 DeviceOperationResult ConnectCamera(const HardwareCameraConnectionConfig& rawConfig)
 {
-    StopCameraWorker();
-
     HardwareCameraConnectionConfig config = rawConfig;
-    config.slotIndex = std::clamp(config.slotIndex, -1, 15);
+    config.slotIndex = std::clamp(config.slotIndex, 0,
+        static_cast<int>(kHardwareCameraCount) - 1);
     config.grabTimeoutMs = (std::max)(1, config.grabTimeoutMs);
     config.captureIntervalMs = (std::max)(1, config.captureIntervalMs);
     config.orientation = std::clamp(config.orientation, 0, 5);
@@ -1027,6 +1323,15 @@ DeviceOperationResult ConnectCamera(const HardwareCameraConnectionConfig& rawCon
     if (config.endpoint.address.empty())
         return s_lastCameraOperation = InvalidConfiguration("工业相机地址为空");
 
+    CameraSlotRuntime* slot = EnsureCameraSlot(config.slotIndex);
+    if (!slot)
+        return s_lastCameraOperation = InvalidConfiguration("工业相机槽位无效");
+    StopMultiCameraSlot(config.slotIndex);
+    {
+        std::lock_guard<std::mutex> adapterLock(s_outputAdapterMutex);
+        HardwareAdapterService::RemoveCamera(slot->adapterKey);
+    }
+
     std::unique_ptr<ICameraAdapter> camera;
     if (config.endpoint.resource == "mvs")
         camera = std::make_unique<HikrobotMvsCameraAdapter>();
@@ -1038,11 +1343,26 @@ DeviceOperationResult ConnectCamera(const HardwareCameraConnectionConfig& rawCon
     if (!result.success)
         return s_lastCameraOperation = std::move(result);
 
-    VideoCapture::Close();
-    HardwareAdapterService::SetCamera(std::move(camera));
-    result = StartCameraCapture(config);
+    ICameraAdapter* cameraPtr = camera.get();
+    {
+        std::lock_guard<std::mutex> adapterLock(s_outputAdapterMutex);
+        if (!HardwareAdapterService::RegisterCamera(slot->adapterKey,
+            std::move(camera)))
+        {
+            return s_lastCameraOperation =
+                InvalidConfiguration("工业相机适配器注册失败");
+        }
+    }
+    result = StartMultiCameraSlot(slot, cameraPtr, config);
     if (!result.success)
-        HardwareAdapterService::SetCamera({});
+    {
+        std::lock_guard<std::mutex> adapterLock(s_outputAdapterMutex);
+        HardwareAdapterService::RemoveCamera(slot->adapterKey);
+        return s_lastCameraOperation = std::move(result);
+    }
+    s_selectedCameraSlot.store(config.slotIndex);
+    s_cameraConfig = config;
+    s_lastCameraOperation = result;
     return result;
 }
 
@@ -1050,11 +1370,17 @@ DeviceOperationResult ActivateCameraSlot(int cameraIndex)
 {
     if (cameraIndex < 0 || cameraIndex >= static_cast<int>(kHardwareCameraCount))
         return InvalidConfiguration("相机绑定编号无效");
-    const HardwareRuntimeSnapshot current = Snapshot();
-    if (current.cameraState == DeviceConnectionState::Connected &&
-        current.cameraSlotIndex == cameraIndex)
+    CameraSlotRuntime* slot = EnsureCameraSlot(cameraIndex);
+    if (!slot)
+        return InvalidConfiguration("相机绑定编号无效");
+    if (const ICameraAdapter* camera = HardwareAdapterService::CameraReadOnly(
+        slot->adapterKey))
     {
-        return {true, "绑定相机已连接"};
+        if (camera->ConnectionState() == DeviceConnectionState::Connected)
+        {
+            s_selectedCameraSlot.store(cameraIndex);
+            return {true, "绑定相机已连接"};
+        }
     }
 
     const HardwarePanelSettings settings = HardwareSettingsService::Load();
@@ -1097,182 +1423,228 @@ DeviceOperationResult ActivateCameraSlot(int cameraIndex)
 
 DeviceOperationResult StartCameraCapture(const HardwareCameraConnectionConfig& rawConfig)
 {
-    StopCameraWorker();
-    ICameraAdapter* camera = HardwareAdapterService::Camera();
+    const int cameraIndex = std::clamp(rawConfig.slotIndex, 0,
+        static_cast<int>(kHardwareCameraCount) - 1);
+    CameraSlotRuntime* slot = EnsureCameraSlot(cameraIndex);
+    ICameraAdapter* camera = slot
+        ? HardwareAdapterService::Camera(slot->adapterKey) : nullptr;
+    if (!camera && slot)
+    {
+        camera = HardwareAdapterService::Camera();
+        if (camera)
+            slot->adapterKey = "default";
+    }
     if (!camera)
         return s_lastCameraOperation = InvalidConfiguration("未注册工业相机适配器");
     if (camera->ConnectionState() != DeviceConnectionState::Connected)
         return s_lastCameraOperation = NotConnected(camera->AdapterName());
-
-    HardwareCameraConnectionConfig config = rawConfig;
-    config.grabTimeoutMs = (std::max)(1, config.grabTimeoutMs);
-    config.captureIntervalMs = (std::max)(1, config.captureIntervalMs);
-    config.orientation = std::clamp(config.orientation, 0, 5);
-    config.bufferPolicy = static_cast<CameraBufferPolicy>(std::clamp(
-        static_cast<int>(config.bufferPolicy), 0, 1));
-    config.reconnectFailureThreshold = (std::max)(1, config.reconnectFailureThreshold);
-    config.reconnectInitialDelayMs = (std::max)(1, config.reconnectInitialDelayMs);
-    config.reconnectMaxDelayMs = (std::max)(
-        config.reconnectInitialDelayMs, config.reconnectMaxDelayMs);
-    config.trigger.delayMicroseconds = (std::max)(
-        0.0, config.trigger.delayMicroseconds);
-    DeviceOperationResult result = ApplyCameraPtp(camera, config);
-    if (!result.success)
-        return s_lastCameraOperation = std::move(result);
-    result = ApplyCameraTrigger(camera, config);
-    if (!result.success)
-        return s_lastCameraOperation = std::move(result);
-    result = ApplyCameraBufferPolicy(camera, config);
-    if (!result.success)
-        return s_lastCameraOperation = std::move(result);
-    result = camera->StartStream();
-    if (!result.success)
-        return s_lastCameraOperation = std::move(result);
-
-    const DeviceOperationResult autoExposure = ApplyCameraControls(camera, config);
-    if (!autoExposure.success)
-        s_lastCameraOperation = autoExposure;
-
-    s_cameraConfig = std::move(config);
-    s_cameraOrientation.store(s_cameraConfig.orientation);
-    s_cameraFrameIndex = 0;
-    s_cameraConsecutiveFailures = 0;
-    s_cameraReconnectAttempts = 0;
-    s_cameraReconnectDelayMs = 0;
-    s_cameraReconnecting = false;
+    const DeviceOperationResult result = StartMultiCameraSlot(
+        slot, camera, rawConfig);
+    if (result.success)
     {
-        std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
-        s_cameraAutoCapture = s_cameraConfig.autoCapture;
-        s_cameraTriggerOnInspection = s_cameraConfig.triggerOnInspection;
+        s_selectedCameraSlot.store(cameraIndex);
+        s_cameraConfig = rawConfig;
     }
-    StartCameraWorker(camera);
-    s_lastCameraOperation = {true, "工业相机已连接"};
-    return s_lastCameraOperation;
+    s_lastCameraOperation = result;
+    return result;
 }
 
 void DisconnectCamera()
 {
-    StopCameraWorker();
-    HardwareAdapterService::SetCamera({});
-    s_cameraConfig.slotIndex = -1;
-    s_lastCameraOperation = {true, "工业相机已断开"};
+    DisconnectCameraSlot(s_selectedCameraSlot.load());
+}
+
+void DisconnectCameraSlot(int cameraIndex)
+{
+    CameraSlotRuntime* slot = EnsureCameraSlot(cameraIndex);
+    if (!slot)
+        return;
+    StopMultiCameraSlot(cameraIndex);
     {
-        std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
-        s_lastCameraFrameMetadata = {};
+        std::lock_guard<std::mutex> adapterLock(s_outputAdapterMutex);
+        HardwareAdapterService::RemoveCamera(slot->adapterKey);
     }
+    if (s_selectedCameraSlot.load() == cameraIndex)
+    {
+        s_selectedCameraSlot.store(-1);
+        s_cameraConfig.slotIndex = -1;
+    }
+    s_lastCameraOperation = {true, "工业相机已断开"};
 }
 
 void SetCameraAutoCapture(bool enabled)
 {
+    CameraSlotRuntime* slot = EnsureCameraSlot(s_selectedCameraSlot.load());
+    if (!slot)
+        return;
     {
-        std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
-        s_cameraAutoCapture = enabled;
+        std::lock_guard<std::mutex> lock(slot->mutex);
+        slot->autoCapture = enabled;
+        slot->config.autoCapture = enabled;
         if (enabled)
-            s_cameraFrameRequested = true;
+            slot->frameRequested = true;
     }
-    s_cameraWorkerCondition.notify_all();
+    slot->condition.notify_all();
 }
 
 bool CameraAutoCaptureEnabled()
 {
-    std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
-    return s_cameraAutoCapture;
+    const CameraSlotRuntime* slot = FindCameraSlot(s_selectedCameraSlot.load());
+    if (!slot)
+        return false;
+    std::lock_guard<std::mutex> lock(slot->mutex);
+    return slot->autoCapture;
 }
 
 void SetCameraTriggerOnInspection(bool enabled)
 {
-    std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
-    s_cameraTriggerOnInspection = enabled;
+    CameraSlotRuntime* slot = EnsureCameraSlot(s_selectedCameraSlot.load());
+    if (!slot)
+        return;
+    std::lock_guard<std::mutex> lock(slot->mutex);
+    slot->config.triggerOnInspection = enabled;
 }
 
 bool CameraTriggerOnInspectionEnabled()
 {
-    std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
-    return s_cameraTriggerOnInspection;
+    const CameraSlotRuntime* slot = FindCameraSlot(s_selectedCameraSlot.load());
+    if (!slot)
+        return true;
+    std::lock_guard<std::mutex> lock(slot->mutex);
+    return slot->config.triggerOnInspection;
 }
 
 void SetCameraOrientation(int orientation)
 {
     const int normalized = std::clamp(orientation, 0, 5);
     s_cameraOrientation.store(normalized);
-    std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
+    CameraSlotRuntime* slot = EnsureCameraSlot(s_selectedCameraSlot.load());
+    if (!slot)
+        return;
+    std::lock_guard<std::mutex> lock(slot->mutex);
+    slot->config.orientation = normalized;
     s_cameraConfig.orientation = normalized;
 }
 
 DeviceOperationResult SetCameraControl(CameraControl control, double value)
 {
-    ICameraAdapter* camera = HardwareAdapterService::Camera();
+    CameraSlotRuntime* slot = EnsureCameraSlot(s_selectedCameraSlot.load());
+    ICameraAdapter* camera = slot
+        ? HardwareAdapterService::Camera(slot->adapterKey) : nullptr;
     if (!camera)
         return {false, "industrial camera adapter is not connected"};
+    std::lock_guard<std::mutex> adapterLock(slot->adapterMutex);
     return camera->SetControl(control, value);
 }
 
 DeviceOperationResult ConfigureCameraTrigger(const CameraTriggerConfig& rawConfig)
 {
-    ICameraAdapter* camera = HardwareAdapterService::Camera();
+    CameraSlotRuntime* slot = EnsureCameraSlot(s_selectedCameraSlot.load());
+    ICameraAdapter* camera = slot
+        ? HardwareAdapterService::Camera(slot->adapterKey) : nullptr;
     if (!camera || camera->ConnectionState() != DeviceConnectionState::Connected)
         return s_lastCameraOperation = NotConnected("camera");
 
     CameraTriggerConfig config = rawConfig;
     config.delayMicroseconds = (std::max)(0.0, config.delayMicroseconds);
+    std::lock_guard<std::mutex> adapterLock(slot->adapterMutex);
     DeviceOperationResult result = camera->ConfigureTrigger(config);
     if (result.success)
     {
-        std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
-        s_cameraConfig.trigger = config;
+        std::lock_guard<std::mutex> lock(slot->mutex);
+        slot->config.trigger = config;
     }
     return s_lastCameraOperation = std::move(result);
 }
 
 DeviceOperationResult ConfigureCameraBufferPolicy(CameraBufferPolicy policy)
 {
-    ICameraAdapter* camera = HardwareAdapterService::Camera();
+    CameraSlotRuntime* slot = EnsureCameraSlot(s_selectedCameraSlot.load());
+    ICameraAdapter* camera = slot
+        ? HardwareAdapterService::Camera(slot->adapterKey) : nullptr;
     if (!camera || camera->ConnectionState() != DeviceConnectionState::Connected)
         return s_lastCameraOperation = NotConnected("camera");
+    std::lock_guard<std::mutex> adapterLock(slot->adapterMutex);
     DeviceOperationResult result = camera->ConfigureBufferPolicy(policy);
     if (result.success)
     {
-        std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
-        s_cameraConfig.bufferPolicy = policy;
+        std::lock_guard<std::mutex> lock(slot->mutex);
+        slot->config.bufferPolicy = policy;
     }
     return s_lastCameraOperation = std::move(result);
 }
 
 DeviceOperationResult ExecuteCameraSoftwareTrigger()
 {
-    ICameraAdapter* camera = HardwareAdapterService::Camera();
+    CameraSlotRuntime* slot = EnsureCameraSlot(s_selectedCameraSlot.load());
+    ICameraAdapter* camera = slot
+        ? HardwareAdapterService::Camera(slot->adapterKey) : nullptr;
     if (!camera || camera->ConnectionState() != DeviceConnectionState::Connected)
         return s_lastCameraOperation = NotConnected("camera");
+    std::lock_guard<std::mutex> adapterLock(slot->adapterMutex);
     return s_lastCameraOperation = camera->ExecuteSoftwareTrigger();
 }
 
 DeviceOperationResult ConfigureCameraPtp(bool enabled)
 {
-    ICameraAdapter* camera = HardwareAdapterService::Camera();
+    CameraSlotRuntime* slot = EnsureCameraSlot(s_selectedCameraSlot.load());
+    ICameraAdapter* camera = slot
+        ? HardwareAdapterService::Camera(slot->adapterKey) : nullptr;
     if (!camera || camera->ConnectionState() != DeviceConnectionState::Connected)
         return s_lastCameraOperation = NotConnected("camera");
+    std::lock_guard<std::mutex> adapterLock(slot->adapterMutex);
     DeviceOperationResult result = camera->ConfigurePtp(enabled);
     if (result.success)
     {
-        std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
-        s_cameraConfig.ptpEnabled = enabled;
+        std::lock_guard<std::mutex> lock(slot->mutex);
+        slot->config.ptpEnabled = enabled;
     }
     return s_lastCameraOperation = std::move(result);
 }
 
 void RequestCameraFrame(bool runToolChainAfterCapture, bool loop)
 {
+    RequestCameraFrameForSlot(s_selectedCameraSlot.load(),
+        runToolChainAfterCapture, loop);
+}
+
+void RequestCameraFrameForSlot(int cameraIndex,
+    bool runToolChainAfterCapture, bool loop)
+{
+    CameraSlotRuntime* slot = EnsureCameraSlot(cameraIndex);
+    if (!slot)
+        return;
     {
-        std::lock_guard<std::mutex> lock(s_cameraWorkerMutex);
-        s_cameraFrameRequested = true;
+        std::lock_guard<std::mutex> slotLock(slot->mutex);
+        if (!slot->worker.joinable())
+            return;
+        slot->frameRequested = true;
         if (runToolChainAfterCapture)
         {
-            s_runToolChainAfterFrameIndex = s_cameraScheduledFrameIndex + 1;
+            std::lock_guard<std::mutex> requestLock(s_cameraWorkerMutex);
+            s_cameraToolRunSlot = cameraIndex;
+            s_runToolChainAfterFrameIndex = slot->scheduledFrameIndex + 1;
             s_cameraToolRunLoop = loop;
             s_cameraToolRunFrameAvailable = false;
         }
     }
-    s_cameraWorkerCondition.notify_all();
+    slot->condition.notify_all();
+}
+
+bool AcquireLatestCameraFrame(int cameraIndex, cv::Mat& frame,
+    CameraFrameMetadata* metadata)
+{
+    frame.release();
+    const CameraSlotRuntime* slot = FindCameraSlot(cameraIndex);
+    if (!slot)
+        return false;
+    std::lock_guard<std::mutex> lock(slot->mutex);
+    if (slot->latestFrame.empty())
+        return false;
+    frame = slot->latestFrame.clone();
+    if (metadata)
+        *metadata = slot->latestMetadata;
+    return true;
 }
 
 void CancelPendingCameraToolRun()
@@ -1651,13 +2023,24 @@ bool OutputAutoPublishEnabled()
 DeviceOperationResult GrabCameraFrame(int timeoutMs, const std::string& sourceName,
     int frameIndex, double timestampMs)
 {
-    ICameraAdapter* camera = HardwareAdapterService::Camera();
+    int cameraIndex = s_selectedCameraSlot.load();
+    CameraSlotRuntime* slot = EnsureCameraSlot(cameraIndex);
+    if (!slot)
+    {
+        cameraIndex = 0;
+        slot = EnsureCameraSlot(cameraIndex);
+    }
+    ICameraAdapter* camera = slot
+        ? HardwareAdapterService::Camera(slot->adapterKey) : nullptr;
+    if (!camera)
+        camera = HardwareAdapterService::Camera();
     if (!camera)
         return {false, "未注册工业相机适配器"};
     if (camera->ConnectionState() != DeviceConnectionState::Connected)
         return NotConnected(camera->AdapterName());
 
     cv::Mat frame;
+    std::lock_guard<std::mutex> adapterLock(slot->adapterMutex);
     DeviceOperationResult result = camera->GrabFrame(frame, (std::max)(1, timeoutMs));
     if (!result.success)
         return result;
@@ -1969,8 +2352,76 @@ bool WaitForOutputIdle(int timeoutMs)
         });
 }
 
+void PublishFrameForSlot(const CameraSlotRuntime& slot,
+    const PendingCameraFrame& pending)
+{
+    const cv::Mat outputFrame = OrientCameraFrame(
+        pending.frame, slot.config.orientation);
+    FrameArchiveService::Enqueue(outputFrame,
+        pending.sourceName.empty() ? "industrial-camera" : pending.sourceName,
+        pending.frameIndex, pending.timestampMs);
+    FrameSourceState::SetCurrentFrame(outputFrame, FrameSourceType::Camera,
+        pending.sourceName, pending.frameIndex, pending.timestampMs);
+    cv::Mat rgba;
+    SafeConvertToRGBA(outputFrame, rgba);
+    if (!rgba.empty())
+    {
+        ImageState::PendingUploadRef() = std::move(rgba);
+        ImageState::NeedUploadRef() = true;
+    }
+}
+
+void TickMultiCameraSlots()
+{
+    for (int cameraIndex = 0;
+         cameraIndex < static_cast<int>(kHardwareCameraCount); ++cameraIndex)
+    {
+        CameraSlotRuntime* slot = FindCameraSlot(cameraIndex);
+        if (!slot)
+            continue;
+        PendingCameraFrame pending;
+        bool hasPending = false;
+        {
+            std::lock_guard<std::mutex> lock(slot->mutex);
+            if (slot->hasPending)
+            {
+                pending = std::move(slot->pending);
+                slot->pending = {};
+                slot->hasPending = false;
+                hasPending = true;
+            }
+        }
+        if (!hasPending)
+            continue;
+
+        const bool frameAvailable = pending.operation.success &&
+            !pending.frame.empty();
+        if (frameAvailable && s_selectedCameraSlot.load() == cameraIndex)
+        {
+            PublishFrameForSlot(*slot, pending);
+            s_cameraFrameIndex = pending.frameIndex;
+            s_lastCameraFrameMetadata = pending.metadata;
+            s_lastCameraOperation = {true, "工业相机帧已发布"};
+        }
+        if (!frameAvailable && s_selectedCameraSlot.load() == cameraIndex)
+            s_lastCameraOperation = pending.operation;
+
+        std::lock_guard<std::mutex> requestLock(s_cameraWorkerMutex);
+        if (s_cameraToolRunSlot == cameraIndex &&
+            s_runToolChainAfterFrameIndex >= 0 &&
+            pending.frameIndex >= s_runToolChainAfterFrameIndex)
+        {
+            s_cameraToolRunPending = true;
+            s_cameraToolRunFrameAvailable = frameAvailable;
+            s_runToolChainAfterFrameIndex = -1;
+            s_cameraToolRunSlot = -1;
+        }
+    }
+}
+
 void Tick()
 {
+    TickMultiCameraSlots();
     PendingCameraFrame pending;
     bool hasPendingFrame = false;
     bool completeToolRunRequest = false;
@@ -2208,12 +2659,19 @@ void Tick()
 HardwareRuntimeSnapshot Snapshot()
 {
     HardwareRuntimeSnapshot snapshot;
-    if (const ICameraAdapter* camera = HardwareAdapterService::CameraReadOnly())
+    // Runtime status is slot-scoped.  A camera adapter installed only for a
+    // one-shot/manual GrabCameraFrame call must not become the active
+    // inspection camera or make unrelated task runs wait for a frame.
+    if (s_selectedCameraSlot.load() >= 0)
     {
-        snapshot.cameraState = camera->ConnectionState();
-        snapshot.cameraAdapterName = camera->AdapterName();
-        snapshot.cameraCapabilities = camera->Capabilities();
-        snapshot.cameraStatistics = camera->Statistics();
+        const ICameraAdapter* camera = HardwareAdapterService::CameraReadOnly();
+        if (camera)
+        {
+            snapshot.cameraState = camera->ConnectionState();
+            snapshot.cameraAdapterName = camera->AdapterName();
+            snapshot.cameraCapabilities = camera->Capabilities();
+            snapshot.cameraStatistics = camera->Statistics();
+        }
     }
     {
         std::lock_guard<std::mutex> adapterLock(s_outputAdapterMutex);
@@ -2271,17 +2729,101 @@ HardwareRuntimeSnapshot Snapshot()
     }
     snapshot.outputAutoPublish = s_outputAutoPublish;
     snapshot.cameraFrameIndex = s_cameraFrameIndex;
-    snapshot.cameraSlotIndex = snapshot.cameraState == DeviceConnectionState::Connected
-        ? s_cameraConfig.slotIndex : -1;
+    snapshot.cameraSlots.clear();
+    snapshot.cameraSlots.reserve(kHardwareCameraCount);
+    for (int cameraIndex = 0;
+         cameraIndex < static_cast<int>(kHardwareCameraCount); ++cameraIndex)
+    {
+        const CameraSlotRuntime* slot = FindCameraSlot(cameraIndex);
+        if (!slot)
+            continue;
+        HardwareCameraSlotSnapshot slotSnapshot;
+        slotSnapshot.slotIndex = cameraIndex;
+        {
+            std::lock_guard<std::mutex> lock(slot->mutex);
+            slotSnapshot.autoCapture = slot->autoCapture;
+            slotSnapshot.capturePending = slot->busy || slot->hasPending;
+            slotSnapshot.reconnecting = slot->reconnecting;
+            slotSnapshot.frameIndex = slot->frameIndex;
+            slotSnapshot.consecutiveFailures = slot->consecutiveFailures;
+            slotSnapshot.reconnectAttempts = slot->reconnectAttempts;
+            slotSnapshot.reconnectDelayMs = slot->reconnectDelayMs;
+            slotSnapshot.hasFrame = !slot->latestFrame.empty();
+            slotSnapshot.trigger = slot->config.trigger;
+            slotSnapshot.frameMetadata = slot->latestMetadata;
+            slotSnapshot.lastOperation = slot->lastOperation;
+        }
+        {
+            std::lock_guard<std::mutex> adapterLock(s_outputAdapterMutex);
+            if (const ICameraAdapter* camera =
+                HardwareAdapterService::CameraReadOnly(slot->adapterKey))
+            {
+                slotSnapshot.state = camera->ConnectionState();
+                slotSnapshot.adapterName = camera->AdapterName();
+                slotSnapshot.capabilities = camera->Capabilities();
+                slotSnapshot.statistics = camera->Statistics();
+            }
+        }
+        snapshot.cameraSlots.push_back(std::move(slotSnapshot));
+    }
+    snapshot.cameraSlotIndex = s_selectedCameraSlot.load();
+    if (snapshot.cameraSlotIndex >= 0)
+    {
+        const auto found = std::find_if(snapshot.cameraSlots.begin(),
+            snapshot.cameraSlots.end(),
+            [selected = snapshot.cameraSlotIndex](
+                const HardwareCameraSlotSnapshot& item)
+            {
+                return item.slotIndex == selected;
+            });
+        if (found != snapshot.cameraSlots.end())
+        {
+            snapshot.cameraState = found->state;
+            snapshot.cameraAdapterName = found->adapterName;
+            snapshot.cameraAutoCapture = found->autoCapture;
+            snapshot.cameraCapturePending = found->capturePending;
+            snapshot.cameraReconnecting = found->reconnecting;
+            snapshot.cameraFrameIndex = found->frameIndex;
+            snapshot.cameraConsecutiveFailures = found->consecutiveFailures;
+            snapshot.cameraReconnectAttempts = found->reconnectAttempts;
+            snapshot.cameraReconnectDelayMs = found->reconnectDelayMs;
+            snapshot.cameraTrigger = found->trigger;
+            snapshot.cameraFrameMetadata = found->frameMetadata;
+            snapshot.cameraCapabilities = found->capabilities;
+            snapshot.cameraStatistics = found->statistics;
+            snapshot.lastCameraOperation = found->lastOperation;
+        }
+    }
     return snapshot;
 }
 
 void Shutdown()
 {
+    for (int cameraIndex = 0;
+         cameraIndex < static_cast<int>(kHardwareCameraCount); ++cameraIndex)
+    {
+        StopMultiCameraSlot(cameraIndex);
+        CameraSlotRuntime* slot = FindCameraSlot(cameraIndex);
+        if (slot)
+        {
+            std::lock_guard<std::mutex> adapterLock(s_outputAdapterMutex);
+            HardwareAdapterService::RemoveCamera(slot->adapterKey);
+        }
+    }
     StopCameraWorker();
     StopOutputWorker(true);
     FrameArchiveService::Shutdown();
     HardwareAdapterService::Clear();
+    // Shutdown is a full runtime reset.  Do not let the next image-only run
+    // inherit the previously selected slot or its trigger policy.
+    s_selectedCameraSlot.store(-1);
+    s_cameraToolRunSlot = -1;
+    s_cameraAutoCapture = false;
+    s_cameraTriggerOnInspection = false;
+    s_cameraConfig = HardwareCameraConnectionConfig{};
+    s_cameraFrameIndex = 0;
+    s_cameraToolRunPending = false;
+    s_runToolChainAfterFrameIndex = -1;
     s_outputAdapterKey.clear();
     s_outputAutoPublish = false;
     s_auxiliaryOutputConfigs.clear();

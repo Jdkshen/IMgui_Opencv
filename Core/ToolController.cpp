@@ -14,6 +14,7 @@
 #include "ToolExecutionGraph.h"
 #include "ToolJudgement.h"
 #include "VisionContext.h"
+#include "VideoCapture.h"
 #include "../Log/LogSystem.h"
 #include "../Algorithm/YOLODetector.h"
 #include <opencv2/opencv.hpp>
@@ -24,6 +25,7 @@
 #include <fstream>
 #include <future>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -65,6 +67,8 @@ namespace ToolController
     static bool s_activeInputTaskGroupValid = false;
     static bool s_cameraFrameAvailableForRun = false;
     static bool s_forceCameraFrameForRun = false;
+    // Preserve the caller's trigger choice across loop rounds.
+    static bool s_runTriggerCamera = true;
     static bool s_imageDirty = false;
     static bool s_batchTimerStarted = false;
     static bool s_runtimeMode = false;
@@ -85,9 +89,13 @@ namespace ToolController
         std::uint64_t toolId = 0;
         int requestedIndex = -1;
         int imageVersion = -1;
+        int imageWidth = 0;
+        int imageHeight = 0;
+        std::uint64_t streamSourceGeneration = 0;
         std::uint64_t parameterRevision = 0;
         ToolExecutionCacheKey cacheKey;
         bool batch = false;
+        bool allowStreamingFrameAdvance = false;
         ToolExecutor::ToolExecutionOutput output;
         std::string error;
     };
@@ -535,14 +543,23 @@ namespace ToolController
             const std::string& groupName = tools[toolIndex].groupName;
             if (groupName.empty() || s_taskRunImages.find(groupName) != s_taskRunImages.end())
                 continue;
-            if (s_cameraFrameAvailableForRun &&
-                (TaskGroupPrefersCamera(groupName) ||
-                    (s_forceCameraFrameForRun && s_runTaskGroup &&
-                        groupName == s_runTaskGroupName)) &&
-                !s_runFallbackImage.empty())
+            const int cameraIndex = TaskGroupCameraIndex(groupName);
+            if (cameraIndex >= 0 && TaskGroupPrefersCamera(groupName))
             {
-                s_taskRunImages.emplace(groupName, s_runFallbackImage.clone());
-                continue;
+                if (s_cameraFrameAvailableForRun &&
+                    !s_runFallbackImage.empty())
+                {
+                    s_taskRunImages.emplace(groupName, s_runFallbackImage.clone());
+                    continue;
+                }
+                cv::Mat cameraFrame;
+                if (!s_runTaskGroup &&
+                    HardwareRuntimeService::AcquireLatestCameraFrame(
+                        cameraIndex, cameraFrame) && !cameraFrame.empty())
+                {
+                    s_taskRunImages.emplace(groupName, std::move(cameraFrame));
+                    continue;
+                }
             }
             std::string imagePath;
             if (!ResolveTaskImagePathForRun(groupName, imagePath))
@@ -659,6 +676,15 @@ namespace ToolController
         const std::uint64_t toolId = target->toolId;
         const std::uint64_t parameterRevision = target->parameterRevision;
         const int imageVersion = ImageState::Version();
+        const int imageWidth = input.cols;
+        const int imageHeight = input.rows;
+        const std::uint64_t streamSourceGeneration = VideoCapture::SourceGeneration();
+        // A single YOLO tool can safely publish geometry from the most recently
+        // completed video frame. Multi-tool pipelines must stay pinned to the
+        // exact input version so downstream tools never mix different frames.
+        const bool allowStreamingFrameAdvance = VideoCapture::IsOpen() &&
+            (target->type == 4 || target->type == 11) &&
+            (!batch || s_batchExecutionOrder.size() == 1);
         if (s_executionPlan.nodes.size() != ToolChainState::ReadOnlyTools().size())
             s_executionPlan = ToolExecutionGraph::Build(ToolChainState::ReadOnlyTools());
         ToolExecutionCacheKey cacheKey;
@@ -677,9 +703,13 @@ namespace ToolController
             completion.toolId = toolId;
             completion.requestedIndex = index;
             completion.imageVersion = imageVersion;
+            completion.imageWidth = imageWidth;
+            completion.imageHeight = imageHeight;
+            completion.streamSourceGeneration = streamSourceGeneration;
             completion.parameterRevision = parameterRevision;
             completion.cacheKey = cacheKey;
             completion.batch = batch;
+            completion.allowStreamingFrameAdvance = allowStreamingFrameAdvance;
             completion.output.completed = true;
             completion.output.cacheHit = true;
             completion.output.result = std::move(cachedResult);
@@ -698,7 +728,9 @@ namespace ToolController
         s_asyncRunning = true;
         s_asyncWorker = std::jthread(
             [snapshot = std::move(snapshot), context = std::move(context), generation,
-             toolId, index, imageVersion, parameterRevision, cacheKey, batch,
+             toolId, index, imageVersion, imageWidth, imageHeight,
+             streamSourceGeneration, allowStreamingFrameAdvance,
+             parameterRevision, cacheKey, batch,
              completionPromise = std::move(completionPromise)](std::stop_token stopToken) mutable
             {
                 LogContext logContext;
@@ -717,9 +749,13 @@ namespace ToolController
                 completion.toolId = toolId;
                 completion.requestedIndex = index;
                 completion.imageVersion = imageVersion;
+                completion.imageWidth = imageWidth;
+                completion.imageHeight = imageHeight;
+                completion.streamSourceGeneration = streamSourceGeneration;
                 completion.parameterRevision = parameterRevision;
                 completion.cacheKey = cacheKey;
                 completion.batch = batch;
+                completion.allowStreamingFrameAdvance = allowStreamingFrameAdvance;
                 context.stopToken = stopToken;
                 try
                 {
@@ -1349,8 +1385,14 @@ namespace ToolController
             s_asyncWorker.join();
         s_asyncRunning = false;
         const int currentToolIndex = ToolChainState::IndexOfToolId(completion.toolId);
+        const bool sameImageVersion = completion.imageVersion == ImageState::Version();
+        const bool validStreamingAdvance = completion.allowStreamingFrameAdvance &&
+            VideoCapture::IsOpen() &&
+            completion.streamSourceGeneration == VideoCapture::SourceGeneration() &&
+            completion.imageWidth == ImageState::Width() &&
+            completion.imageHeight == ImageState::Height();
         if (completion.generation != s_executionGeneration ||
-            completion.imageVersion != ImageState::Version() || currentToolIndex < 0)
+            (!sameImageVersion && !validStreamingAdvance) || currentToolIndex < 0)
         {
             LogSystem::Add(LOG_INFO, "后台结果已丢弃: 输入或工具链已变化");
             if (completion.batch)
@@ -1439,6 +1481,26 @@ namespace ToolController
         s_forceNextRunAll = false;
         s_activeRunForce = force;
         const int boundCameraIndex = RunScopeCameraIndex();
+        std::set<int> runCameraSlots;
+        for (const ToolInstance& tool : ToolChainState::ReadOnlyTools())
+        {
+            if (!tool.enabled || !MatchesRunScope(tool))
+                continue;
+            const int cameraIndex = TaskGroupCameraIndex(tool.groupName);
+            if (cameraIndex >= 0)
+                runCameraSlots.insert(cameraIndex);
+        }
+        for (const int cameraIndex : runCameraSlots)
+        {
+            const DeviceOperationResult activation =
+                HardwareRuntimeService::ActivateCameraSlot(cameraIndex);
+            if (!activation.success)
+            {
+                LogSystem::Add(LOG_WARN,
+                    "绑定相机 %02d 自动连接失败，将使用任务图片: %s",
+                    cameraIndex + 1, activation.message.c_str());
+            }
+        }
         if (triggerCamera && boundCameraIndex >= 0)
         {
             const DeviceOperationResult activation =
@@ -1453,7 +1515,7 @@ namespace ToolController
         else if (triggerCamera && boundCameraIndex == -2)
         {
             LogSystem::Add(LOG_WARN,
-                "全部执行包含多个不同的相机绑定，本轮不共享相机帧；请单独触发对应任务");
+                "全部执行包含多个相机绑定，将按各任务绑定槽使用对应最新相机帧");
         }
         const HardwareRuntimeSnapshot hardware = HardwareRuntimeService::Snapshot();
         const bool taskCameraPreferred = boundCameraIndex >= 0 &&
@@ -1575,6 +1637,7 @@ namespace ToolController
 
     void RequestRunAll(bool loop, bool triggerCamera)
     {
+        s_runTriggerCamera = triggerCamera;
         s_cameraFrameAvailableForRun = false;
         s_forceCameraFrameForRun = false;
         s_runTaskGroup = false;
@@ -1599,6 +1662,7 @@ namespace ToolController
                 return;
             }
         }
+        s_runTriggerCamera = triggerCamera;
         s_cameraFrameAvailableForRun = false;
         s_forceCameraFrameForRun = forceCameraCapture;
         s_runTaskGroup = true;
@@ -1658,6 +1722,7 @@ namespace ToolController
 
     void RequestStepNext()
     {
+        s_runTriggerCamera = false;
         s_cameraFrameAvailableForRun = false;
         s_forceCameraFrameForRun = false;
         if (s_runTaskGroup)
@@ -1804,7 +1869,8 @@ namespace ToolController
             FrameNavigation::FitImageToWindow();
             s_mode = Mode::Idle;
         }
-        else if (s_loop && !s_runTaskGroup && s_taskRunImages.empty() &&
+        else if (s_loop && s_runTriggerCamera && !s_runTaskGroup &&
+            s_taskRunImages.empty() &&
             HardwareRuntimeService::Snapshot().cameraState == DeviceConnectionState::Connected &&
             HardwareRuntimeService::CameraTriggerOnInspectionEnabled())
         {
@@ -2135,6 +2201,7 @@ namespace ToolController
             if (job.worker.joinable())
                 job.worker.request_stop();
         }
+
         s_taskParallelJobs.clear();
         s_taskParallelPending.clear();
         s_taskParallelRunning = false;
@@ -2162,6 +2229,7 @@ namespace ToolController
         s_activeInputTaskGroupValid = false;
         s_cameraFrameAvailableForRun = false;
         s_forceCameraFrameForRun = false;
+        s_runTriggerCamera = false;
     }
 
     void Shutdown()

@@ -153,6 +153,7 @@ void Close() {}
 bool IsOpen() { return false; }
 bool IsPlaying() { return false; }
 bool IsCamera() { return false; }
+std::uint64_t SourceGeneration() { return 0; }
 void TogglePlay() {}
 void Stop() {}
 void SetLoop(bool) {}

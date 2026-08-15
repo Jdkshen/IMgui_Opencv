@@ -1090,8 +1090,20 @@ namespace UI
                         }
                         for (int index = 0; index < static_cast<int>(kHardwareCameraCount); ++index)
                         {
-                            char label[24];
-                            std::snprintf(label, sizeof(label), "相机 %02d", index + 1);
+                            const HardwareRuntimeSnapshot hardware =
+                                HardwareRuntimeService::Snapshot();
+                            const auto found = std::find_if(
+                                hardware.cameraSlots.begin(),
+                                hardware.cameraSlots.end(),
+                                [index](const HardwareCameraSlotSnapshot& item)
+                                {
+                                    return item.slotIndex == index;
+                                });
+                            const bool online = found != hardware.cameraSlots.end() &&
+                                found->state == DeviceConnectionState::Connected;
+                            char label[32];
+                            std::snprintf(label, sizeof(label), "相机 %02d%s",
+                                index + 1, online ? " · 在线" : "");
                             if (ImGui::Selectable(label, cameraIndex == index) &&
                                 ToolChainState::SetTaskGroupCameraIndex(selectedGroupIndex, index))
                             {
@@ -1107,9 +1119,14 @@ namespace UI
                 {
                     const HardwareRuntimeSnapshot hardware =
                         HardwareRuntimeService::Snapshot();
-                    const bool cameraConnected = hardware.cameraState ==
-                            DeviceConnectionState::Connected &&
-                        hardware.cameraSlotIndex == cameraIndex;
+                    const auto found = std::find_if(
+                        hardware.cameraSlots.begin(), hardware.cameraSlots.end(),
+                        [cameraIndex](const HardwareCameraSlotSnapshot& item)
+                        {
+                            return item.slotIndex == cameraIndex;
+                        });
+                    const bool cameraConnected = found != hardware.cameraSlots.end() &&
+                        found->state == DeviceConnectionState::Connected;
                     ImGui::PushStyleColor(ImGuiCol_Text, cameraConnected
                         ? ImVec4(0.24f, 0.86f, 0.48f, 1.0f)    // 绿色：已连接
                         : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));  // 灰色
@@ -5062,7 +5079,16 @@ TemplateState::ClearResults();
         {
             ImVec2 avail = ImGui::GetContentRegionAvail();
             ImVec2 start = ImGui::GetCursorScreenPos();
-            float cardH = (avail.y > 130.0f) ? 120.0f : avail.y;
+            const float lineH = ImGui::GetTextLineHeight();
+            const float lineGap = (std::max)(4.0f, style.ItemSpacing.y);
+            const float buttonH = ImGui::GetFrameHeight();
+            const float buttonGap = (std::max)(10.0f, style.ItemSpacing.y * 2.0f);
+            const float verticalPadding = (std::max)(12.0f, style.WindowPadding.y);
+            const float textBlockH = lineH * 3.0f + lineGap * 2.0f;
+            // Reserve independent text and action areas.  The previous fixed
+            // button offset overlapped the third line, especially with DPI scaling.
+            const float cardH = (std::max)(120.0f,
+                verticalPadding * 2.0f + textBlockH + buttonGap + buttonH);
             ImDrawList* drawList = ImGui::GetWindowDrawList();
             // 空状态卡片背景
             ImU32 bg = ImGui::ColorConvertFloat4ToU32(isDark ? ImVec4(0.10f, 0.11f, 0.13f, 1.0f) : ImVec4(0.82f, 0.86f, 0.91f, 1.0f));
@@ -5076,11 +5102,14 @@ TemplateState::ClearResults();
                 "点击上方 [+ 添加工具] 组成处理链。",
                 "每个工具默认读取原图工具输出。"
             };
-            const float lineH = ImGui::GetTextLineHeight();
-            const float lineGap = 4.0f;
             const float blockH = lineH * IM_ARRAYSIZE(emptyLines) +
                 lineGap * (IM_ARRAYSIZE(emptyLines) - 1);
-            float lineY = start.y + (std::max)(0.0f, (cardH - blockH) * 0.5f);
+            const float buttonY = start.y + cardH - verticalPadding - buttonH;
+            const float textAreaTop = start.y + verticalPadding;
+            const float textAreaH = (std::max)(0.0f,
+                buttonY - buttonGap - textAreaTop);
+            float lineY = textAreaTop +
+                (std::max)(0.0f, (textAreaH - blockH) * 0.5f);
             for (int line = 0; line < IM_ARRAYSIZE(emptyLines); ++line)
             {
                 const float textW = ImGui::CalcTextSize(emptyLines[line]).x;
@@ -5093,10 +5122,11 @@ TemplateState::ClearResults();
                 lineY += lineH + lineGap;
             }
 
-            const float addButtonW = (std::min)(220.0f, (std::max)(150.0f, avail.x - 32.0f));
+            const float addButtonW = (std::min)(220.0f,
+                (std::max)(1.0f, avail.x - 32.0f));
             ImGui::SetCursorScreenPos(ImVec2(
-                start.x + (avail.x - addButtonW) * 0.5f, start.y + cardH - 40.0f));
-            if (ImGui::Button("+ 添加第一个工具", ImVec2(addButtonW, 28.0f)))
+                start.x + (avail.x - addButtonW) * 0.5f, buttonY));
+            if (ImGui::Button("+ 添加第一个工具", ImVec2(addButtonW, buttonH)))
                 ImGui::OpenPopup("AddToolPopup");
         }
         else

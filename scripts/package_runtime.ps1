@@ -243,6 +243,7 @@ foreach ($source in @(
     "docs\HARDWARE_INTEGRATION.md",
     "docs\HIKROBOT_MVS.md",
     "docs\HUARAY_IMV.md",
+    "docs\MULTI_CAMERA.md",
     "docs\RELEASE.md"
 )) {
     $path = Join-Path $repo $source
@@ -325,8 +326,11 @@ try {
         "third_party/open62541/open62541.h",
         "assets/images/qr_tests/qr_test.png",
         "assets/images/ocr_product_sample.jpg",
-        "docs/HARDWARE_INTEGRATION.md"
-        "docs/HIKROBOT_MVS.md"
+        "models/yolo11n.onnx",
+        "models/coco_classes.txt",
+        "docs/HARDWARE_INTEGRATION.md",
+        "docs/HIKROBOT_MVS.md",
+        "docs/MULTI_CAMERA.md",
         "docs/HUARAY_IMV.md"
     ) + $requiredRuntimeDlls + $vcRuntimeDlls + $mvsPackagedDlls +
         $huarayPackagedFiles + $huarayVcRuntimeDlls
@@ -341,6 +345,25 @@ try {
 }
 finally {
     $archive.Dispose()
+}
+
+# The default release path is canonical. Remove old date/suffix variants only
+# after the new archive has passed verification, so dist never accumulates
+# several similarly named releases again.
+$canonicalOutput = Join-Path $repo "dist\IMgui_Opencv-$Configuration-$Platform"
+if ([System.IO.Path]::GetFullPath($Output).TrimEnd('\') -eq
+    [System.IO.Path]::GetFullPath($canonicalOutput).TrimEnd('\')) {
+    $distRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $canonicalOutput))
+    $canonicalLeaf = Split-Path -Leaf $canonicalOutput
+    Get-ChildItem -LiteralPath $distRoot -Force |
+        Where-Object { $_.Name -like "$canonicalLeaf-*" } |
+        ForEach-Object {
+            $candidate = [System.IO.Path]::GetFullPath($_.FullName)
+            if ([System.IO.Path]::GetDirectoryName($candidate) -ne $distRoot) {
+                throw "Refusing to clean release outside dist: $candidate"
+            }
+            Remove-Item -LiteralPath $candidate -Recurse -Force
+        }
 }
 
 Write-Host "Runtime package: $zip"

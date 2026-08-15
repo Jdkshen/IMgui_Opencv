@@ -1,6 +1,6 @@
 # 生产稳定性测试方案
 
-> 文档同步日期：2026-08-09。稳定性门槛不变，当前尚未生成 `samples.csv`/`summary.json`；发布前另需完成 `UI_SMOKE_CHECKLIST.md` 中的独立流程图、字体和工具图标检查。
+> 文档同步日期：2026-08-16。稳定性门槛不变，当前尚未生成 `samples.csv`/`summary.json`；发布前另需完成 `UI_SMOKE_CHECKLIST.md` 中的独立流程图、字体、工具图标、多相机和高 DPI 检查。
 
 ## 自动回归浸泡
 
