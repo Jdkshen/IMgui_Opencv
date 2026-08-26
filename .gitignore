@@ -58,6 +58,8 @@ artifacts/
 models/
 !models/
 models/*
+!models/yolo11n.onnx
+!models/coco_classes.txt
 !models/ppocrv6/
 !models/ppocrv6/*
 # Python helper caches
