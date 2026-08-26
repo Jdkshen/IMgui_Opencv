@@ -27,7 +27,17 @@ jobs:
       - name: Build regression tests
         run: msbuild Test\RegressionTests.vcxproj /t:Build /p:Configuration=Release /p:Platform=x64 /m:1 /nologo
       - name: Run full regression tests
-        run: .\Test\x64\Release\RegressionTests.exe
+        shell: pwsh
+        run: |
+          $output = & .\Test\x64\Release\RegressionTests.exe 2>&1
+          $exitCode = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          if ($exitCode -ne 0) {
+            $tail = ($output | Select-Object -Last 30) -join "`n"
+            $tail = $tail.Replace("%", "%25").Replace("`r", "%0D").Replace("`n", "%0A")
+            Write-Output "::error title=Regression tests failed::$tail"
+            exit $exitCode
+          }
       - name: Package runtime
         shell: pwsh
         run: .\scripts\package_runtime.ps1
