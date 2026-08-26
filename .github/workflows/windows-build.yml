@@ -40,7 +40,24 @@ jobs:
           }
       - name: Package runtime
         shell: pwsh
-        run: .\scripts\package_runtime.ps1
+        run: |
+          $output = @()
+          $exitCode = 0
+          try {
+            $output = & .\scripts\package_runtime.ps1 *>&1
+            $exitCode = $LASTEXITCODE
+          }
+          catch {
+            $output = @($_.Exception.Message, $_.ScriptStackTrace)
+            $exitCode = 1
+          }
+          $output | ForEach-Object { Write-Host $_ }
+          if ($exitCode -ne 0) {
+            $tail = ($output | Select-Object -Last 40) -join "`n"
+            $tail = $tail.Replace("%", "%25").Replace("`r", "%0D").Replace("`n", "%0A")
+            Write-Output "::error title=Runtime packaging failed::$tail"
+            exit $exitCode
+          }
       - uses: actions/upload-artifact@v7
         with:
           name: IMgui-Opencv-runtime
