@@ -3114,7 +3114,10 @@ void TestHardwareRuntimeAutomation()
     cameraView->throwGrabsRemaining = 1;
     HardwareRuntimeService::RequestCameraFrame();
     bool allocationFailureReported = false;
-    for (int attempt = 0; attempt < 200; ++attempt)
+    // GitHub-hosted Windows runners can deschedule the camera worker for
+    // several hundred milliseconds during the full suite. This verifies the
+    // state transition, not a 200 ms production latency budget.
+    for (int attempt = 0; attempt < 2000; ++attempt)
     {
         HardwareRuntimeService::Tick();
         const HardwareRuntimeSnapshot failureSnapshot =
@@ -3134,7 +3137,7 @@ void TestHardwareRuntimeAutomation()
     const int guardedRecoveryFrame =
         HardwareRuntimeService::Snapshot().cameraFrameIndex;
     HardwareRuntimeService::RequestCameraFrame();
-    for (int attempt = 0; attempt < 200; ++attempt)
+    for (int attempt = 0; attempt < 2000; ++attempt)
     {
         HardwareRuntimeService::Tick();
         if (HardwareRuntimeService::Snapshot().cameraFrameIndex >
@@ -3293,7 +3296,9 @@ void TestHardwareRuntimeAutomation()
         HardwareRuntimeService::Snapshot().cameraFrameIndex;
     ToolController::RequestRunAll(true);
     bool linkedRunStarted = false;
-    for (int attempt = 0; attempt < 200; ++attempt)
+    // This is an asynchronous state-transition test. A loaded hosted runner
+    // may not schedule the camera worker within the former 200 ms window.
+    for (int attempt = 0; attempt < 2000; ++attempt)
     {
         HardwareRuntimeService::Tick();
         if (HardwareRuntimeService::Snapshot().cameraFrameIndex > firstFrameIndex &&
@@ -3310,7 +3315,7 @@ void TestHardwareRuntimeAutomation()
     const int linkedFrameIndex = HardwareRuntimeService::Snapshot().cameraFrameIndex;
     ToolController::Tick();
     bool linkedLoopContinued = false;
-    for (int attempt = 0; attempt < 200; ++attempt)
+    for (int attempt = 0; attempt < 2000; ++attempt)
     {
         HardwareRuntimeService::Tick();
         if (HardwareRuntimeService::Snapshot().cameraFrameIndex > linkedFrameIndex &&
