@@ -3284,6 +3284,18 @@ void TestHardwareRuntimeAutomation()
             mixedBoundExecutions == 1 && mixedBoundCaptured == 17,
         "failed loop camera refresh reused a stale/public image for the bound task");
 
+    // The preceding case deliberately faults the scripted adapter while
+    // auto-reconnect is disabled. Use a fresh adapter for the independent
+    // legacy camera-triggered loop; reconnecting the same adapter while its
+    // worker is winding down would itself be a race.
+    HardwareRuntimeService::DisconnectCameraSlot(0);
+    auto legacyCamera = std::make_unique<TestCameraAdapter>(nullptr);
+    cameraView = legacyCamera.get();
+    HardwareAdapterService::SetCamera(std::move(legacyCamera));
+    Require(cameraView->Connect({"camera-auto", 0, {}}).success,
+        "legacy camera loop reconnect failed");
+    Require(HardwareRuntimeService::StartCameraCapture(captureConfig).success,
+        "legacy camera loop capture worker failed to restart");
     HardwareRuntimeService::SetCameraPreviewEnabled(true);
 
     ToolController::Reset();
