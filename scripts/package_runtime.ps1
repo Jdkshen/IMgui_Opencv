@@ -24,12 +24,22 @@ if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
 }
 $bootstrapProject = Join-Path $repo "Bootstrap\Bootstrap.vcxproj"
 $bootstrapExecutable = Join-Path $buildDir "bootstrap\Windows_imgui.exe"
+$vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+$msbuildCommand = Get-Command "MSBuild.exe" -ErrorAction SilentlyContinue
+$msbuild = if ($msbuildCommand) { $msbuildCommand.Source } else { $null }
+if (-not $msbuild -and (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
+    $msbuild = (& $vswhere -latest -products * -requires Microsoft.Component.MSBuild `
+        -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1)
+}
 $msbuildCandidates = @(
     (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\18\BuildTools\MSBuild\Current\Bin\MSBuild.exe"),
     (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe")
 )
-$msbuild = $msbuildCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
-    Select-Object -First 1
+if (-not $msbuild) {
+    $msbuild = $msbuildCandidates |
+        Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+        Select-Object -First 1
+}
 if (-not $msbuild) {
     throw "MSBuild not found; cannot build the static startup diagnostic launcher."
 }
@@ -94,7 +104,6 @@ if (-not [string]::IsNullOrWhiteSpace($env:VCToolsRedistDir) -and
     (Test-Path -LiteralPath $env:VCToolsRedistDir -PathType Container)) {
     $vcRedistRoots += [System.IO.Path]::GetFullPath($env:VCToolsRedistDir)
 }
-$vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
 if (Test-Path -LiteralPath $vswhere -PathType Leaf) {
     $installationPath = (& $vswhere -latest -products * -property installationPath | Select-Object -First 1)
     if (-not [string]::IsNullOrWhiteSpace($installationPath)) {
