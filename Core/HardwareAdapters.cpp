@@ -1,19 +1,28 @@
 #include "HardwareAdapters.h"
 
 #include <map>
+#include <mutex>
 #include <utility>
 
 namespace
 {
 std::map<std::string, std::unique_ptr<ICameraAdapter>> s_cameras;
 std::map<std::string, std::unique_ptr<IDeviceAdapter>> s_adapters;
+std::mutex s_registryMutex;
 }
 
 namespace HardwareAdapterService
 {
 void SetCamera(std::unique_ptr<ICameraAdapter> camera)
 {
-    RemoveCamera("default");
+    std::lock_guard<std::mutex> lock(s_registryMutex);
+    const auto found = s_cameras.find("default");
+    if (found != s_cameras.end())
+    {
+        found->second->StopStream();
+        found->second->Disconnect();
+        s_cameras.erase(found);
+    }
     if (camera)
         s_cameras.emplace("default", std::move(camera));
 }
@@ -30,6 +39,7 @@ const ICameraAdapter* CameraReadOnly()
 
 bool RegisterCamera(const std::string& key, std::unique_ptr<ICameraAdapter> camera)
 {
+    std::lock_guard<std::mutex> lock(s_registryMutex);
     if (key.empty() || !camera || s_cameras.find(key) != s_cameras.end())
         return false;
     s_cameras.emplace(key, std::move(camera));
@@ -38,18 +48,21 @@ bool RegisterCamera(const std::string& key, std::unique_ptr<ICameraAdapter> came
 
 ICameraAdapter* Camera(const std::string& key)
 {
+    std::lock_guard<std::mutex> lock(s_registryMutex);
     const auto found = s_cameras.find(key);
     return found == s_cameras.end() ? nullptr : found->second.get();
 }
 
 const ICameraAdapter* CameraReadOnly(const std::string& key)
 {
+    std::lock_guard<std::mutex> lock(s_registryMutex);
     const auto found = s_cameras.find(key);
     return found == s_cameras.end() ? nullptr : found->second.get();
 }
 
 std::vector<std::string> CameraKeys()
 {
+    std::lock_guard<std::mutex> lock(s_registryMutex);
     std::vector<std::string> keys;
     keys.reserve(s_cameras.size());
     for (const auto& item : s_cameras)
@@ -59,6 +72,7 @@ std::vector<std::string> CameraKeys()
 
 bool RemoveCamera(const std::string& key)
 {
+    std::lock_guard<std::mutex> lock(s_registryMutex);
     const auto found = s_cameras.find(key);
     if (found == s_cameras.end())
         return false;
@@ -70,6 +84,7 @@ bool RemoveCamera(const std::string& key)
 
 bool Register(const std::string& key, std::unique_ptr<IDeviceAdapter> adapter)
 {
+    std::lock_guard<std::mutex> lock(s_registryMutex);
     if (key.empty() || !adapter || s_adapters.find(key) != s_adapters.end())
         return false;
     s_adapters.emplace(key, std::move(adapter));
@@ -78,18 +93,21 @@ bool Register(const std::string& key, std::unique_ptr<IDeviceAdapter> adapter)
 
 IDeviceAdapter* Find(const std::string& key)
 {
+    std::lock_guard<std::mutex> lock(s_registryMutex);
     const auto found = s_adapters.find(key);
     return found == s_adapters.end() ? nullptr : found->second.get();
 }
 
 const IDeviceAdapter* FindReadOnly(const std::string& key)
 {
+    std::lock_guard<std::mutex> lock(s_registryMutex);
     const auto found = s_adapters.find(key);
     return found == s_adapters.end() ? nullptr : found->second.get();
 }
 
 std::vector<std::string> Keys()
 {
+    std::lock_guard<std::mutex> lock(s_registryMutex);
     std::vector<std::string> keys;
     keys.reserve(s_adapters.size());
     for (const auto& item : s_adapters)
@@ -99,6 +117,7 @@ std::vector<std::string> Keys()
 
 bool Remove(const std::string& key)
 {
+    std::lock_guard<std::mutex> lock(s_registryMutex);
     const auto found = s_adapters.find(key);
     if (found == s_adapters.end())
         return false;
@@ -109,6 +128,7 @@ bool Remove(const std::string& key)
 
 void DisconnectAll()
 {
+    std::lock_guard<std::mutex> lock(s_registryMutex);
     for (auto& item : s_cameras)
     {
         item.second->StopStream();
@@ -120,7 +140,14 @@ void DisconnectAll()
 
 void Clear()
 {
-    DisconnectAll();
+    std::lock_guard<std::mutex> lock(s_registryMutex);
+    for (auto& item : s_cameras)
+    {
+        item.second->StopStream();
+        item.second->Disconnect();
+    }
+    for (auto& item : s_adapters)
+        item.second->Disconnect();
     s_cameras.clear();
     s_adapters.clear();
 }

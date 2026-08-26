@@ -12,6 +12,35 @@
 namespace
 {
 ResultOverlayState::Settings s_settings;
+bool s_taskGroupFilterEnabled = false;
+std::string s_taskGroupFilter;
+std::vector<ToolResult> s_filteredResults;
+
+const ToolInstance* SourceTool(const ToolResult& result)
+{
+    const auto& tools = ToolChainState::ReadOnlyTools();
+    if (result.sourceToolId != 0)
+    {
+        const auto found = std::find_if(tools.begin(), tools.end(),
+            [&result](const ToolInstance& tool)
+            {
+                return tool.toolId == result.sourceToolId;
+            });
+        if (found != tools.end())
+            return &*found;
+    }
+    if (result.sourceToolIndex >= 0 &&
+        result.sourceToolIndex < static_cast<int>(tools.size()))
+    {
+        return &tools[static_cast<std::size_t>(result.sourceToolIndex)];
+    }
+    return nullptr;
+}
+
+bool MatchesTaskGroupFilter(const ToolInstance& tool)
+{
+    return !s_taskGroupFilterEnabled || tool.groupName == s_taskGroupFilter;
+}
 }
 
 namespace ResultOverlayState
@@ -28,7 +57,36 @@ const Settings& ReadOnlySettings()
 
 const std::vector<ToolResult>& Results()
 {
-    return gContext.unifiedResults;
+    if (!s_taskGroupFilterEnabled)
+        return gContext.unifiedResults;
+
+    s_filteredResults.clear();
+    for (const ToolResult& result : gContext.unifiedResults)
+    {
+        const ToolInstance* source = SourceTool(result);
+        if (source && MatchesTaskGroupFilter(*source))
+            s_filteredResults.push_back(result);
+    }
+    return s_filteredResults;
+}
+
+void SetTaskGroupFilter(const std::string& groupName)
+{
+    s_taskGroupFilterEnabled = true;
+    s_taskGroupFilter = groupName;
+    s_filteredResults.clear();
+}
+
+void ClearTaskGroupFilter()
+{
+    s_taskGroupFilterEnabled = false;
+    s_taskGroupFilter.clear();
+    s_filteredResults.clear();
+}
+
+bool HasTaskGroupFilter()
+{
+    return s_taskGroupFilterEnabled;
 }
 
 const std::vector<DetectedObject>& RealtimeObjects()
@@ -54,7 +112,8 @@ std::vector<FixtureOverlay> FixtureOverlays()
 
     for (const ToolInstance& tool : tools)
     {
-        if (!tool.fixture.enabled || !tool.hasLastResult)
+        if (!MatchesTaskGroupFilter(tool) ||
+            !tool.fixture.enabled || !tool.hasLastResult)
             continue;
 
         int sourceIndex = tool.fixture.sourceToolIndex;
@@ -97,6 +156,7 @@ void ClearResults()
     TemplateState::ClearResults();
     RealtimeDetectionState::Clear();
     gContext.ClearUnifiedResults();
+    s_filteredResults.clear();
 }
 
 bool ShouldDrawResultLabels(const ToolResult& result)

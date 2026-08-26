@@ -31,6 +31,7 @@ namespace FrameNavigation
     void NavigateNextImage();                              // 导航到下一张图片
     bool NavigateToImage(int index);
     void RequestImagePath(std::string path);
+    void CancelPendingImagePath();
     bool ConsumeFitRequest();
     bool ConsumePendingImagePath(std::string& path);
 

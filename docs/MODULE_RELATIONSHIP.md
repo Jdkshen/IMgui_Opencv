@@ -1,6 +1,6 @@
 # 模块关系图
 
-> 文档同步日期：2026-08-16。DX12/DX11 双后端、DPI、独立流程图、工具图标、统一结果、整轮计时、任务独立输入、16 槽相机、视频 YOLO 和 PLC 单槽握手已按当前实现更新。
+> 文档同步日期：2026-08-25。应用壳已收口到 `App/`；Bootstrap 双布局、DX12/DX11 双后端、DPI、独立流程图、工具图标、统一结果、整轮计时、任务独立输入、16 槽相机、视频 YOLO 和 PLC 单槽握手已按当前实现更新。
 
 
 本文整理 `IMgui_Opencv` 当前代码结构中的核心模块关系，重点说明：
@@ -19,7 +19,7 @@
 
 ```text
 ┌──────────────────────────── 应用壳 / 主循环 ────────────────────────────┐
-│ Windows_imgui.cpp                                                     │
+│ App/Main.cpp                                                          │
 │ - Win32 窗口创建                                                      │
 │ - GraphicsBackend 初始化（DX12 优先，DX11 回退）                      │
 │ - ImGui 初始化                                                        │
@@ -221,7 +221,7 @@ Tool -> ToolResult -> ResultPublisher / ToolExecutor::PublishDetached
 ### A. 壳层（Application Shell）
 负责把程序跑起来。
 
-- `Windows_imgui.cpp`
+- `App/Main.cpp`
 - `Core/RenderBackend.h`
 - `Core/GraphicsBackend.*`
 - `Core/DX12Backend.*`
@@ -264,12 +264,12 @@ Tool -> ToolResult -> ResultPublisher / ToolExecutor::PublishDetached
 
 | 模块 | 关键文件 | 说明 |
 |------|----------|------|
-| 程序入口 | `Windows_imgui.cpp` | 主循环、窗口、统一图形后端、ImGui 初始化与逐帧驱动 |
+| 程序入口 | `App/Main.cpp` | 主循环、窗口、统一图形后端、ImGui 初始化与逐帧驱动 |
 | 后端契约 | `Core/RenderBackend.h` | DX11/DX12 一致的初始化、渲染、Resize、纹理和释放接口 |
 | 后端选择 | `Core/GraphicsBackend.*` | DX12 优先、DX11 自动回退、统一主纹理和诊断信息 |
 | DX12 实现 | `Core/DX12Backend.*` / `Core/DX12Context.*` | 公共契约适配与完整保留的 DX12 实现 |
 | DX11 实现 | `Core/DX11Context.*` | 独立 D3D11 设备、交换链、ImGui 和纹理实现 |
-| 公共头聚合 | `Windows_imgui.h` | 汇总主要模块头文件 |
+| 入口头聚合 | `App/AppIncludes.h` | 汇总应用入口直接使用的模块头文件 |
 | 统一上下文 | `Core/VisionContext.h` | 图像、ROI、模板和结果的统一容器 |
 | 图像状态 | `Core/ImageState.*` | 当前图、原图、版本和 GPU 上传请求 |
 | 任务状态 | `Core/ToolChainState.*` | 工具实例、任务定义、顺序、启用和独立输入 |

@@ -594,8 +594,8 @@ TemplateState::ClearResults();
             {
                 for (int i = 0; i < 2; i++)
                 {
-                    bool selected = (g_CurrentTheme == i);
-                    if (ImGui::Selectable(g_ThemeNames[i], &selected))
+                    const bool selected = (g_CurrentTheme == i);
+                    if (ImGui::MenuItem(g_ThemeNames[i], nullptr, selected))
                         ApplyTheme(i);
                 }
                 ImGui::EndMenu();
@@ -718,14 +718,15 @@ TemplateState::ClearResults();
             ImGuiWindowFlags_NoBackground |
             ImGuiWindowFlags_MenuBar;
 
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+        const float dpiScale = AppRuntimeState::DpiScale();
+        const float cardRounding = 6.0f * dpiScale;
+        const float cardOuterGap = 3.0f * dpiScale;
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, cardRounding);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 2));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(cardOuterGap, cardOuterGap));
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.0f, 3.0f * dpiScale));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 0));
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 2.0f);
-        ImGui::PushStyleColor(ImGuiCol_MenuBarBg, ImGui::GetStyleColorVec4(ImGuiCol_TitleBgActive));
-
         ImGui::Begin("DockSpaceHost", nullptr, host_flags);
 
         if (ImGui::BeginMenuBar())
@@ -738,13 +739,11 @@ TemplateState::ClearResults();
         if (show_demo_window)
             ImGui::ShowDemoWindow(&show_demo_window);
 
-        ImGuiID dockspace_id = ImGui::GetID("MainDockSpace");
-
-        // 首帧：用 DockBuilder 预设布局（需删除 imgui.ini 才能重置）
-        static bool first_dock = true;
-        if (first_dock || g_ResetDockLayout)
+        // 使用新的布局 ID，首次启动时建立 IDE 式卡片工作台。
+        // 后续由 imgui.ini 保留用户拖动后的比例和停靠位置。
+        ImGuiID dockspace_id = ImGui::GetID("MainDockSpaceCardLayoutV7");
+        if (g_ResetDockLayout || ImGui::DockBuilderGetNode(dockspace_id) == nullptr)
         {
-            first_dock = false;
             g_ResetDockLayout = false;
 
             ImGui::DockBuilderRemoveNode(dockspace_id);
@@ -754,24 +753,23 @@ TemplateState::ClearResults();
 
             ImGuiID top, main, left, right, bottom;
 
-            const float dpiScale = AppRuntimeState::DpiScale();
             float leftPixels = ClampFloat(
-                dockSize.x * 0.18f, 300.0f * dpiScale, 360.0f * dpiScale);
+                dockSize.x * 0.27f, 300.0f * dpiScale, 380.0f * dpiScale);
             float rightPixels = ClampFloat(
-                dockSize.x * 0.28f, 360.0f * dpiScale, 460.0f * dpiScale);
+                dockSize.x * 0.28f, 320.0f * dpiScale, 420.0f * dpiScale);
             float bottomPixels = ClampFloat(
-                dockSize.y * 0.18f, 145.0f * dpiScale, 205.0f * dpiScale);
+                dockSize.y * 0.20f, 150.0f * dpiScale, 220.0f * dpiScale);
 
-            // 底部日志/统计先横贯全宽，再在上方切左/中/右。
-            // 这样全屏时不会出现左右栏一直空到底的竖条。
-            float bottomRatio = ClampFloat(bottomPixels / dockSize.y, 0.14f, 0.23f);
+            // VS Code 式工作台：先切出横贯全宽的底部输出区，
+            // 上半区再分为任务列表、主视图和功能窗口三列。
+            float bottomRatio = ClampFloat(bottomPixels / dockSize.y, 0.18f, 0.26f);
             ImGui::DockBuilderSplitNode(dockspace_id, ImGuiDir_Down, bottomRatio, &bottom, &top);
 
-            float leftRatio = ClampFloat(leftPixels / dockSize.x, 0.15f, 0.24f);
+            float leftRatio = ClampFloat(leftPixels / dockSize.x, 0.22f, 0.30f);
             ImGui::DockBuilderSplitNode(top, ImGuiDir_Left, leftRatio, &left, &main);
 
             float remainingAfterLeft = dockSize.x - leftPixels;
-            float rightRatio = ClampFloat(rightPixels / remainingAfterLeft, 0.25f, 0.36f);
+            float rightRatio = ClampFloat(rightPixels / remainingAfterLeft, 0.32f, 0.42f);
             ImGui::DockBuilderSplitNode(main, ImGuiDir_Right, rightRatio, &right, &main);
 
             ImGui::DockBuilderDockWindow("功能窗口", right );
@@ -782,19 +780,14 @@ TemplateState::ClearResults();
                 "任务列表###task_group_list_window", left);
             ImGui::DockBuilderDockWindow("日志窗口", bottom);
             ImGui::DockBuilderDockWindow("性能统计", bottom);
-            // 每个停靠节点的标签栏在单窗口时自动隐藏（节省空间），图钉仍可用
-            ImGuiDockNodeFlags autoHideFlags = ImGuiDockNodeFlags_AutoHideTabBar;
-            if (auto n = ImGui::DockBuilderGetNode(left))   n->LocalFlags |= autoHideFlags;
-            if (auto n = ImGui::DockBuilderGetNode(main))   n->LocalFlags |= autoHideFlags;
-            if (auto n = ImGui::DockBuilderGetNode(right))  n->LocalFlags |= autoHideFlags;
-            if (auto n = ImGui::DockBuilderGetNode(bottom)) n->LocalFlags |= autoHideFlags;
+            // 每块卡片都保留左上角窗口菜单的点击区域，图标由 ImGui 在悬停时显示；
+            // 分隔线不设 NoResize，因此水平和垂直比例仍可直接拖拽。
             ImGui::DockBuilderFinish(dockspace_id);
         }
 
         ImGui::DockSpace(dockspace_id);
 
         ImGui::End();
-        ImGui::PopStyleColor();
         ImGui::PopStyleVar(6);
     }
 

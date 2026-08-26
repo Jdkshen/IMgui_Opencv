@@ -1,6 +1,6 @@
 # OpenCV 5.0 YOLO 实验功能
 
-> 文档同步日期：2026-08-16。主进程 DNN 和独立 helper 的数据传递方式已核对；该实验工具仍走统一 `ToolResult` 与任务输入链，视频实时入口和普通异步入口均保留。
+> 文档同步日期：2026-08-25。主进程 DNN 和独立 helper 的数据传递方式已核对；该实验工具仍走统一 `ToolResult` 与任务输入链，视频实时入口和普通异步入口均保留。
 
 
 当前工程已统一切到仓库内置 OpenCV 5.0；`YOLO OpenCV 5.0` 仍保留为 OpenCV DNN 后端，用于和 ONNX Runtime YOLO 工具对比。

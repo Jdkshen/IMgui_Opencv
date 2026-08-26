@@ -1,4 +1,6 @@
 #include "ToolController.h"
+#include "ToolRunPolicy.h"
+#include "TaskImageProvider.h"
 #include "ToolExecutor.h"
 #include "FrameNavigation.h"
 #include "HardwareRuntimeService.h"
@@ -61,6 +63,31 @@ namespace ToolController
     static cv::Mat s_lastOutputImage;
     static cv::Mat s_originalToolOutputImage;
     static cv::Mat s_runFallbackImage;
+    static cv::Mat s_cameraFrameForRun;
+    static std::unordered_map<int, cv::Mat> s_cameraFramesBySlotForRun;
+    struct PendingCameraSlotCapture
+    {
+        int baselineFrameIndex = 0;
+        std::uint64_t baselineFrameNumber = 0;
+        std::uint64_t baselineHardwareTimestamp = 0;
+        std::uint64_t baselineReceivedTimestamp = 0;
+        std::uint64_t baselineDroppedFrames = 0;
+        bool captured = false;
+    };
+    static std::unordered_map<int, PendingCameraSlotCapture>
+        s_pendingCameraSlotCaptures;
+    static std::set<int> s_cameraSlotsRequestedForRun;
+    static bool s_multiCameraCapturePending = false;
+    static bool s_multiCameraCaptureLoop = false;
+    static bool s_multiCameraLoopRestartPending = false;
+    struct PendingCameraRunScope
+    {
+        bool valid = false;
+        bool taskGroup = false;
+        std::string taskGroupName;
+    };
+    static PendingCameraRunScope s_pendingCameraRunScope;
+    static std::chrono::steady_clock::time_point s_multiCameraCaptureDeadline;
     static std::unordered_map<std::string, cv::Mat> s_taskRunImages;
     static std::unordered_map<std::string, cv::Mat> s_taskResultImages;
     static std::string s_activeInputTaskGroup;
@@ -141,6 +168,7 @@ namespace ToolController
         std::vector<int> toolIndices;
         std::vector<ToolInstance> tools;
         cv::Mat inputImage;
+        std::uint64_t imageCacheToken = 0;
         std::vector<ROI> visibleROIs;
         int selectedROI = -1;
         cv::Mat frozenTemplate;
@@ -153,23 +181,65 @@ namespace ToolController
     static std::vector<TaskPipelineJob> s_taskParallelJobs;
     static std::chrono::high_resolution_clock::time_point s_taskParallelStart;
     static int s_taskParallelPublishedTools = 0;
+    static std::atomic<std::uint64_t> s_taskParallelActiveInputBytes{0};
+    static std::atomic<std::uint64_t> s_taskParallelPeakInputBytes{0};
+    static std::uint64_t s_taskParallelEagerInputBytes = 0;
+    static std::atomic<std::uint64_t> s_nextTaskImageCacheToken{1};
+
+    static void UpdateTaskParallelPeakInputBytes(std::uint64_t candidate)
+    {
+        std::uint64_t peak = s_taskParallelPeakInputBytes.load(std::memory_order_relaxed);
+        while (candidate > peak &&
+            !s_taskParallelPeakInputBytes.compare_exchange_weak(
+                peak, candidate, std::memory_order_relaxed))
+        {
+        }
+    }
+
+    static std::mutex& ModelRuntimeMutex(int toolType)
+    {
+        static std::mutex onnxYoloMutex;
+        static std::mutex openCvYoloMutex;
+        static std::mutex ocrMutex;
+        switch (toolType)
+        {
+        case 4: return onnxYoloMutex;
+        case 11: return openCvYoloMutex;
+        default: return ocrMutex;
+        }
+    }
 
     static bool MatchesRunScope(const ToolInstance& tool)
     {
-        return !s_runTaskGroup || tool.groupName == s_runTaskGroupName;
+        return ToolRunPolicy::MatchesScope(
+            tool, s_runTaskGroup, s_runTaskGroupName);
+    }
+
+    static const char* RunScopeLogName()
+    {
+        return s_runTaskGroup ? "执行当前任务" : "全部执行";
+    }
+
+    static void SavePendingCameraRunScope()
+    {
+        s_pendingCameraRunScope.valid = true;
+        s_pendingCameraRunScope.taskGroup = s_runTaskGroup;
+        s_pendingCameraRunScope.taskGroupName = s_runTaskGroupName;
+    }
+
+    static void RestorePendingCameraRunScope()
+    {
+        if (!s_pendingCameraRunScope.valid)
+            return;
+        s_runTaskGroup = s_pendingCameraRunScope.taskGroup;
+        s_runTaskGroupName = s_pendingCameraRunScope.taskGroupName;
+        s_pendingCameraRunScope = {};
     }
 
     static int TaskGroupCameraIndex(const std::string& groupName)
     {
-        if (groupName.empty())
-            return -1;
-        const int groupIndex = ToolChainState::TaskGroupIndexByName(groupName);
-        if (groupIndex < 0 || !ToolChainState::ReadOnlyTaskGroups()[groupIndex].enabled)
-            return -1;
-        const TaskGroupDefinition& group =
-            ToolChainState::ReadOnlyTaskGroups()[groupIndex];
-        return group.cameraIndex >= 0
-            ? group.cameraIndex : (group.cameraPreferred ? 0 : -1);
+        return ToolRunPolicy::TaskGroupCameraIndex(
+            ToolChainState::ReadOnlyTaskGroups(), groupName);
     }
 
     static bool TaskGroupPrefersCamera(const std::string& groupName)
@@ -179,13 +249,8 @@ namespace ToolController
 
     static int EnabledTaskGroupCount()
     {
-        return static_cast<int>(std::count_if(
-            ToolChainState::ReadOnlyTaskGroups().begin(),
-            ToolChainState::ReadOnlyTaskGroups().end(),
-            [](const TaskGroupDefinition& group)
-            {
-                return group.enabled;
-            }));
+        return ToolRunPolicy::EnabledTaskGroupCount(
+            ToolChainState::ReadOnlyTaskGroups());
     }
 
     static int RunScopeCameraIndex()
@@ -208,47 +273,41 @@ namespace ToolController
         return cameraIndex;
     }
 
+    static std::set<int> RunScopeCameraSlots()
+    {
+        std::set<int> cameraSlots;
+        for (const ToolInstance& tool : ToolChainState::ReadOnlyTools())
+        {
+            if (!tool.enabled || !MatchesRunScope(tool))
+                continue;
+            const int cameraIndex = TaskGroupCameraIndex(tool.groupName);
+            if (cameraIndex >= 0)
+                cameraSlots.insert(cameraIndex);
+        }
+        return cameraSlots;
+    }
+
     static bool RunScopePrefersCamera()
     {
         const int cameraIndex = RunScopeCameraIndex();
         const HardwareRuntimeSnapshot hardware = HardwareRuntimeService::Snapshot();
-        return cameraIndex >= 0 &&
-            hardware.cameraState == DeviceConnectionState::Connected &&
-            hardware.cameraSlotIndex == cameraIndex;
+        if (cameraIndex < 0)
+            return false;
+        const auto found = std::find_if(hardware.cameraSlots.begin(),
+            hardware.cameraSlots.end(),
+            [cameraIndex](const HardwareCameraSlotSnapshot& slot)
+            {
+                return slot.slotIndex == cameraIndex;
+            });
+        return found != hardware.cameraSlots.end() &&
+            found->state == DeviceConnectionState::Connected;
     }
 
     static void BuildBatchExecutionOrder()
     {
-        s_batchExecutionOrder.clear();
-        const auto& tools = ToolChainState::ReadOnlyTools();
-        if (s_runTaskGroup)
-        {
-            for (int index = 0; index < static_cast<int>(tools.size()); ++index)
-            {
-                if (MatchesRunScope(tools[index]))
-                    s_batchExecutionOrder.push_back(index);
-            }
-        }
-        else
-        {
-            // 全部执行按任务列表顺序运行，并保持每个任务内部的工具顺序。
-            for (const TaskGroupDefinition& group : ToolChainState::ReadOnlyTaskGroups())
-            {
-                if (!group.enabled)
-                    continue;
-                for (int index = 0; index < static_cast<int>(tools.size()); ++index)
-                {
-                    if (tools[index].groupName == group.name)
-                        s_batchExecutionOrder.push_back(index);
-                }
-            }
-            // 未分组工具放在正式任务之后，保持原工具链顺序。
-            for (int index = 0; index < static_cast<int>(tools.size()); ++index)
-            {
-                if (tools[index].groupName.empty())
-                    s_batchExecutionOrder.push_back(index);
-            }
-        }
+        s_batchExecutionOrder = ToolRunPolicy::BuildExecutionOrder(
+            ToolChainState::ReadOnlyTools(), ToolChainState::ReadOnlyTaskGroups(),
+            s_runTaskGroup, s_runTaskGroupName);
         s_batchExecutionCursor = 0;
     }
 
@@ -361,14 +420,18 @@ namespace ToolController
         if (selectedInput.empty())
             return;
 
-        auto& currentImage = ImageState::CurrentRef();
-        if (selectedInput.data != currentImage.data)
-            selectedInput.copyTo(currentImage);
+        const cv::Mat* currentImage = &ImageState::Current();
+        if (selectedInput.data != currentImage->data)
+        {
+            auto& mutableCurrent = ImageState::CurrentRef();
+            selectedInput.copyTo(mutableCurrent);
+            currentImage = &mutableCurrent;
+        }
         if (!requestUpload)
             return;
 
         cv::Mat rgba;
-        SafeConvertToRGBA(currentImage, rgba);
+        SafeConvertToRGBA(*currentImage, rgba);
         if (!rgba.empty())
         {
             ImageState::PendingUploadRef() = rgba;
@@ -474,56 +537,6 @@ namespace ToolController
         s_originalToolOutputImage = s_originalImage;
     }
 
-    static cv::Mat ReadTaskImageFile(const std::string& imagePath)
-    {
-        if (imagePath.empty())
-            return {};
-        const auto* begin = reinterpret_cast<const char8_t*>(imagePath.data());
-        const std::filesystem::path path(
-            std::u8string(begin, begin + imagePath.size()));
-        std::ifstream input(path, std::ios::binary);
-        if (!input)
-            return {};
-        std::vector<uchar> bytes(
-            (std::istreambuf_iterator<char>(input)),
-            std::istreambuf_iterator<char>());
-        return bytes.empty() ? cv::Mat() : cv::imdecode(bytes, cv::IMREAD_COLOR);
-    }
-
-    static bool ResolveTaskImagePathForRun(const std::string& groupName,
-        std::string& imagePath)
-    {
-        const int index = ToolChainState::TaskGroupIndexByName(groupName);
-        if (index < 0)
-            return false;
-
-        const TaskGroupDefinition group =
-            ToolChainState::ReadOnlyTaskGroups()[index];
-        if (group.imageFolderPath.empty())
-        {
-            imagePath = group.imagePath;
-            return !imagePath.empty();
-        }
-
-        const std::vector<std::string> images =
-            ScanImageFiles(group.imageFolderPath, true);
-        if (images.empty())
-        {
-            LogSystem::Add(LOG_ERROR,
-                "任务图片文件夹中没有可用图片 [%s]: %s",
-                groupName.c_str(), group.imageFolderPath.c_str());
-            return false;
-        }
-
-        const int imageCount = static_cast<int>(images.size());
-        const int nextIndex = group.imageFolderIndex < 0 ||
-            group.imageFolderIndex >= imageCount
-            ? 0 : (group.imageFolderIndex + 1) % imageCount;
-        imagePath = images[static_cast<std::size_t>(nextIndex)];
-        return ToolChainState::SetTaskGroupFolderImagePosition(
-            index, imagePath, nextIndex, imageCount);
-    }
-
     static bool PrepareTaskImagesForRun(bool preserveFallback = false)
     {
         s_taskRunImages.clear();
@@ -546,14 +559,34 @@ namespace ToolController
             const int cameraIndex = TaskGroupCameraIndex(groupName);
             if (cameraIndex >= 0 && TaskGroupPrefersCamera(groupName))
             {
-                if (s_cameraFrameAvailableForRun &&
-                    !s_runFallbackImage.empty())
+                const auto capturedFrame =
+                    s_cameraFramesBySlotForRun.find(cameraIndex);
+                if (capturedFrame != s_cameraFramesBySlotForRun.end() &&
+                    !capturedFrame->second.empty())
                 {
-                    s_taskRunImages.emplace(groupName, s_runFallbackImage.clone());
+                    // The captured-frame map owns an immutable snapshot for this
+                    // run. Keep only a reference-counted header here; an isolated
+                    // writable copy is created only when a worker is launched.
+                    s_taskRunImages.emplace(groupName, capturedFrame->second);
                     continue;
                 }
+                if (s_cameraFramesBySlotForRun.empty() &&
+                    s_cameraFrameAvailableForRun &&
+                    !s_cameraFrameForRun.empty())
+                {
+                    s_taskRunImages.emplace(groupName, s_cameraFrameForRun);
+                    continue;
+                }
+                if (s_cameraSlotsRequestedForRun.contains(cameraIndex))
+                {
+                    LogSystem::Add(LOG_ERROR,
+                        "任务绑定相机 %02d，但本轮没有取得新帧 [%s]",
+                        cameraIndex + 1, groupName.c_str());
+                    return false;
+                }
                 cv::Mat cameraFrame;
-                if (!s_runTaskGroup &&
+                if (!s_cameraSlotsRequestedForRun.contains(cameraIndex) &&
+                    !s_runTaskGroup &&
                     HardwareRuntimeService::AcquireLatestCameraFrame(
                         cameraIndex, cameraFrame) && !cameraFrame.empty())
                 {
@@ -562,7 +595,7 @@ namespace ToolController
                 }
             }
             std::string imagePath;
-            if (!ResolveTaskImagePathForRun(groupName, imagePath))
+            if (!TaskImageProvider::ResolvePathForRun(groupName, imagePath))
             {
                 const int groupIndex = ToolChainState::TaskGroupIndexByName(groupName);
                 if (groupIndex >= 0 &&
@@ -573,7 +606,7 @@ namespace ToolController
                 }
                 return false;
             }
-            cv::Mat taskImage = ReadTaskImageFile(imagePath);
+            cv::Mat taskImage = TaskImageProvider::ReadImageFile(imagePath);
             if (taskImage.empty())
             {
                 LogSystem::Add(LOG_ERROR, "任务图片无法读取 [%s]: %s",
@@ -633,35 +666,22 @@ namespace ToolController
     {
         if (!s_activeInputTaskGroupValid || s_lastOutputImage.empty())
             return;
-        s_taskResultImages[s_activeInputTaskGroup] = s_lastOutputImage.clone();
+        // cv::Mat ownership is reference-counted and ImageState uses
+        // copy-on-write for mutable access. Preserve the completed task frame
+        // without another full-frame copy.
+        s_taskResultImages[s_activeInputTaskGroup] = s_lastOutputImage;
     }
 
     static bool RunScopeHasTaskImages()
     {
-        for (const TaskGroupDefinition& group : ToolChainState::ReadOnlyTaskGroups())
-        {
-            if (group.enabled &&
-                (!group.imagePath.empty() || !group.imageFolderPath.empty()) &&
-                (!s_runTaskGroup || group.name == s_runTaskGroupName))
-                return true;
-        }
-        return false;
+        return ToolRunPolicy::RunScopeHasTaskImages(
+            ToolChainState::ReadOnlyTaskGroups(), s_runTaskGroup,
+            s_runTaskGroupName);
     }
 
     static bool IsAsyncTool(const ToolInstance& tool)
     {
-        switch (tool.type)
-        {
-        case 1:  // Template match
-        case 4:  // YOLO
-        case 6:  // Shape match
-        case 11: // OpenCV YOLO
-        case 13: // OCR
-        case 15: // Industrial measurement
-            return true;
-        default:
-            return false;
-        }
+        return ToolRunPolicy::IsAsyncTool(tool.type);
     }
 
     static bool StartAsyncExecution(int index, const cv::Mat& input, bool batch, bool force)
@@ -787,67 +807,55 @@ namespace ToolController
 
     static bool HasCrossTaskDependencies()
     {
-        const auto& tools = ToolChainState::ReadOnlyTools();
-        auto sourceGroup = [&tools](int legacyIndex, std::uint64_t stableId,
-            const std::string& targetGroup) -> bool
-        {
-            int sourceIndex = -1;
-            if (stableId != 0)
-            {
-                for (int index = 0; index < static_cast<int>(tools.size()); ++index)
-                {
-                    if (tools[index].toolId == stableId)
-                    {
-                        sourceIndex = index;
-                        break;
-                    }
-                }
-            }
-            else if (legacyIndex >= 0 && legacyIndex < static_cast<int>(tools.size()))
-            {
-                sourceIndex = legacyIndex;
-            }
-            return sourceIndex >= 0 && tools[sourceIndex].groupName != targetGroup;
-        };
-
-        for (int toolIndex = 0; toolIndex < static_cast<int>(tools.size()); ++toolIndex)
-        {
-            const ToolInstance& tool = tools[toolIndex];
-            if (!tool.enabled || BatchExecutionOrdinal(toolIndex) < 0)
-                continue;
-            if (tool.resultRoiMode != 0 &&
-                sourceGroup(tool.resultRoiSourceTool, tool.resultRoiSourceToolId,
-                    tool.groupName))
-            {
-                return true;
-            }
-            if (tool.resultRoiMode == static_cast<int>(ResultROIMode::SelectedPair) &&
-                sourceGroup(tool.resultRoiSecondSourceTool,
-                    tool.resultRoiSecondSourceToolId, tool.groupName))
-            {
-                return true;
-            }
-            if (tool.fixture.enabled &&
-                sourceGroup(tool.fixture.sourceToolIndex, tool.fixture.sourceToolId,
-                    tool.groupName))
-            {
-                return true;
-            }
-        }
-        return false;
+        return ToolRunPolicy::HasCrossTaskDependencies(
+            ToolChainState::ReadOnlyTools(), s_batchExecutionOrder);
     }
 
     static TaskPipelineCompletion ExecuteTaskPipeline(
         TaskPipelineInput input, std::stop_token stopToken)
     {
-        static std::mutex modelRuntimeMutex;
         TaskPipelineCompletion completion;
         completion.generation = input.generation;
         completion.groupName = input.groupName;
         completion.toolIndices = input.toolIndices;
         completion.outputs.reserve(input.tools.size());
 
-        cv::Mat original = input.inputImage;
+        cv::Mat original;
+        std::uint64_t activeInputBytes = 0;
+        struct ActiveInputBytesGuard
+        {
+            std::uint64_t& bytes;
+            ~ActiveInputBytesGuard()
+            {
+                if (bytes != 0)
+                {
+                    s_taskParallelActiveInputBytes.fetch_sub(
+                        bytes, std::memory_order_relaxed);
+                }
+            }
+        } activeInputBytesGuard{activeInputBytes};
+        try
+        {
+            // Clone only after the job enters the bounded worker set. Pending
+            // tasks retain a cheap cv::Mat header instead of a full image copy.
+            original = input.inputImage.clone();
+            activeInputBytes = static_cast<std::uint64_t>(
+                original.total() * original.elemSize());
+            const std::uint64_t current = s_taskParallelActiveInputBytes.fetch_add(
+                activeInputBytes, std::memory_order_relaxed) + activeInputBytes;
+            UpdateTaskParallelPeakInputBytes(current);
+            input.inputImage.release();
+        }
+        catch (const std::bad_alloc&)
+        {
+            completion.error = "任务输入图像内存分配失败";
+            return completion;
+        }
+        catch (const cv::Exception& exception)
+        {
+            completion.error = std::string("任务输入图像复制失败: ") + exception.what();
+            return completion;
+        }
         cv::Mat lastInput = original;
         cv::Mat lastOutput = original;
         cv::Mat originalToolOutput = original;
@@ -927,13 +935,15 @@ namespace ToolController
                 else
                 {
                     context.stopToken = stopToken;
+                    context.imageCacheToken = selectedInput.data == original.data
+                        ? input.imageCacheToken : 0;
                     try
                     {
                         // These backends own shared model/session state. Serialize only
                         // their inference section while other task pipelines keep running.
                         if (tool.type == 4 || tool.type == 11 || tool.type == 13)
                         {
-                            std::lock_guard<std::mutex> lock(modelRuntimeMutex);
+                            std::lock_guard<std::mutex> lock(ModelRuntimeMutex(tool.type));
                             ToolExecutor::ExecuteDetached(
                                 snapshot, context, sourceIndex, output);
                         }
@@ -984,7 +994,7 @@ namespace ToolController
             }
         }
 
-        completion.resultImage = lastOutput.clone();
+        completion.resultImage = lastOutput;
         return completion;
     }
 
@@ -1041,8 +1051,10 @@ namespace ToolController
         const int selectedROI = ROIState::SelectedIndex();
         const cv::Mat frozenTemplate = TemplateState::FrozenTemplate().clone();
         const auto& tools = ToolChainState::ReadOnlyTools();
+        std::unordered_map<const unsigned char*, std::uint64_t> imageCacheTokens;
         s_taskParallelPending.clear();
         s_taskParallelJobs.clear();
+        s_taskParallelEagerInputBytes = 0;
         for (const std::string& groupName : groupOrder)
         {
             TaskPipelineInput input;
@@ -1052,8 +1064,31 @@ namespace ToolController
             input.selectedROI = selectedROI;
             input.frozenTemplate = frozenTemplate;
             const auto taskImage = s_taskRunImages.find(groupName);
-            input.inputImage = (taskImage != s_taskRunImages.end()
-                ? taskImage->second : s_runFallbackImage).clone();
+            const cv::Mat& sourceImage = taskImage != s_taskRunImages.end()
+                ? taskImage->second : s_runFallbackImage;
+            input.inputImage = sourceImage;
+            if (!input.inputImage.empty() &&
+                input.inputImage.data != sourceImage.data)
+            {
+                s_taskParallelEagerInputBytes += static_cast<std::uint64_t>(
+                    input.inputImage.total() * input.inputImage.elemSize());
+            }
+            if (!input.inputImage.empty())
+            {
+                const auto [token, inserted] = imageCacheTokens.emplace(
+                    input.inputImage.data, 0);
+                if (inserted)
+                {
+                    token->second = s_nextTaskImageCacheToken.fetch_add(
+                        1, std::memory_order_relaxed);
+                    if (token->second == 0)
+                    {
+                        token->second = s_nextTaskImageCacheToken.fetch_add(
+                            1, std::memory_order_relaxed);
+                    }
+                }
+                input.imageCacheToken = token->second;
+            }
             for (int index : s_batchExecutionOrder)
             {
                 if (index >= 0 && index < static_cast<int>(tools.size()) &&
@@ -1074,6 +1109,8 @@ namespace ToolController
 
         s_taskParallelRunning = true;
         s_taskParallelPublishedTools = 0;
+        s_taskParallelActiveInputBytes.store(0, std::memory_order_relaxed);
+        s_taskParallelPeakInputBytes.store(0, std::memory_order_relaxed);
         s_taskParallelStart = std::chrono::high_resolution_clock::now();
         s_batchStart = s_taskParallelStart;
         s_batchTimerStarted = true;
@@ -1107,6 +1144,13 @@ namespace ToolController
             published = true;
             if (completion.generation != s_executionGeneration)
                 continue;
+            if (!completion.error.empty())
+            {
+                LogSystem::Add(LOG_ERROR, "任务并行执行失败 [%s]: %s",
+                    completion.groupName.c_str(), completion.error.c_str());
+                PublishConfiguredHardwareStatus(ToolResultStatus::Error);
+                continue;
+            }
 
             for (std::size_t outputIndex = 0;
                 outputIndex < completion.outputs.size() &&
@@ -1129,7 +1173,8 @@ namespace ToolController
                 ++s_taskParallelPublishedTools;
             }
             if (!completion.resultImage.empty())
-                s_taskResultImages[completion.groupName] = completion.resultImage.clone();
+                s_taskResultImages[completion.groupName] =
+                    std::move(completion.resultImage);
         }
 
         LaunchPendingTaskPipelines();
@@ -1481,19 +1526,11 @@ namespace ToolController
         s_forceNextRunAll = false;
         s_activeRunForce = force;
         const int boundCameraIndex = RunScopeCameraIndex();
-        std::set<int> runCameraSlots;
-        for (const ToolInstance& tool : ToolChainState::ReadOnlyTools())
-        {
-            if (!tool.enabled || !MatchesRunScope(tool))
-                continue;
-            const int cameraIndex = TaskGroupCameraIndex(tool.groupName);
-            if (cameraIndex >= 0)
-                runCameraSlots.insert(cameraIndex);
-        }
+        const std::set<int> runCameraSlots = RunScopeCameraSlots();
         for (const int cameraIndex : runCameraSlots)
         {
             const DeviceOperationResult activation =
-                HardwareRuntimeService::ActivateCameraSlot(cameraIndex);
+                HardwareRuntimeService::ActivateCameraSlot(cameraIndex, false);
             if (!activation.success)
             {
                 LogSystem::Add(LOG_WARN,
@@ -1504,7 +1541,7 @@ namespace ToolController
         if (triggerCamera && boundCameraIndex >= 0)
         {
             const DeviceOperationResult activation =
-                HardwareRuntimeService::ActivateCameraSlot(boundCameraIndex);
+                HardwareRuntimeService::ActivateCameraSlot(boundCameraIndex, false);
             if (!activation.success)
             {
                 LogSystem::Add(LOG_WARN,
@@ -1514,35 +1551,132 @@ namespace ToolController
         }
         else if (triggerCamera && boundCameraIndex == -2)
         {
-            LogSystem::Add(LOG_WARN,
-                "全部执行包含多个相机绑定，将按各任务绑定槽使用对应最新相机帧");
+            LogSystem::Add(LOG_INFO,
+                "全部执行包含多个相机绑定，将等待各绑定槽本轮新帧");
         }
         const HardwareRuntimeSnapshot hardware = HardwareRuntimeService::Snapshot();
-        const bool taskCameraPreferred = boundCameraIndex >= 0 &&
-            hardware.cameraState == DeviceConnectionState::Connected &&
-            hardware.cameraSlotIndex == boundCameraIndex;
+        const auto boundCameraSlot = std::find_if(hardware.cameraSlots.begin(),
+            hardware.cameraSlots.end(),
+            [boundCameraIndex](const HardwareCameraSlotSnapshot& slot)
+            {
+                return slot.slotIndex == boundCameraIndex;
+            });
+        const bool boundCameraConnected = boundCameraIndex >= 0 &&
+            boundCameraSlot != hardware.cameraSlots.end() &&
+            boundCameraSlot->state == DeviceConnectionState::Connected;
+        const bool taskCameraPreferred = boundCameraConnected;
         if (triggerCamera)
         {
             s_cameraFrameAvailableForRun = false;
             s_forceCameraFrameForRun = forceTaskCameraCapture;
+            s_cameraFrameForRun.release();
+            s_cameraFramesBySlotForRun.clear();
+            s_cameraSlotsRequestedForRun.clear();
+            s_pendingCameraSlotCaptures.clear();
+            s_multiCameraCapturePending = false;
+            if (boundCameraIndex >= 0)
+                s_cameraSlotsRequestedForRun.insert(boundCameraIndex);
         }
-        const bool requestTaskCamera = triggerCamera &&
+        if (triggerCamera && runCameraSlots.size() > 1)
+        {
+            // Preserve the pre-capture public input. TickMultiCameraSlots may
+            // publish the selected preview slot while the workers are running,
+            // but unbound tasks must keep this original fallback.
+            s_runFallbackImage = !ImageState::Original().empty()
+                ? ImageState::Original().clone() : ImageState::Current().clone();
+
+            const HardwareRuntimeSnapshot multiSnapshot =
+                HardwareRuntimeService::Snapshot();
+            for (const int cameraIndex : runCameraSlots)
+            {
+                // Mark every bound slot as explicitly requested, including an
+                // offline slot, so a stale cached frame can never stand in for
+                // this inspection round.
+                s_cameraSlotsRequestedForRun.insert(cameraIndex);
+                const auto found = std::find_if(
+                    multiSnapshot.cameraSlots.begin(),
+                    multiSnapshot.cameraSlots.end(),
+                    [cameraIndex](const HardwareCameraSlotSnapshot& slot)
+                    {
+                        return slot.slotIndex == cameraIndex;
+                    });
+                if (found == multiSnapshot.cameraSlots.end() ||
+                    found->state != DeviceConnectionState::Connected)
+                {
+                    LogSystem::Add(LOG_WARN,
+                        "[相机%02d] 本轮未连接，任务将使用备用图片",
+                        cameraIndex + 1);
+                    continue;
+                }
+
+                PendingCameraSlotCapture capture;
+                capture.baselineFrameIndex = found->frameIndex;
+                capture.baselineFrameNumber = found->frameMetadata.frameNumber;
+                capture.baselineHardwareTimestamp =
+                    found->frameMetadata.hardwareTimestampNanoseconds;
+                capture.baselineReceivedTimestamp =
+                    found->frameMetadata.receivedTimestampNanoseconds;
+                capture.baselineDroppedFrames = found->statistics.droppedFrames;
+                s_pendingCameraSlotCaptures.emplace(cameraIndex, capture);
+                HardwareRuntimeService::RequestCameraFrameForSlot(
+                    cameraIndex, false, false);
+                LogSystem::Add(LOG_INFO,
+                    "[相机%02d] 已请求本轮新帧，基准帧=%d",
+                    cameraIndex + 1, found->frameIndex);
+            }
+
+            if (!s_pendingCameraSlotCaptures.empty())
+            {
+                if (force)
+                    s_forceNextRunAll = true;
+                s_multiCameraCapturePending = true;
+                s_multiCameraCaptureLoop = loop;
+                SavePendingCameraRunScope();
+                s_multiCameraCaptureDeadline = std::chrono::steady_clock::now()
+                    + std::chrono::milliseconds(3000);
+                s_mode = Mode::Waiting;
+                s_loop = loop;
+                LogSystem::Add(LOG_INFO, ImVec4(0, 1, 0.5f, 1),
+                    "[%s] 等待 %zu 个相机槽本轮新帧",
+                    RunScopeLogName(),
+                    s_pendingCameraSlotCaptures.size());
+                return;
+            }
+        }
+        const bool requestTaskCamera = triggerCamera && boundCameraIndex >= 0 &&
             (taskCameraPreferred || (forceTaskCameraCapture && s_runTaskGroup)) &&
-            hardware.cameraState == DeviceConnectionState::Connected;
+            boundCameraConnected;
         const bool requestLegacyCamera = triggerCamera && !s_runTaskGroup &&
+            ToolChainState::ReadOnlyTaskGroups().empty() &&
             !taskCameraPreferred &&
             !RunScopeHasTaskImages() &&
             hardware.cameraState == DeviceConnectionState::Connected &&
             HardwareRuntimeService::CameraTriggerOnInspectionEnabled();
         if (requestTaskCamera || requestLegacyCamera)
         {
+            if (requestTaskCamera)
+            {
+                // Preserve the public/task fallback before HardwareRuntimeService
+                // publishes the captured frame into ImageState. Unbound tasks must
+                // not inherit another task's camera frame during a mixed run.
+                s_runFallbackImage = !ImageState::Original().empty()
+                    ? ImageState::Original().clone() : ImageState::Current().clone();
+                s_cameraFrameForRun.release();
+                s_cameraSlotsRequestedForRun.insert(boundCameraIndex);
+            }
             if (force)
                 s_forceNextRunAll = true;
+            SavePendingCameraRunScope();
             s_mode = Mode::Idle;
             s_loop = loop;
-            HardwareRuntimeService::RequestCameraFrame(true, loop);
+            if (requestTaskCamera)
+                HardwareRuntimeService::RequestCameraFrameForSlot(
+                    boundCameraIndex, true, loop);
+            else
+                HardwareRuntimeService::RequestCameraFrame(true, loop);
             LogSystem::Add(LOG_INFO, ImVec4(0, 1, 0.5f, 1),
-                "[全部执行] 已请求相机新帧，等待发布后执行工具链");
+                "[%s] 已请求相机新帧，等待发布后执行工具链",
+                RunScopeLogName());
             return;
         }
         BuildBatchExecutionOrder();
@@ -1554,10 +1688,11 @@ namespace ToolController
                     ? "未分组" : s_runTaskGroupName.c_str()) : "");
             s_mode = Mode::Idle;
             s_batchRunActive = false;
+            s_loop = false;
             s_forceCameraFrameForRun = false;
             return;
         }
-        if (!PrepareTaskImagesForRun() ||
+        if (!PrepareTaskImagesForRun(s_cameraFrameAvailableForRun) ||
             !ActivateTaskImage(
                 ToolChainState::ReadOnlyTools()[s_batchExecutionOrder.front()]))
         {
@@ -1565,9 +1700,15 @@ namespace ToolController
             PublishConfiguredHardwareStatus(ToolResultStatus::Error);
             s_mode = Mode::Idle;
             s_batchRunActive = false;
+            s_loop = false;
             s_forceCameraFrameForRun = false;
             return;
         }
+        s_cameraFrameAvailableForRun = false;
+        s_cameraFrameForRun.release();
+        s_cameraFramesBySlotForRun.clear();
+        s_cameraSlotsRequestedForRun.clear();
+        s_pendingCameraSlotCaptures.clear();
         s_forceCameraFrameForRun = false;
         if (s_runTaskGroup)
             s_taskResultImages.erase(s_runTaskGroupName);
@@ -1635,8 +1776,95 @@ namespace ToolController
             return;
     }
 
+    static bool PollMultiCameraCapture()
+    {
+        if (!s_multiCameraCapturePending)
+            return false;
+
+        const HardwareRuntimeSnapshot snapshot = HardwareRuntimeService::Snapshot();
+        bool allCaptured = true;
+        for (auto& [cameraIndex, capture] : s_pendingCameraSlotCaptures)
+        {
+            if (capture.captured)
+                continue;
+            const auto found = std::find_if(
+                snapshot.cameraSlots.begin(), snapshot.cameraSlots.end(),
+                [cameraIndex](const HardwareCameraSlotSnapshot& slot)
+                {
+                    return slot.slotIndex == cameraIndex;
+                });
+            if (found == snapshot.cameraSlots.end())
+            {
+                allCaptured = false;
+                continue;
+            }
+
+            const bool frameAdvanced = found->hasFrame &&
+                (found->frameIndex != capture.baselineFrameIndex ||
+                 found->frameMetadata.frameNumber != capture.baselineFrameNumber ||
+                 found->frameMetadata.hardwareTimestampNanoseconds !=
+                    capture.baselineHardwareTimestamp ||
+                 found->frameMetadata.receivedTimestampNanoseconds !=
+                    capture.baselineReceivedTimestamp);
+            if (!frameAdvanced)
+            {
+                allCaptured = false;
+                continue;
+            }
+
+            cv::Mat frame;
+            if (!HardwareRuntimeService::AcquireLatestCameraFrame(
+                    cameraIndex, frame) || frame.empty())
+            {
+                allCaptured = false;
+                continue;
+            }
+            s_cameraFramesBySlotForRun[cameraIndex] = std::move(frame);
+            capture.captured = true;
+            const std::uint64_t droppedNow = found->statistics.droppedFrames;
+            const std::uint64_t droppedThisRound =
+                droppedNow >= capture.baselineDroppedFrames
+                    ? droppedNow - capture.baselineDroppedFrames : 0;
+            LogSystem::Add(droppedThisRound > 0 ? LOG_WARN : LOG_INFO,
+                "[相机%02d] 本轮新帧已就绪 frame=%d vendor=%llu dropped=%llu",
+                cameraIndex + 1, found->frameIndex,
+                static_cast<unsigned long long>(
+                    found->frameMetadata.frameNumber),
+                static_cast<unsigned long long>(droppedThisRound));
+        }
+
+        const bool timedOut = std::chrono::steady_clock::now() >=
+            s_multiCameraCaptureDeadline;
+        if (!allCaptured && !timedOut)
+            return true;
+
+        if (timedOut)
+        {
+            for (const auto& [cameraIndex, capture] :
+                 s_pendingCameraSlotCaptures)
+            {
+                if (!capture.captured)
+                {
+                    LogSystem::Add(LOG_ERROR,
+                        "[相机%02d] 本轮抓帧等待超时，任务将使用备用图片",
+                        cameraIndex + 1);
+                }
+            }
+        }
+
+        const bool loop = s_multiCameraCaptureLoop;
+        s_multiCameraCapturePending = false;
+        s_multiCameraCaptureLoop = false;
+        s_cameraFrameAvailableForRun = !s_cameraFramesBySlotForRun.empty();
+        s_mode = Mode::Idle;
+        RestorePendingCameraRunScope();
+        BeginRunAll(loop, false);
+        return true;
+    }
+
     void RequestRunAll(bool loop, bool triggerCamera)
     {
+        s_pendingCameraRunScope = {};
         s_runTriggerCamera = triggerCamera;
         s_cameraFrameAvailableForRun = false;
         s_forceCameraFrameForRun = false;
@@ -1662,6 +1890,7 @@ namespace ToolController
                 return;
             }
         }
+        s_pendingCameraRunScope = {};
         s_runTriggerCamera = triggerCamera;
         s_cameraFrameAvailableForRun = false;
         s_forceCameraFrameForRun = forceCameraCapture;
@@ -1672,7 +1901,51 @@ namespace ToolController
 
     void ResumeRunAfterCamera(bool loop, bool cameraFrameAvailable)
     {
-        s_cameraFrameAvailableForRun = cameraFrameAvailable;
+        RestorePendingCameraRunScope();
+        cv::Mat capturedFrame;
+        const int cameraIndex = RunScopeCameraIndex();
+        const HardwareRuntimeSnapshot hardware =
+            HardwareRuntimeService::Snapshot();
+        const bool hasRuntimeCameraSlot = cameraIndex >= 0 &&
+            std::any_of(hardware.cameraSlots.begin(), hardware.cameraSlots.end(),
+                [cameraIndex](const HardwareCameraSlotSnapshot& slot)
+                {
+                    return slot.slotIndex == cameraIndex;
+                });
+        if (cameraFrameAvailable && hasRuntimeCameraSlot)
+        {
+            // The center preview may currently show a folder image from another
+            // selected task. Read the frame from the requested camera slot so a
+            // camera-bound task can never inherit that unrelated public image.
+            if (!HardwareRuntimeService::AcquireLatestCameraFrame(
+                    cameraIndex, capturedFrame) || capturedFrame.empty())
+            {
+                cameraFrameAvailable = false;
+                LogSystem::Add(LOG_ERROR,
+                    "绑定相机 %02d 已报告新帧，但读取本轮帧失败",
+                    cameraIndex + 1);
+            }
+        }
+        else if (cameraFrameAvailable)
+        {
+            // Legacy/manual callback users without a registered runtime camera
+            // slot still publish the captured frame through shared image state.
+            capturedFrame = !ImageState::Original().empty()
+                ? ImageState::Original().clone() : ImageState::Current().clone();
+        }
+
+        s_cameraFrameAvailableForRun =
+            cameraFrameAvailable && !capturedFrame.empty();
+        s_cameraFrameForRun = s_cameraFrameAvailableForRun
+            ? std::move(capturedFrame) : cv::Mat{};
+        // Ungrouped legacy chains intentionally consume the captured frame as
+        // their public input. Formal task groups keep the pre-capture fallback
+        // so only camera-bound tasks receive s_cameraFrameForRun.
+        if (s_cameraFrameAvailableForRun && !s_runTaskGroup &&
+            ToolChainState::ReadOnlyTaskGroups().empty())
+        {
+            s_runFallbackImage = s_cameraFrameForRun.clone();
+        }
         BeginRunAll(loop, false);
     }
 
@@ -1780,7 +2053,8 @@ namespace ToolController
             LogSystem::Add(
                 tool.lastResult.status == ToolResultStatus::Error ? LOG_ERROR : LOG_WARN,
                 ImVec4(1.0f, 0.45f, 0.2f, 1.0f),
-                "[全部执行] 停止于 %d/%zu: %s | %s%s%s",
+                "[%s] 停止于 %d/%zu: %s | %s%s%s",
+                RunScopeLogName(),
                 (std::max)(1, BatchExecutionOrdinal(executedIndex) + 1),
                 s_batchExecutionOrder.empty() ? tools.size() : s_batchExecutionOrder.size(),
                 displayName.c_str(),
@@ -1844,21 +2118,42 @@ namespace ToolController
         PublishConfiguredHardwareResult(s_loop);
         if (!s_loop)
         {
-            LogSystem::Add(LOG_INFO, ImVec4(0, 1, 0.5f, 1), "[全部执行%s] 完成 %.1fms",
-                s_runtimeMode ? "/运行模式" : "", s_batchTotalMs);
+            LogSystem::Add(LOG_INFO, ImVec4(0, 1, 0.5f, 1), "[%s%s] 完成 %.1fms",
+                RunScopeLogName(), s_runtimeMode ? "/运行模式" : "",
+                s_batchTotalMs);
         }
         const bool requestNextTaskCameraFrame = s_loop &&
-            RunScopePrefersCamera() &&
-            HardwareRuntimeService::Snapshot().cameraState ==
-                DeviceConnectionState::Connected;
-        if (requestNextTaskCameraFrame)
+            RunScopePrefersCamera();
+        const bool requestNextMultiCameraRound = s_loop &&
+            s_runTriggerCamera && RunScopeCameraSlots().size() > 1;
+        if (requestNextMultiCameraRound)
+        {
+            s_batchExecutionCursor = 0;
+            s_imageDirty = false;
+            s_batchTimerStarted = false;
+            s_batchRunActive = false;
+            s_multiCameraLoopRestartPending = true;
+            s_nextLoopRunAt = std::chrono::high_resolution_clock::now()
+                + std::chrono::duration_cast<std::chrono::high_resolution_clock::duration>(
+                    std::chrono::duration<float, std::milli>(
+                        static_cast<float>(s_loopIntervalMs)));
+            s_mode = Mode::Waiting;
+            LogSystem::Add(LOG_INFO, ImVec4(0, 1, 0.5f, 1),
+                "[循环] 本轮完成，等待后重新请求全部绑定相机");
+        }
+        else if (requestNextTaskCameraFrame)
         {
             s_cameraFrameAvailableForRun = false;
+            s_cameraSlotsRequestedForRun.clear();
+            const int nextCameraIndex = RunScopeCameraIndex();
+            if (nextCameraIndex >= 0)
+                s_cameraSlotsRequestedForRun.insert(nextCameraIndex);
             s_batchExecutionCursor = 0;
             s_currentIndex = s_batchExecutionOrder.front();
             s_imageDirty = false;
             s_batchTimerStarted = false;
-            HardwareRuntimeService::RequestCameraFrame(true, true);
+            HardwareRuntimeService::RequestCameraFrameForSlot(
+                nextCameraIndex, true, true);
             s_mode = Mode::Idle;
             LogSystem::Add(LOG_INFO, ImVec4(0, 1, 0.5f, 1),
                 "[循环] 相机优先任务等待下一帧");
@@ -1920,6 +2215,17 @@ namespace ToolController
     }
 
     void Tick() {
+        if (s_multiCameraLoopRestartPending)
+        {
+            if (std::chrono::high_resolution_clock::now() < s_nextLoopRunAt)
+                return;
+            s_multiCameraLoopRestartPending = false;
+            s_mode = Mode::Idle;
+            BeginRunAll(true, true);
+            return;
+        }
+        if (PollMultiCameraCapture())
+            return;
         if (PollTaskParallelRun())
             return;
         if (s_taskParallelRunning)
@@ -2106,7 +2412,9 @@ namespace ToolController
     int GetLoopIntervalMs() { return s_loopIntervalMs; }
     int GetLoopWaitRemainingMs()
     {
-        if (!s_loop || s_mode != Mode::Running || s_batchExecutionCursor != 0 ||
+        if (!s_loop ||
+            (!s_multiCameraLoopRestartPending &&
+             (s_mode != Mode::Running || s_batchExecutionCursor != 0)) ||
             s_asyncRunning || s_parallelRunning)
             return 0;
         const auto now = std::chrono::high_resolution_clock::now();
@@ -2129,6 +2437,14 @@ namespace ToolController
     }
     bool IsTaskParallelEnabled() { return s_taskParallelEnabled; }
     int GetTaskParallelLimit() { return kTaskParallelLimit; }
+    std::uint64_t GetLastTaskParallelPeakInputBytes()
+    {
+        return s_taskParallelPeakInputBytes.load(std::memory_order_relaxed);
+    }
+    std::uint64_t GetLastTaskParallelEagerInputBytes()
+    {
+        return s_taskParallelEagerInputBytes;
+    }
     std::uint64_t GetLoopIteration()
     {
         if (!s_loop)
@@ -2147,6 +2463,14 @@ namespace ToolController
         s_lastOutputImage.release();
         s_originalToolOutputImage.release();
         s_runFallbackImage.release();
+        s_cameraFrameForRun.release();
+        s_cameraFramesBySlotForRun.clear();
+        s_pendingCameraSlotCaptures.clear();
+        s_cameraSlotsRequestedForRun.clear();
+        s_multiCameraCapturePending = false;
+        s_multiCameraCaptureLoop = false;
+        s_multiCameraLoopRestartPending = false;
+        s_pendingCameraRunScope = {};
         s_taskRunImages.clear();
         s_taskResultImages.clear();
         s_activeInputTaskGroup.clear();
@@ -2224,6 +2548,14 @@ namespace ToolController
         s_stepTimeMs = 0;
         s_batchTotalMs = 0;
         s_runFallbackImage.release();
+        s_cameraFrameForRun.release();
+        s_cameraFramesBySlotForRun.clear();
+        s_pendingCameraSlotCaptures.clear();
+        s_cameraSlotsRequestedForRun.clear();
+        s_multiCameraCapturePending = false;
+        s_multiCameraCaptureLoop = false;
+        s_multiCameraLoopRestartPending = false;
+        s_pendingCameraRunScope = {};
         s_taskRunImages.clear();
         s_activeInputTaskGroup.clear();
         s_activeInputTaskGroupValid = false;

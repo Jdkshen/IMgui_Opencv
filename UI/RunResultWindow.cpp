@@ -2,13 +2,13 @@
 
 #include "DockSpaceHost.h"
 #include "RunResultLayout.h"
-#include "../Core/HardwareRuntimeService.h"
+#include "RunResultOverlayRenderer.h"
+#include "RunResultPresentation.h"
+#include "RunResultSnapshot.h"
 #include "../Core/ImageState.h"
-#include "../Core/ResultOverlayState.h"
 #include "../Core/ThemeManager.h"
 #include "../Core/ToolChainState.h"
 #include "../Core/ToolController.h"
-#include "../Core/ToolResultUtils.h"
 #include "../Core/UiPreferencesService.h"
 #include "../Renderer/PreviewTextureCache.h"
 #include "../include/imgui/imgui.h"
@@ -20,44 +20,22 @@
 #include <iomanip>
 #include <sstream>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 namespace UI
 {
 namespace
 {
-    struct RunResultRow
-    {
-        int index = 0;
-        std::string name;
-        ToolResultStatus status = ToolResultStatus::Error;
-        bool skipped = false;
-        bool executed = false;
-        float timeMs = 0.0f;
-        std::string summary;
-        std::string details;
-    };
-
-    struct RunResultSnapshot
-    {
-        bool valid = false;
-        bool loopRound = false;
-        std::uint64_t loopIteration = 0;
-        std::string recipeName;
-        ToolResultStatus overallStatus = ToolResultStatus::Error;
-        float totalTimeMs = 0.0f;
-        int passCount = 0;
-        int failCount = 0;
-        int errorCount = 0;
-        int skippedCount = 0;
-        int pendingCount = 0;
-        std::vector<RunResultRow> rows;
-        std::vector<ToolResult> overlayResults;
-        cv::Mat resultImage;
-        std::uint64_t textureKey = 0;
-        std::uint64_t captureSerial = 0;
-    };
+    using RunResultPresentation::StatusColor;
+    using RunResultPresentation::StatusDescription;
+    using RunResultPresentation::StatusText;
+    using RunResultPresentation::StatusTextColor;
+    using RunResultSnapshotModel::BuildSnapshot;
+    using RunResultSnapshotModel::CollectTaskGroups;
+    using RunResultSnapshotModel::RunResultRow;
+    using RunResultSnapshotModel::RunResultSnapshot;
+    using RunResultSnapshotModel::SnapshotFailureReason;
+    using RunResultOverlayRenderer::DrawResultImageOverlays;
 
     struct RunResultViewState
     {
@@ -115,199 +93,6 @@ namespace
         UiPreferencesService::SaveAutoShowResult(g_autoShow);
     }
 
-    const char* StatusText(ToolResultStatus status)
-    {
-        switch (status)
-        {
-        case ToolResultStatus::Pass: return "OK";
-        case ToolResultStatus::Fail: return "NG";
-        case ToolResultStatus::Error: return "ERROR";
-        default: return "ERROR";
-        }
-    }
-
-    const char* StatusDescription(ToolResultStatus status)
-    {
-        switch (status)
-        {
-        case ToolResultStatus::Pass: return "检测通过";
-        case ToolResultStatus::Fail: return "检测不合格";
-        case ToolResultStatus::Error: return "执行异常";
-        default: return "执行异常";
-        }
-    }
-
-    ImVec4 StatusColor(ToolResultStatus status, bool dark)
-    {
-        switch (status)
-        {
-        case ToolResultStatus::Pass:
-            return dark ? ImVec4(0.12f, 0.52f, 0.29f, 1.0f) : ImVec4(0.13f, 0.62f, 0.32f, 1.0f);
-        case ToolResultStatus::Fail:
-            return dark ? ImVec4(0.72f, 0.22f, 0.18f, 1.0f) : ImVec4(0.82f, 0.24f, 0.18f, 1.0f);
-        case ToolResultStatus::Error:
-        default:
-            return dark ? ImVec4(0.78f, 0.48f, 0.12f, 1.0f) : ImVec4(0.88f, 0.50f, 0.10f, 1.0f);
-        }
-    }
-
-    ImVec4 StatusTextColor(ToolResultStatus status, bool dark)
-    {
-        switch (status)
-        {
-        case ToolResultStatus::Pass:
-            return dark ? ImVec4(0.32f, 0.86f, 0.48f, 1.0f) : ImVec4(0.05f, 0.48f, 0.20f, 1.0f);
-        case ToolResultStatus::Fail:
-            return dark ? ImVec4(1.00f, 0.42f, 0.36f, 1.0f) : ImVec4(0.78f, 0.16f, 0.12f, 1.0f);
-        case ToolResultStatus::Error:
-        default:
-            return dark ? ImVec4(1.00f, 0.70f, 0.28f, 1.0f) : ImVec4(0.72f, 0.36f, 0.04f, 1.0f);
-        }
-    }
-
-    std::string ToolDisplayName(const ToolInstance& tool)
-    {
-        const char* baseName = tool.type == 12 ? "原图" : ToolRegistry::GetName(tool.type);
-        if (!baseName || !*baseName)
-            baseName = "工具";
-        if (tool.label.empty())
-            return baseName;
-        return tool.label;
-    }
-
-    std::string ResultSummary(const ToolResult& result)
-    {
-        if (result.skipped)
-            return result.message.empty() ? "已跳过" : result.message;
-        std::string summary = result.statusReason.empty()
-            ? result.message : result.statusReason;
-        auto AppendCount = [&summary](const char* name, std::size_t count)
-        {
-            if (count == 0)
-                return;
-            if (!summary.empty())
-                summary += " · ";
-            summary += name;
-            summary += " ";
-            summary += std::to_string(count);
-        };
-        AppendCount("检测", result.detections.size());
-        AppendCount("区域", result.regions.size());
-        AppendCount("线段", result.lines.size());
-        AppendCount("文本", result.texts.size());
-        AppendCount("测量", result.measurements.size());
-        if (!result.debugImage.empty() || result.timing.debugImageBytes > 0)
-            AppendCount("处理图", 1);
-        return summary.empty() ? "执行完成" : summary;
-    }
-
-    std::string ResultDetails(const ToolResult& result)
-    {
-        std::ostringstream details;
-        details << "状态: " << (result.skipped ? "跳过" : StatusText(result.status));
-        if (!result.statusReason.empty())
-            details << "\n原因: " << result.statusReason;
-        if (!result.message.empty() && result.message != result.statusReason)
-            details << "\n说明: " << result.message;
-
-        const float wallMs = result.timing.wallMs > 0.0f
-            ? result.timing.wallMs
-            : result.timing.prepareMs + result.timing.executeMs + result.timing.publishMs;
-        details << std::fixed << std::setprecision(3)
-            << "\n耗时: 总 " << wallMs << " ms｜准备 " << result.timing.prepareMs
-            << "｜执行 " << result.timing.executeMs << "｜发布 "
-            << result.timing.publishMs;
-
-        constexpr std::size_t kMaximumDetailItems = 12;
-        const auto AppendOmitted = [&details](std::size_t size)
-        {
-            if (size > kMaximumDetailItems)
-                details << "\n  …其余 " << size - kMaximumDetailItems << " 项";
-        };
-
-        if (!result.detections.empty())
-        {
-            details << "\n检测框 (" << result.detections.size() << ")";
-            for (std::size_t index = 0;
-                index < (std::min)(result.detections.size(), kMaximumDetailItems); ++index)
-            {
-                const auto& item = result.detections[index];
-                details << "\n  " << index + 1 << ". "
-                    << (item.label.empty() ? "未分类" : item.label)
-                    << "｜类别 " << item.classId << "｜分数 " << item.score
-                    << "｜框 [" << item.box.x << ',' << item.box.y << ','
-                    << item.box.width << ',' << item.box.height << ']';
-            }
-            AppendOmitted(result.detections.size());
-        }
-        if (!result.regions.empty())
-        {
-            details << "\n区域 (" << result.regions.size() << ")";
-            for (std::size_t index = 0;
-                index < (std::min)(result.regions.size(), kMaximumDetailItems); ++index)
-            {
-                const auto& item = result.regions[index];
-                const cv::Point2f center = item.center != cv::Point2f()
-                    ? item.center
-                    : cv::Point2f(item.bbox.x + item.bbox.width * 0.5f,
-                        item.bbox.y + item.bbox.height * 0.5f);
-                details << "\n  " << index + 1 << ". "
-                    << (item.label.empty() ? "未命名" : item.label)
-                    << "｜中心 (" << center.x << ',' << center.y << ")｜面积 "
-                    << item.area << "｜分数 " << item.score << "｜角度 " << item.angle;
-            }
-            AppendOmitted(result.regions.size());
-        }
-        if (!result.lines.empty())
-        {
-            details << "\n线段 (" << result.lines.size() << ")";
-            for (std::size_t index = 0;
-                index < (std::min)(result.lines.size(), kMaximumDetailItems); ++index)
-            {
-                const auto& item = result.lines[index];
-                details << "\n  " << index + 1 << ". (" << item.p1.x << ',' << item.p1.y
-                    << ")->(" << item.p2.x << ',' << item.p2.y << ")｜长度 "
-                    << item.length << "｜角度 " << item.angle;
-            }
-            AppendOmitted(result.lines.size());
-        }
-        if (!result.texts.empty())
-        {
-            details << "\n文本 (" << result.texts.size() << ")";
-            for (std::size_t index = 0;
-                index < (std::min)(result.texts.size(), kMaximumDetailItems); ++index)
-            {
-                const auto& item = result.texts[index];
-                details << "\n  " << index + 1 << ". "
-                    << (item.text.empty() ? "<空文本>" : item.text)
-                    << "｜置信度 " << item.confidence << "｜框 ["
-                    << item.box.x << ',' << item.box.y << ',' << item.box.width
-                    << ',' << item.box.height << ']';
-            }
-            AppendOmitted(result.texts.size());
-        }
-        if (!result.measurements.empty())
-        {
-            details << "\n测量 (" << result.measurements.size() << ")";
-            for (std::size_t index = 0;
-                index < (std::min)(result.measurements.size(), kMaximumDetailItems); ++index)
-            {
-                const auto& item = result.measurements[index];
-                details << "\n  " << index + 1 << ". "
-                    << (item.name.empty() ? "数值" : item.name) << " = "
-                    << item.value;
-                if (!item.unit.empty())
-                    details << ' ' << item.unit;
-            }
-            AppendOmitted(result.measurements.size());
-        }
-        if (!result.debugImage.empty())
-        {
-            details << "\n处理图: " << result.debugImage.cols << 'x'
-                << result.debugImage.rows << "｜通道 " << result.debugImage.channels();
-        }
-        return details.str();
-    }
 
     bool DashboardFilterMatches(DashboardFilter filter, ToolResultStatus status)
     {
@@ -319,122 +104,6 @@ namespace
         case DashboardFilter::All:
         default: return true;
         }
-    }
-
-    std::string SnapshotFailureReason(const RunResultSnapshot& snapshot)
-    {
-        for (const RunResultRow& row : snapshot.rows)
-        {
-            if (row.status == ToolResultStatus::Fail ||
-                row.status == ToolResultStatus::Error)
-            {
-                if (!row.summary.empty())
-                    return row.name + "：" + row.summary;
-            }
-        }
-        return {};
-    }
-
-    RunResultSnapshot BuildSnapshot(const std::string* groupFilter = nullptr)
-    {
-        RunResultSnapshot next;
-        next.valid = true;
-        next.loopIteration = ToolController::GetLastCompletedLoopRound();
-        next.loopRound = next.loopIteration > 0;
-        next.captureSerial = ToolController::GetCompletedBatchSerial();
-        next.recipeName = CurrentRecipeName();
-        next.totalTimeMs = groupFilter ? 0.0f : ToolController::GetTotalTimeMs();
-        if (groupFilter)
-        {
-            next.resultImage = ToolController::GetTaskResultImage(*groupFilter).clone();
-            next.textureKey = 0x4000000000000000ULL;
-            for (const TaskGroupDefinition& group : ToolChainState::ReadOnlyTaskGroups())
-            {
-                if (group.name == *groupFilter)
-                {
-                    next.textureKey |= group.id;
-                    break;
-                }
-            }
-        }
-        else
-        {
-            next.resultImage = ImageState::Current().clone();
-            next.textureKey = 0x8000000000000001ULL;
-        }
-
-        std::vector<ToolResult> aggregateResults;
-        const auto& tools = ToolChainState::ReadOnlyTools();
-        next.rows.reserve(tools.size());
-        aggregateResults.reserve(tools.size());
-
-        for (int index = 0; index < static_cast<int>(tools.size()); ++index)
-        {
-            const ToolInstance& tool = tools[index];
-            if (!tool.enabled || (groupFilter && tool.groupName != *groupFilter))
-                continue;
-
-            RunResultRow row;
-            row.index = static_cast<int>(next.rows.size()) + 1;
-            row.name = ToolDisplayName(tool);
-            row.timeMs = ToolController::GetToolTimeMs(index);
-            row.executed = tool.hasLastResult;
-            if (groupFilter)
-                next.totalTimeMs += row.timeMs;
-
-            if (!tool.hasLastResult)
-            {
-                row.status = ToolResultStatus::Error;
-                row.summary = "未执行";
-                ++next.pendingCount;
-            }
-            else
-            {
-                row.status = tool.lastResult.status;
-                row.skipped = tool.lastResult.skipped;
-                row.summary = ResultSummary(tool.lastResult);
-                row.details = ResultDetails(tool.lastResult);
-                aggregateResults.push_back(tool.lastResult);
-                ToolResult overlayResult = tool.lastResult;
-                overlayResult.debugImage.release();
-                next.overlayResults.push_back(std::move(overlayResult));
-
-                if (row.skipped)
-                    ++next.skippedCount;
-                else if (row.status == ToolResultStatus::Pass)
-                    ++next.passCount;
-                else if (row.status == ToolResultStatus::Fail)
-                    ++next.failCount;
-                else
-                    ++next.errorCount;
-            }
-            next.rows.push_back(std::move(row));
-        }
-
-        next.overallStatus = HardwareRuntimeService::AggregateInspectionStatus(aggregateResults);
-        if (next.pendingCount > 0 && next.overallStatus == ToolResultStatus::Pass)
-            next.overallStatus = ToolResultStatus::Error;
-        return next;
-    }
-
-    std::vector<std::string> CollectTaskGroups()
-    {
-        std::vector<std::string> groups;
-        for (const TaskGroupDefinition& group : ToolChainState::ReadOnlyTaskGroups())
-        {
-            if (group.enabled)
-                groups.push_back(group.name);
-        }
-
-        bool hasUngroupedTools = false;
-        for (const ToolInstance& tool : ToolChainState::ReadOnlyTools())
-        {
-            if (tool.enabled && tool.groupName.empty())
-                hasUngroupedTools = true;
-        }
-        if (hasUngroupedTools)
-            groups.push_back({});
-        return groups;
     }
 
     void CaptureSnapshots()
@@ -598,6 +267,70 @@ namespace
         }
         return PreviewTextureCache::Get(snapshot.textureKey,
             PreviewTextureKind::RunResult);
+    }
+
+    cv::Rect CalculateThumbnailFocusRect(const RunResultSnapshot& snapshot)
+    {
+        const int imageWidth = snapshot.resultImage.cols;
+        const int imageHeight = snapshot.resultImage.rows;
+        const cv::Rect imageBounds(0, 0, imageWidth, imageHeight);
+        cv::Rect focusBounds;
+        bool hasFocus = false;
+
+        auto IncludeRect = [&](const cv::Rect& source)
+        {
+            const cv::Rect clipped = source & imageBounds;
+            if (clipped.width <= 0 || clipped.height <= 0)
+                return;
+            focusBounds = hasFocus ? (focusBounds | clipped) : clipped;
+            hasFocus = true;
+        };
+        auto IncludePoint = [&](const cv::Point& point)
+        {
+            IncludeRect(cv::Rect(point.x - 1, point.y - 1, 3, 3));
+        };
+
+        for (const ToolResult& result : snapshot.overlayResults)
+        {
+            for (const ToolResult::Detection& detection : result.detections)
+                IncludeRect(detection.box);
+            for (const ToolResult::Region& region : result.regions)
+            {
+                if (region.bbox.width > 0 && region.bbox.height > 0)
+                    IncludeRect(region.bbox);
+                else
+                    for (const cv::Point& point : region.contour)
+                        IncludePoint(point);
+            }
+            for (const ToolResult::TextItem& text : result.texts)
+                IncludeRect(text.box);
+            for (const ToolResult::Line& line : result.lines)
+            {
+                IncludePoint(line.p1);
+                IncludePoint(line.p2);
+            }
+        }
+
+        if (!hasFocus)
+            return imageBounds;
+
+        // Leave breathing room for the result outline and its label.  Also cap
+        // the automatic zoom for very small detections so a single point does
+        // not become an unrecognizable full-card preview.
+        const int minimumWidth = (std::max)(1, imageWidth / 5);
+        const int minimumHeight = (std::max)(1, imageHeight / 5);
+        const int paddedWidth = (std::max)(minimumWidth,
+            focusBounds.width + (std::max)(16, focusBounds.width / 5));
+        const int paddedHeight = (std::max)(minimumHeight,
+            focusBounds.height + (std::max)(16, focusBounds.height / 5));
+        const int centerX = focusBounds.x + focusBounds.width / 2;
+        const int centerY = focusBounds.y + focusBounds.height / 2;
+        cv::Rect padded(centerX - paddedWidth / 2, centerY - paddedHeight / 2,
+            (std::min)(paddedWidth, imageWidth),
+            (std::min)(paddedHeight, imageHeight));
+        padded.x = (std::clamp)(padded.x, 0, imageWidth - padded.width);
+        padded.y = (std::clamp)(padded.y, 0, imageHeight - padded.height);
+        return padded & imageBounds;
     }
 
     bool DrawGroupSummaryCard(GroupResultWindow& groupWindow, float cardHeight)
@@ -800,219 +533,6 @@ namespace
         return toggleMaximized;
     }
 
-    ImU32 ResultOverlayColor(const ToolResult& result, std::size_t index)
-    {
-        if (result.status == ToolResultStatus::Fail)
-            return IM_COL32(255, 70, 62, 255);
-        if (result.status == ToolResultStatus::Error)
-            return IM_COL32(255, 166, 45, 255);
-        static constexpr ImU32 colors[] = {
-            IM_COL32(35, 230, 105, 255),
-            IM_COL32(35, 190, 255, 255),
-            IM_COL32(255, 190, 35, 255),
-            IM_COL32(210, 90, 255, 255),
-            IM_COL32(25, 230, 215, 255),
-        };
-        return colors[index % IM_ARRAYSIZE(colors)];
-    }
-
-    std::string TruncateOverlayLabel(const char* text, std::size_t maxBytes = 52)
-    {
-        std::string value = text ? text : "";
-        if (value.size() <= maxBytes)
-            return value;
-        std::size_t cut = maxBytes;
-        while (cut > 0 &&
-            (static_cast<unsigned char>(value[cut]) & 0xC0) == 0x80)
-        {
-            --cut;
-        }
-        return value.substr(0, cut) + "...";
-    }
-
-    void DrawOverlayLabel(ImDrawList* drawList, const ImVec2& anchor,
-        const char* text, ImU32 color, const ImVec2& imageMin, const ImVec2& imageMax,
-        std::vector<RunResultLayout::Rect>& occupiedLabels)
-    {
-        if (!text || !*text)
-            return;
-
-        const std::string displayText = TruncateOverlayLabel(text);
-        const ImVec2 textSize = ImGui::CalcTextSize(displayText.c_str());
-        const RunResultLayout::LabelPlacement placement =
-            RunResultLayout::PlaceOverlayLabel(
-                {anchor.x, anchor.y}, {textSize.x, textSize.y},
-                {imageMin.x, imageMin.y, imageMax.x, imageMax.y},
-                occupiedLabels);
-        if (!placement.placed)
-            return;
-
-        occupiedLabels.push_back(placement.bounds);
-        const ImVec2 position(
-            placement.textPosition.x, placement.textPosition.y);
-        const ImVec2 backgroundMin(
-            placement.bounds.left, placement.bounds.top);
-        const ImVec2 backgroundMax(
-            placement.bounds.right, placement.bounds.bottom);
-        drawList->AddRectFilled(backgroundMin, backgroundMax, IM_COL32(15, 18, 22, 225), 3.0f);
-        drawList->AddRect(backgroundMin, backgroundMax, color, 3.0f, 0, 1.0f);
-        drawList->AddText(position, IM_COL32(255, 255, 255, 255), displayText.c_str());
-    }
-
-    void DrawResultImageOverlays(const RunResultSnapshot& snapshot,
-        const ImVec2& imageMin, const ImVec2& imageMax, float scale,
-        bool allowLabels)
-    {
-        if (snapshot.overlayResults.empty())
-            return;
-
-        ImDrawList* drawList = ImGui::GetWindowDrawList();
-        const float thickness = (std::clamp)(scale * 2.0f, 1.5f, 4.0f);
-        auto ToScreen = [&imageMin, scale](float x, float y)
-        {
-            return ImVec2(imageMin.x + x * scale, imageMin.y + y * scale);
-        };
-
-        int labelCount = 0;
-        const int maximumLabels = ResultOverlayState::MaxVisibleLabels();
-        std::vector<RunResultLayout::Rect> occupiedLabels;
-        std::unordered_set<std::string> drawnLabelTexts;
-        auto CanDrawLabel = [&labelCount, maximumLabels, &drawnLabelTexts](const std::string& text)
-        {
-            if (labelCount >= maximumLabels || !drawnLabelTexts.insert(text).second)
-                return false;
-            ++labelCount;
-            return true;
-        };
-        drawList->PushClipRect(imageMin, imageMax, true);
-        for (std::size_t resultIndex = 0;
-            resultIndex < snapshot.overlayResults.size(); ++resultIndex)
-        {
-            const ToolResult& result = snapshot.overlayResults[resultIndex];
-            if (result.skipped)
-                continue;
-            const ImU32 color = ResultOverlayColor(result, resultIndex);
-            const bool showLabels = allowLabels &&
-                ResultOverlayState::ShouldDrawResultLabels(result) &&
-                maximumLabels > 0;
-            const bool showDetectionLabels = showLabels && result.texts.empty();
-            const bool showRegionLabels = showLabels && result.texts.empty() &&
-                result.detections.empty();
-
-            for (const ToolResult::Detection& detection : result.detections)
-            {
-                const ImVec2 boxMin = ToScreen(
-                    static_cast<float>(detection.box.x), static_cast<float>(detection.box.y));
-                const ImVec2 boxMax = ToScreen(
-                    static_cast<float>(detection.box.x + detection.box.width),
-                    static_cast<float>(detection.box.y + detection.box.height));
-                drawList->AddRect(boxMin, boxMax, color, 2.0f, 0, thickness);
-                if (showDetectionLabels)
-                {
-                    char label[192]{};
-                    const char* name = detection.label.empty()
-                        ? result.toolName.c_str() : detection.label.c_str();
-                    const std::string displayName =
-                        ResultOverlayState::BuildLabel(result, name);
-                    if (detection.score > 0.0f)
-                        std::snprintf(label, sizeof(label), "%s  %.2f",
-                            displayName.c_str(), detection.score);
-                    else
-                        std::snprintf(label, sizeof(label), "%s", displayName.c_str());
-                    if (CanDrawLabel(label))
-                        DrawOverlayLabel(drawList, boxMin, label, color,
-                            imageMin, imageMax, occupiedLabels);
-                }
-            }
-
-            for (const ToolResult::Region& region : result.regions)
-            {
-                const ImVec2 boxMin = ToScreen(
-                    static_cast<float>(region.bbox.x), static_cast<float>(region.bbox.y));
-                const ImVec2 boxMax = ToScreen(
-                    static_cast<float>(region.bbox.x + region.bbox.width),
-                    static_cast<float>(region.bbox.y + region.bbox.height));
-                if (region.bbox.width > 0 && region.bbox.height > 0)
-                    drawList->AddRect(boxMin, boxMax, color, 2.0f, 0, thickness);
-                if (region.contour.size() >= 2)
-                {
-                    std::vector<ImVec2> contour;
-                    contour.reserve(region.contour.size());
-                    for (const cv::Point& point : region.contour)
-                        contour.push_back(ToScreen(static_cast<float>(point.x), static_cast<float>(point.y)));
-                    drawList->AddPolyline(contour.data(), static_cast<int>(contour.size()),
-                        color, ImDrawFlags_Closed, thickness);
-                }
-                // Keep the geometry from every result type, while assigning labels
-                // to the most informative type only: text, detection, then region.
-                if (showRegionLabels &&
-                    ResultOverlayState::ShouldDrawRegionLabel(result, region.label) &&
-                    CanDrawLabel(region.label.empty()
-                        ? result.toolName : region.label))
-                {
-                    char label[192]{};
-                    const char* name = region.label.empty()
-                        ? result.toolName.c_str() : region.label.c_str();
-                    const std::string displayName =
-                        ResultOverlayState::BuildLabel(result, name);
-                    if (region.score > 0.0f)
-                        std::snprintf(label, sizeof(label), "%s  %.2f",
-                            displayName.c_str(), region.score);
-                    else
-                        std::snprintf(label, sizeof(label), "%s", displayName.c_str());
-                    DrawOverlayLabel(drawList, boxMin, label, color,
-                        imageMin, imageMax, occupiedLabels);
-                }
-            }
-
-            for (const ToolResult::TextItem& text : result.texts)
-            {
-                const ImVec2 boxMin = ToScreen(
-                    static_cast<float>(text.box.x), static_cast<float>(text.box.y));
-                const ImVec2 boxMax = ToScreen(
-                    static_cast<float>(text.box.x + text.box.width),
-                    static_cast<float>(text.box.y + text.box.height));
-                drawList->AddRect(boxMin, boxMax, color, 2.0f, 0, thickness);
-                if (showLabels)
-                {
-                    char label[256]{};
-                    const char* recognized = text.text.empty()
-                        ? result.toolName.c_str() : text.text.c_str();
-                    const std::string displayText =
-                        ResultOverlayState::BuildLabel(result, recognized);
-                    if (text.confidence > 0.0f)
-                        std::snprintf(label, sizeof(label), "%s  %.2f",
-                            displayText.c_str(), text.confidence);
-                    else
-                        std::snprintf(label, sizeof(label), "%s", displayText.c_str());
-                    if (CanDrawLabel(label))
-                        DrawOverlayLabel(drawList, boxMin, label, color,
-                            imageMin, imageMax, occupiedLabels);
-                }
-            }
-
-            bool lineLabelDrawn = !result.detections.empty() ||
-                !result.regions.empty() || !result.texts.empty();
-            for (const ToolResult::Line& line : result.lines)
-            {
-                const ImVec2 p1 = ToScreen(static_cast<float>(line.p1.x), static_cast<float>(line.p1.y));
-                const ImVec2 p2 = ToScreen(static_cast<float>(line.p2.x), static_cast<float>(line.p2.y));
-                drawList->AddLine(p1, p2, color, thickness);
-                if (showLabels && !lineLabelDrawn)
-                {
-                    const std::string lineLabel =
-                        BuildToolResultLineOverlayLabel(result);
-                    if (CanDrawLabel(lineLabel))
-                    {
-                        DrawOverlayLabel(drawList, p1, lineLabel.c_str(),
-                            color, imageMin, imageMax, occupiedLabels);
-                        lineLabelDrawn = true;
-                    }
-                }
-            }
-        }
-        drawList->PopClipRect();
-    }
 
     void DrawResultImageThumbnail(float height, const RunResultSnapshot& snapshot,
         bool* doubleClicked)
@@ -1042,23 +562,28 @@ namespace
         {
             const float imageWidth = static_cast<float>(snapshot.resultImage.cols);
             const float imageHeight = static_cast<float>(snapshot.resultImage.rows);
-            const float scale = (std::min)(canvasSize.x / imageWidth,
-                canvasSize.y / imageHeight);
-            const ImVec2 imageSize(imageWidth * scale, imageHeight * scale);
-            const ImVec2 imageMin(
-                canvasMin.x + (canvasSize.x - imageSize.x) * 0.5f,
-                canvasMin.y + (canvasSize.y - imageSize.y) * 0.5f);
-            const ImVec2 imageMax(imageMin.x + imageSize.x, imageMin.y + imageSize.y);
+            const cv::Rect focus = CalculateThumbnailFocusRect(snapshot);
+            const float scale = (std::min)(canvasSize.x / focus.width,
+                canvasSize.y / focus.height);
+            const ImVec2 focusSize(focus.width * scale, focus.height * scale);
+            const ImVec2 focusMin(
+                canvasMin.x + (canvasSize.x - focusSize.x) * 0.5f,
+                canvasMin.y + (canvasSize.y - focusSize.y) * 0.5f);
+            const ImVec2 focusMax(focusMin.x + focusSize.x, focusMin.y + focusSize.y);
+            const ImVec2 imageMin(focusMin.x - focus.x * scale,
+                focusMin.y - focus.y * scale);
+            const ImVec2 imageMax(imageMin.x + imageWidth * scale,
+                imageMin.y + imageHeight * scale);
 
-            drawList->PushClipRect(canvasMin, canvasMax, true);
+            drawList->PushClipRect(focusMin, focusMax, true);
             drawList->AddImage(texture.textureId, imageMin, imageMax);
-            drawList->AddRect(imageMin, imageMax,
+            DrawResultImageOverlays(snapshot, imageMin, imageMax, scale, false);
+            drawList->PopClipRect();
+            drawList->AddRect(focusMin, focusMax,
                 ImGui::ColorConvertFloat4ToU32(
                     g_CurrentTheme == 0 ? ImVec4(0.30f, 0.34f, 0.38f, 1.0f)
                                         : ImVec4(0.58f, 0.64f, 0.68f, 1.0f)),
                 3.0f, 0, 1.0f);
-            DrawResultImageOverlays(snapshot, imageMin, imageMax, scale, false);
-            drawList->PopClipRect();
         }
         else
         {

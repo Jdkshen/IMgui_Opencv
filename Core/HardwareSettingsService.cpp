@@ -185,6 +185,9 @@ HardwarePanelSettings Normalize(HardwarePanelSettings settings)
         NormalizeCamera(settings.cameras[index], index);
     settings.activeCameraIndex = std::clamp(
         settings.activeCameraIndex, 0, static_cast<int>(kHardwareCameraCount) - 1);
+    settings.cameraMaxConcurrentGrabs = std::clamp(
+        settings.cameraMaxConcurrentGrabs, 1,
+        static_cast<int>(kHardwareCameraCount));
     SyncLegacyCameraFields(settings);
     settings.outputType = std::clamp(settings.outputType, 0, 3);
     settings.outputPort = std::clamp(settings.outputPort, 0, 65535);
@@ -484,6 +487,8 @@ HardwarePanelSettings Load(const std::string& path)
 
         settings.activeCameraIndex = json.value(
             "activeCameraIndex", settings.activeCameraIndex);
+        settings.cameraMaxConcurrentGrabs = json.value(
+            "cameraMaxConcurrentGrabs", settings.cameraMaxConcurrentGrabs);
         const auto cameras = json.find("cameras");
         if (cameras != json.end() && cameras->is_array())
         {
@@ -493,6 +498,8 @@ HardwarePanelSettings Load(const std::string& path)
                 if (!item.is_object() || settings.cameras.size() >= kHardwareCameraCount)
                     break;
                 HardwareCameraSettings cameraSettings;
+                cameraSettings.connectOnStartup = item.value(
+                    "connectOnStartup", cameraSettings.connectOnStartup);
                 cameraSettings.address = item.value("address", cameraSettings.address);
                 cameraSettings.sourceName = item.value("sourceName", cameraSettings.sourceName);
                 cameraSettings.backend = item.value("backend", cameraSettings.backend);
@@ -652,8 +659,9 @@ bool Save(const HardwarePanelSettings& source, const std::string& path, std::str
             fs::create_directories(settingsFile.parent_path());
 
         const nlohmann::json json = {
-            {"version", 5},
+            {"version", 7},
             {"activeCameraIndex", settings.activeCameraIndex},
+            {"cameraMaxConcurrentGrabs", settings.cameraMaxConcurrentGrabs},
             {"camera", {
                 {"address", settings.cameraAddress},
                 {"sourceName", settings.cameraSourceName},
@@ -678,6 +686,7 @@ bool Save(const HardwarePanelSettings& source, const std::string& path, std::str
                 for (const HardwareCameraSettings& camera : settings.cameras)
                 {
                     cameras.push_back({
+                        {"connectOnStartup", camera.connectOnStartup},
                         {"address", camera.address},
                         {"sourceName", camera.sourceName},
                         {"backend", camera.backend},

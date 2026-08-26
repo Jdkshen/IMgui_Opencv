@@ -95,6 +95,9 @@
   <ItemGroup>
     <ClCompile Include="regression_tests.cpp" />
     <ClCompile Include="regression_stubs.cpp" />
+    <ClCompile Include="RegressionGeometryTests.cpp" />
+    <ClCompile Include="RegressionPolicyTests.cpp" />
+    <ClCompile Include="RegressionTaskSchedulingTests.cpp" />
     <ClCompile Include="..\UI\RunResultLayout.cpp" />
     <ClCompile Include="..\Algorithm\BlobTool.cpp" />
     <ClCompile Include="..\Algorithm\ColorAnalyzer.cpp" />
@@ -135,6 +138,9 @@
     <ClCompile Include="..\Core\HuarayImvCameraAdapter.cpp" />
     <ClCompile Include="..\Core\Open62541OpcUaAdapter.cpp" />
     <ClCompile Include="..\Core\HardwareRuntimeService.cpp" />
+    <ClCompile Include="..\Core\HardwareRuntimePolicy.cpp" />
+    <ClCompile Include="..\Core\HardwareHandshakePlan.cpp" />
+    <ClCompile Include="..\Core\HardwareCameraPolicy.cpp" />
     <ClCompile Include="..\Core\HardwareSettingsService.cpp" />
     <ClCompile Include="..\Core\FrameArchiveService.cpp" />
     <ClCompile Include="..\Core\ImageViewState.cpp" />
@@ -156,6 +162,8 @@
     <ClCompile Include="..\Core\ToolChainValidator.cpp" />
     <ClCompile Include="..\Core\ToolChainPreflight.cpp" />
     <ClCompile Include="..\Core\ToolController.cpp" />
+    <ClCompile Include="..\Core\ToolRunPolicy.cpp" />
+    <ClCompile Include="..\Core\TaskImageProvider.cpp" />
     <ClCompile Include="..\Core\ToolExecutionGraph.cpp" />
     <ClCompile Include="..\Core\ToolJudgement.cpp" />
     <ClCompile Include="..\Core\ToolExecutor.cpp" />
@@ -165,6 +173,9 @@
     <ClCompile Include="..\Core\VisionContext.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="RegressionGeometryTests.h" />
+    <ClInclude Include="RegressionPolicyTests.h" />
+    <ClInclude Include="RegressionTaskSchedulingTests.h" />
     <ClInclude Include="..\Algorithm\BlobTool.h" />
     <ClInclude Include="..\Algorithm\ColorAnalyzer.h" />
     <ClInclude Include="..\Algorithm\DifferenceTool.h" />
@@ -205,6 +216,9 @@
     <ClInclude Include="..\Core\HuarayImvCameraAdapter.h" />
     <ClInclude Include="..\Core\Open62541OpcUaAdapter.h" />
     <ClInclude Include="..\Core\HardwareRuntimeService.h" />
+    <ClInclude Include="..\Core\HardwareRuntimePolicy.h" />
+    <ClInclude Include="..\Core\HardwareHandshakePlan.h" />
+    <ClInclude Include="..\Core\HardwareCameraPolicy.h" />
     <ClInclude Include="..\Core\HardwareSettingsService.h" />
     <ClInclude Include="..\Core\FrameArchiveService.h" />
     <ClInclude Include="..\Core\ImageViewState.h" />
@@ -228,6 +242,8 @@
     <ClInclude Include="..\Core\ToolChainValidator.h" />
     <ClInclude Include="..\Core\ToolChainPreflight.h" />
     <ClInclude Include="..\Core\ToolController.h" />
+    <ClInclude Include="..\Core\ToolRunPolicy.h" />
+    <ClInclude Include="..\Core\TaskImageProvider.h" />
     <ClInclude Include="..\Core\ToolAssetService.h" />
     <ClInclude Include="..\Core\ToolROIService.h" />
     <ClInclude Include="..\Core\ToolJudgement.h" />

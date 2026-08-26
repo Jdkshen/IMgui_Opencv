@@ -1,6 +1,6 @@
 # 视频播放 & 音频模块开发记录
 
-> 文档性质：2026-05-28 至 2026-05-29 的开发记录；2026-08-16 已按当前实现复核。当前图像状态通过 `FrameNavigation` / `ImageState` 进入显示链，任务相机输入见 `TASK_GROUPS.md` 和 `MULTI_CAMERA.md`，PLC 拍照触发见 `HARDWARE_INTEGRATION.md`。
+> 文档性质：2026-05-28 至 2026-05-29 的开发记录；2026-08-25 已按当前实现复核。当前图像状态通过 `FrameNavigation` / `ImageState` 进入显示链，任务相机输入见 `TASK_GROUPS.md` 和 `MULTI_CAMERA.md`，PLC 拍照触发见 `HARDWARE_INTEGRATION.md`。
 
 
 > 日期：2026-05-28 ~ 2026-05-29
@@ -118,4 +118,4 @@ Close() → 释放 cv::VideoCapture + 清空画面
 
 - `Windows_imgui.vcxproj` — 添加 `AudioPlayer.h/cpp`
 - `Windows_imgui.vcxproj.filters` — 同步筛选器
-- `Windows_imgui.cpp` — 主清理流程添加 `VideoCapture::Close()`
+- `App/Main.cpp` — 主清理流程添加 `VideoCapture::Close()`

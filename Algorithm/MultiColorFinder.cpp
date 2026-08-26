@@ -87,21 +87,35 @@ ToolResult MultiColorFinder::Execute(VisionContext& ctx)
     }
 
     // ---- 主图 + 参考图预处理（灰度/二值化） ----
-    cv::Mat refProc = refImage.clone();
-    if (imgUseGray && src.channels() > 1)
+    // Keep the source/reference as shared read-only views and allocate only the
+    // representation that is actually requested. The previous code cloned the
+    // reference on every run and forced the caller to clone the full input when
+    // gray/binary was enabled, even though no source pixels need to be changed.
+    cv::Mat refProc = refImage;
+    cv::Mat sourceGray;
+    cv::Mat referenceGray;
+    if ((imgUseGray || imgUseBinary) && src.channels() > 1)
     {
-        cv::cvtColor(src, src, cv::COLOR_BGR2GRAY);
-        if (!refProc.empty() && refProc.channels() > 1)
-            cv::cvtColor(refProc, refProc, cv::COLOR_BGR2GRAY);
+        cv::cvtColor(src, sourceGray, cv::COLOR_BGR2GRAY);
+        src = sourceGray;
     }
+    if ((imgUseGray || imgUseBinary) && !refProc.empty() &&
+        refProc.channels() > 1)
+    {
+        cv::cvtColor(refProc, referenceGray, cv::COLOR_BGR2GRAY);
+        refProc = referenceGray;
+    }
+    cv::Mat sourceBinary;
+    cv::Mat referenceBinary;
     if (imgUseBinary)
     {
-        if (src.channels() > 1) cv::cvtColor(src, src, cv::COLOR_BGR2GRAY);
-        cv::threshold(src, src, imgBinThresh, 255, cv::THRESH_BINARY);
+        cv::threshold(src, sourceBinary, imgBinThresh, 255, cv::THRESH_BINARY);
+        src = sourceBinary;
         if (!refProc.empty())
         {
-            if (refProc.channels() > 1) cv::cvtColor(refProc, refProc, cv::COLOR_BGR2GRAY);
-            cv::threshold(refProc, refProc, imgBinThresh, 255, cv::THRESH_BINARY);
+            cv::threshold(refProc, referenceBinary,
+                imgBinThresh, 255, cv::THRESH_BINARY);
+            refProc = referenceBinary;
         }
     }
 

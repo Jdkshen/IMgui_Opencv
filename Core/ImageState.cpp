@@ -96,7 +96,10 @@ namespace ImageState
             return;
 
         s_current = image.clone();
-        s_original = image.clone();
+        // CurrentRef() provides copy-on-write before mutable access, so the
+        // immutable original can share the initial frame allocation safely.
+        // This removes one full-frame copy whenever a task image is activated.
+        s_original = s_current;
         s_width = image.cols;
         s_height = image.rows;
         ++s_version;

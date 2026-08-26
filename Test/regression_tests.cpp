@@ -43,6 +43,9 @@
 #include "../Core/OpenFileDialog.h"
 #include "../Core/ResultOverlayState.h"
 #include "../Core/RenderBackend.h"
+#include "RegressionGeometryTests.h"
+#include "RegressionPolicyTests.h"
+#include "RegressionTaskSchedulingTests.h"
 #include "../Core/RealtimeDetectionState.h"
 #include "../Core/ResultROIResolver.h"
 #include "../Core/ResultExporter.h"
@@ -262,8 +265,10 @@ struct TestDisposableTool final : ITool
 
 struct TestInputCaptureTool final : ITool
 {
-    TestInputCaptureTool(int* capturedValue, int outputValue = -1, int delayMs = 0)
-        : captured(capturedValue), output(outputValue), delay(delayMs)
+    TestInputCaptureTool(int* capturedValue, int outputValue = -1, int delayMs = 0,
+        int* executionCountValue = nullptr)
+        : captured(capturedValue), output(outputValue), delay(delayMs),
+          executionCount(executionCountValue)
     {
     }
 
@@ -271,6 +276,8 @@ struct TestInputCaptureTool final : ITool
     int GetType() const override { return 2; }
     ToolResult Execute(VisionContext& context) override
     {
+        if (executionCount)
+            ++*executionCount;
         if (delay > 0)
             std::this_thread::sleep_for(std::chrono::milliseconds(delay));
         ToolResult result;
@@ -290,6 +297,7 @@ struct TestInputCaptureTool final : ITool
     int* captured = nullptr;
     int output = -1;
     int delay = 0;
+    int* executionCount = nullptr;
 };
 
 struct TestCountingTool final : ITool
@@ -339,9 +347,49 @@ struct TestOrderedTool final : ITool
     int marker = 0;
 };
 
+struct CameraConcurrencyProbe
+{
+    void Enter()
+    {
+        const int current = active.fetch_add(1) + 1;
+        int observed = maximum.load();
+        while (current > observed &&
+            !maximum.compare_exchange_weak(observed, current))
+        {
+        }
+    }
+
+    void Leave()
+    {
+        active.fetch_sub(1);
+    }
+
+    std::atomic<int> active{0};
+    std::atomic<int> maximum{0};
+    int delayMs = 0;
+};
+
+struct CameraConcurrencyScope
+{
+    explicit CameraConcurrencyScope(CameraConcurrencyProbe* value) : probe(value)
+    {
+        if (probe)
+            probe->Enter();
+    }
+    ~CameraConcurrencyScope()
+    {
+        if (probe)
+            probe->Leave();
+    }
+    CameraConcurrencyProbe* probe = nullptr;
+};
+
 struct TestCameraAdapter final : ICameraAdapter
 {
-    explicit TestCameraAdapter(bool* disconnectedFlag) : disconnected(disconnectedFlag) {}
+    explicit TestCameraAdapter(bool* disconnectedFlag, int framePixelValue = 17,
+        CameraConcurrencyProbe* concurrencyProbe = nullptr)
+        : disconnected(disconnectedFlag), pixelValue(framePixelValue),
+          concurrencyProbe(concurrencyProbe) {}
     const char* AdapterName() const override { return "test-camera"; }
     DeviceOperationResult Connect(const DeviceEndpoint&) override
     {
@@ -358,13 +406,25 @@ struct TestCameraAdapter final : ICameraAdapter
     std::string LastError() const override { return {}; }
     DeviceOperationResult GrabFrame(cv::Mat& frame, int) override
     {
+        ++grabCount;
+        CameraConcurrencyScope concurrencyScope(concurrencyProbe);
+        if (concurrencyProbe && concurrencyProbe->delayMs > 0)
+        {
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(concurrencyProbe->delayMs));
+        }
+        if (throwGrabsRemaining > 0)
+        {
+            --throwGrabsRemaining;
+            throw std::bad_alloc{};
+        }
         if (failGrabsRemaining > 0)
         {
             --failGrabsRemaining;
             state = DeviceConnectionState::Fault;
             return {false, "scripted grab failure"};
         }
-        frame = cv::Mat(4, 6, CV_8UC1, cv::Scalar(17)).clone();
+        frame = cv::Mat(4, 6, CV_8UC1, cv::Scalar(pixelValue)).clone();
         return {true, {}};
     }
     DeviceOperationResult StartStream() override
@@ -401,6 +461,9 @@ struct TestCameraAdapter final : ICameraAdapter
     DeviceConnectionState state = DeviceConnectionState::Disconnected;
     bool stopped = false;
     bool* disconnected = nullptr;
+    int pixelValue = 17;
+    std::atomic<int> grabCount{0};
+    int throwGrabsRemaining = 0;
     int failGrabsRemaining = 0;
     int connectCount = 0;
     int startCount = 0;
@@ -409,6 +472,7 @@ struct TestCameraAdapter final : ICameraAdapter
     int softwareTriggerCount = 0;
     CameraBufferPolicy bufferPolicy = CameraBufferPolicy::Sequential;
     int bufferPolicyConfigureCount = 0;
+    CameraConcurrencyProbe* concurrencyProbe = nullptr;
 };
 
 struct ScriptedCameraBackend final : ICameraCaptureBackend
@@ -1028,6 +1092,11 @@ void TestImageImportServiceAndDecodeFailures()
     Require(FrameNavigation::ConsumePendingImagePath(pendingImagePath) && pendingImagePath == folder.imagePath,
         "image folder import did not submit the first image request");
 
+    FrameNavigation::RequestImagePath(validRoot.string());
+    FrameNavigation::CancelPendingImagePath();
+    Require(!FrameNavigation::ConsumePendingImagePath(pendingImagePath),
+        "cancelled image request remained queued and could overwrite a newer source");
+
     ImageImportResult next = ImageImportService::NavigateNextImage();
     Require(next.success && next.imageIndex == 1 &&
         FrameNavigation::ConsumePendingImagePath(pendingImagePath) && pendingImagePath == next.imagePath,
@@ -1224,163 +1293,6 @@ void TestIndustrialMeasurement()
     Require(hasConfidence, "industrial measurement quality metrics were not published");
 }
 
-void TestCaliperOperators()
-{
-    using namespace CaliperOperators;
-
-    cv::Mat rising(80, 120, CV_8UC1, cv::Scalar(20));
-    rising.colRange(51, rising.cols).setTo(cv::Scalar(220));
-    CaliperParams params;
-    params.searchLength = 60.0f;
-    params.projectionWidth = 9.0f;
-    params.smoothingSigma = 1.0f;
-    params.edgeThreshold = 15.0f;
-    params.polarity = EdgePolarity::DarkToBright;
-    EdgePoint risingEdge = FindEdge(rising, {50.0f, 40.0f}, {1.0f, 0.0f}, {0.0f, 1.0f}, params);
-    Require(risingEdge.valid, "dark-to-bright caliper edge was not found");
-    Require(std::abs(risingEdge.position.x - 50.5f) < 0.75f,
-        "dark-to-bright subpixel edge position regressed");
-
-    params.polarity = EdgePolarity::BrightToDark;
-    EdgePoint rejected = FindEdge(rising, {50.0f, 40.0f}, {1.0f, 0.0f}, {0.0f, 1.0f}, params);
-    Require(!rejected.valid, "caliper polarity filter accepted the wrong edge");
-
-    cv::Mat band(80, 120, CV_8UC1, cv::Scalar(20));
-    band.colRange(35, 76).setTo(cv::Scalar(220));
-    params.polarity = EdgePolarity::DarkToBright;
-    params.searchLength = 80.0f;
-    EdgePair pair = FindEdgePair(band, {55.0f, 40.0f}, {1.0f, 0.0f}, {0.0f, 1.0f}, params);
-    Require(pair.valid, "edge-pair caliper did not find both edges");
-    Require(std::abs(pair.distance - 41.0f) < 1.0f, "edge-pair width regressed");
-
-    std::vector<cv::Point2f> linePoints;
-    for (int x = 0; x < 20; ++x)
-        linePoints.emplace_back(static_cast<float>(x), 2.0f * x + 3.0f);
-    linePoints.emplace_back(5.0f, 80.0f);
-    FittedLine line = FitLine(linePoints, FitMethod::Ransac, 0.5f);
-    Require(line.valid && line.inliers.size() == 20, "RANSAC line inlier selection regressed");
-    Require(line.quality.maxError < 0.1f, "RANSAC line residual regressed");
-
-    std::vector<cv::Point2f> circlePoints;
-    for (int i = 0; i < 24; ++i) {
-        const float angle = static_cast<float>(2.0 * 3.14159265358979323846 * i / 24.0);
-        circlePoints.emplace_back(40.0f + 15.0f * std::cos(angle), 30.0f + 15.0f * std::sin(angle));
-    }
-    circlePoints.emplace_back(100.0f, 100.0f);
-    FittedCircle circle = FitCircle(circlePoints, FitMethod::Ransac, 0.5f);
-    Require(circle.valid && circle.inliers.size() == 24, "RANSAC circle inlier selection regressed");
-    Require(cv::norm(circle.center - cv::Point2f(40.0f, 30.0f)) < 0.1f &&
-            std::abs(circle.radius - 15.0f) < 0.1f,
-        "RANSAC circle fit regressed");
-}
-
-void TestCalibrationModel()
-{
-    CalibrationModel scale;
-    scale.enabled = true;
-    scale.scaleX = 0.1;
-    scale.scaleY = 0.2;
-    scale.pixelOrigin = {10.0, 20.0};
-    scale.worldOrigin = {1.0, 2.0};
-    const cv::Point2d scaled = scale.PixelToWorld({20.0, 30.0});
-    Require(cv::norm(scaled - cv::Point2d(2.0, 4.0)) < 1.0e-9,
-        "independent X/Y calibration scale regressed");
-
-    CalibrationModel perspective;
-    perspective.enabled = true;
-    perspective.homographyEnabled = true;
-    perspective.pixelToWorldHomography = cv::Matx33d(
-        0.5, 0.0, 10.0,
-        0.0, 0.25, 20.0,
-        0.0, 0.0, 1.0);
-    const cv::Point2d transformed = perspective.PixelToWorld({20.0, 40.0});
-    Require(cv::norm(transformed - cv::Point2d(20.0, 30.0)) < 1.0e-9,
-        "homography pixel-to-world conversion regressed");
-
-    CalibrationModel distortion;
-    distortion.distortionEnabled = true;
-    distortion.fx = 800.0;
-    distortion.fy = 800.0;
-    distortion.cx = 320.0;
-    distortion.cy = 240.0;
-    const cv::Point2d unchanged = distortion.UndistortPixel({100.0, 120.0});
-    Require(cv::norm(unchanged - cv::Point2d(100.0, 120.0)) < 1.0e-6,
-        "zero lens distortion should preserve pixel coordinates");
-
-    distortion.k1 = 0.10;
-    distortion.k2 = -0.02;
-    distortion.p1 = 0.001;
-    distortion.p2 = -0.001;
-    distortion.k3 = 0.005;
-    const cv::Point2d idealPixel(500.0, 350.0);
-    const double normalizedX = (idealPixel.x - distortion.cx) / distortion.fx;
-    const double normalizedY = (idealPixel.y - distortion.cy) / distortion.fy;
-    const double radius2 = normalizedX * normalizedX + normalizedY * normalizedY;
-    const double radial = 1.0 + distortion.k1 * radius2 +
-        distortion.k2 * radius2 * radius2 + distortion.k3 * radius2 * radius2 * radius2;
-    const double distortedX = normalizedX * radial +
-        2.0 * distortion.p1 * normalizedX * normalizedY +
-        distortion.p2 * (radius2 + 2.0 * normalizedX * normalizedX);
-    const double distortedY = normalizedY * radial +
-        distortion.p1 * (radius2 + 2.0 * normalizedY * normalizedY) +
-        2.0 * distortion.p2 * normalizedX * normalizedY;
-    const cv::Point2d observedPixel(
-        distortion.fx * distortedX + distortion.cx,
-        distortion.fy * distortedY + distortion.cy);
-    Require(cv::norm(distortion.UndistortPixel(observedPixel) - idealPixel) < 1.0e-4,
-        "non-zero radial/tangential lens distortion correction regressed");
-}
-
-void TestFixtureTransform()
-{
-    ToolResult result;
-    ToolResult::Region region;
-    region.bbox = cv::Rect(90, 40, 20, 20);
-    region.angle = 90.0f;
-    result.regions.push_back(region);
-
-    FixturePose current;
-    Require(FixtureTransform::TryExtractPose(result, 0, current),
-        "fixture pose extraction from region failed");
-    FixturePose reference;
-    reference.valid = true;
-    reference.origin = {50.0f, 50.0f};
-    reference.angleDegrees = 0.0f;
-
-    const cv::Point2f transformed = FixtureTransform::TransformPoint({60.0f, 50.0f}, reference, current);
-    Require(cv::norm(transformed - cv::Point2f(100.0f, 60.0f)) < 0.001f,
-        "fixture rigid point transform regressed");
-
-    ROI rectangle;
-    rectangle.type = ROI_TYPE_RECT;
-    rectangle.start = {55.0f, 45.0f};
-    rectangle.end = {65.0f, 55.0f};
-    const ROI transformedROI = FixtureTransform::TransformROI(rectangle, reference, current);
-    Require(transformedROI.type == ROI_TYPE_POLYGON && transformedROI.points.size() == 4,
-        "rotated fixture rectangle should become a polygon ROI");
-
-    ToolResult detectionResult;
-    detectionResult.detections.push_back({cv::Rect(10, 20, 30, 40), 1, 0.9f, "part"});
-    FixturePose detectionPose;
-    Require(FixtureTransform::TryExtractPose(detectionResult, 0, detectionPose) &&
-        cv::norm(detectionPose.origin - cv::Point2f(25.0f, 40.0f)) < 0.001f,
-        "fixture pose extraction from detection failed");
-
-    ToolResult lineResult;
-    lineResult.lines.push_back({cv::Point(10, 10), cv::Point(30, 20), 22.36f, 26.565f});
-    FixturePose linePose;
-    Require(FixtureTransform::TryExtractPose(lineResult, 0, linePose) &&
-        cv::norm(linePose.origin - cv::Point2f(20.0f, 15.0f)) < 0.001f &&
-        std::abs(linePose.angleDegrees - 26.565f) < 0.001f,
-        "fixture pose extraction from line failed");
-
-    ToolResult textResult;
-    textResult.texts.push_back({"SN123", cv::Rect(40, 50, 20, 10), 0.95f});
-    FixturePose textPose;
-    Require(FixtureTransform::TryExtractPose(textResult, 0, textPose) &&
-        cv::norm(textPose.origin - cv::Point2f(50.0f, 55.0f)) < 0.001f,
-        "fixture pose extraction from text box failed");
-}
 
 void TestResultROIResolution()
 {
@@ -2198,6 +2110,54 @@ void TestMultiColorFinderNoPoints()
 
     Require(!result.success, "multi-color finder should fail when no points are configured");
     Require(result.message == "请至少添加1个颜色点", "multi-color finder failure message regressed");
+}
+
+void TestMultiColorFinderOptimizedPreprocessingPreservesInput()
+{
+    cv::Mat input(64, 64, CV_8UC3, cv::Scalar(0, 0, 0));
+    input.at<cv::Vec3b>(21, 20) = cv::Vec3b(255, 255, 255);
+    const cv::Mat original = input.clone();
+
+    ROI search;
+    search.type = ROI_TYPE_RECT;
+    search.start = ImVec2(10.0f, 10.0f);
+    search.end = ImVec2(30.0f, 30.0f);
+
+    gContext.Clear();
+    ImageState::SetImage(input);
+    ROIState::Clear();
+    gContext.ClearUnifiedResults();
+
+    ToolInstance tool;
+    tool.type = 10;
+    tool.toolId = 10010;
+    tool.mcfImgGray = true;
+    tool.mcfImgBinary = true;
+    tool.mcfImgBinThresh = 128;
+    tool.mcfMaxResults = 1;
+    tool.mcfMinDist = 0.0f;
+    tool.mcfRefImage = cv::Mat(1, 1, CV_8UC3,
+        cv::Scalar(255, 255, 255));
+    tool.searchROIs.push_back(search);
+    auto finder = std::make_unique<MultiColorFinder>();
+    finder->points.push_back({0, 0, 255, 255, 255, 0});
+    tool.toolImpl = std::move(finder);
+
+    ToolExecutor::Execute(tool.type, tool);
+    Require(gContext.image.data == ImageState::Current().data,
+        "multi-color gray/binary path copied the full input before execution");
+    Require(cv::norm(ImageState::Current(), original, cv::NORM_INF) == 0.0 &&
+            cv::norm(ImageState::Original(), original, cv::NORM_INF) == 0.0,
+        "multi-color local preprocessing modified the shared source image");
+    Require(tool.hasLastResult && tool.lastResult.success &&
+            tool.lastResult.regions.size() == 1 &&
+            tool.lastResult.regions.front().bbox.x == 20 &&
+            tool.lastResult.regions.front().bbox.y == 21,
+        "optimized axis-aligned multi-color ROI changed the match result");
+
+    ImageState::Clear();
+    ROIState::Clear();
+    gContext.ClearUnifiedResults();
 }
 
 void TestOCRToolMissingEngineFailsWithTextResultContract()
@@ -3143,12 +3103,194 @@ void TestHardwareRuntimeAutomation()
             cameraView->bufferPolicyConfigureCount >= 2,
         "industrial camera did not recover and restore acquisition configuration after failure");
 
+    // A vendor adapter allocation/conversion exception must be contained by the
+    // slot worker. It should report a failed frame and remain usable instead of
+    // terminating the whole application from the background thread.
+    HardwareCameraConnectionConfig guardedCaptureConfig = captureConfig;
+    guardedCaptureConfig.autoReconnect = false;
+    Require(HardwareRuntimeService::StartCameraCapture(
+            guardedCaptureConfig).success,
+        "guarded camera worker setup failed");
+    cameraView->throwGrabsRemaining = 1;
+    HardwareRuntimeService::RequestCameraFrame();
+    bool allocationFailureReported = false;
+    for (int attempt = 0; attempt < 200; ++attempt)
+    {
+        HardwareRuntimeService::Tick();
+        const HardwareRuntimeSnapshot failureSnapshot =
+            HardwareRuntimeService::Snapshot();
+        if (!failureSnapshot.lastCameraOperation.success &&
+            failureSnapshot.lastCameraOperation.message.find("内存分配失败") !=
+                std::string::npos)
+        {
+            allocationFailureReported = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    Require(allocationFailureReported,
+        "camera worker did not contain and report a frame allocation exception");
+
+    const int guardedRecoveryFrame =
+        HardwareRuntimeService::Snapshot().cameraFrameIndex;
+    HardwareRuntimeService::RequestCameraFrame();
+    for (int attempt = 0; attempt < 200; ++attempt)
+    {
+        HardwareRuntimeService::Tick();
+        if (HardwareRuntimeService::Snapshot().cameraFrameIndex >
+            guardedRecoveryFrame)
+        {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    Require(HardwareRuntimeService::Snapshot().cameraFrameIndex >
+            guardedRecoveryFrame,
+        "camera worker did not remain usable after a contained allocation exception");
+
+    // A connected camera must not override the public image of an explicitly
+    // unbound task, even if an old caller requests a forced task capture.
     ToolController::Reset();
     ToolChainState::ClearTools();
+    ToolChainState::ReplaceTaskGroups({});
+    Require(ToolChainState::CreateTaskGroup("任务未绑定") >= 0,
+        "unbound task setup failed");
+    int unboundCaptured = -1;
+    ToolInstance unboundTool;
+    unboundTool.type = 2;
+    unboundTool.groupName = "任务未绑定";
+    unboundTool.toolImpl = std::make_unique<TestInputCaptureTool>(&unboundCaptured);
+    ToolChainState::Tools().push_back(std::move(unboundTool));
+    ImageState::SetImage(cv::Mat(8, 8, CV_8UC1, cv::Scalar(77)));
+    const int unboundStartFrame =
+        HardwareRuntimeService::Snapshot().cameraFrameIndex;
+    ToolController::RequestRunTaskGroup("任务未绑定", false, true, true);
+    Require(ToolController::GetMode() == ToolController::Mode::Running,
+        "unbound task incorrectly waited for a camera frame");
+    ToolController::Tick();
+    Require(unboundCaptured == 77 &&
+            HardwareRuntimeService::Snapshot().cameraFrameIndex == unboundStartFrame,
+        "unbound task did not preserve its public-image input");
+
+    // During a mixed run, preserve the public image for the unbound task and
+    // route the newly captured frame only to the camera-bound task.
+    ToolController::Reset();
+    ToolChainState::ClearTools();
+    ToolChainState::ReplaceTaskGroups({});
+    const int mixedUnboundGroup = ToolChainState::CreateTaskGroup("任务公共图");
+    const int mixedBoundGroup = ToolChainState::CreateTaskGroup("任务相机");
+    Require(mixedUnboundGroup >= 0 && mixedBoundGroup >= 0 &&
+            ToolChainState::SetTaskGroupCameraIndex(mixedBoundGroup, 0),
+        "mixed task camera binding setup failed");
+    int mixedUnboundCaptured = -1;
+    int mixedBoundCaptured = -1;
+    int mixedUnboundExecutions = 0;
+    int mixedBoundExecutions = 0;
+    ToolInstance mixedUnboundTool;
+    mixedUnboundTool.type = 2;
+    mixedUnboundTool.groupName = "任务公共图";
+    mixedUnboundTool.toolImpl =
+        std::make_unique<TestInputCaptureTool>(
+            &mixedUnboundCaptured, -1, 0, &mixedUnboundExecutions);
+    ToolChainState::Tools().push_back(std::move(mixedUnboundTool));
+    ToolInstance mixedBoundTool;
+    mixedBoundTool.type = 2;
+    mixedBoundTool.groupName = "任务相机";
+    mixedBoundTool.toolImpl =
+        std::make_unique<TestInputCaptureTool>(
+            &mixedBoundCaptured, -1, 0, &mixedBoundExecutions);
+    ToolChainState::Tools().push_back(std::move(mixedBoundTool));
+    ImageState::SetImage(cv::Mat(8, 8, CV_8UC1, cv::Scalar(77)));
+    // Reproduce the UI state from the report: a folder/QR task is selected, so
+    // the center preview is public image 77 and camera preview publication is
+    // disabled. The bound task must still consume camera-slot frame 17.
+    HardwareRuntimeService::SetCameraPreviewEnabled(false);
+    const int mixedStartFrame =
+        HardwareRuntimeService::Snapshot().cameraFrameIndex;
+    ToolController::RequestRunAll(false, true);
+    bool mixedRunStarted = false;
+    for (int attempt = 0; attempt < 200; ++attempt)
+    {
+        HardwareRuntimeService::Tick();
+        if (HardwareRuntimeService::Snapshot().cameraFrameIndex > mixedStartFrame &&
+            ToolController::GetMode() == ToolController::Mode::Running)
+        {
+            mixedRunStarted = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    Require(mixedRunStarted,
+        "mixed task run did not start after the bound camera frame arrived");
+    for (int attempt = 0;
+         attempt < 10 && ToolController::GetMode() != ToolController::Mode::Idle;
+         ++attempt)
+    {
+        ToolController::Tick();
+    }
+    Require(mixedUnboundCaptured == 77 && mixedBoundCaptured == 17 &&
+            !ToolController::WasLastRunTaskGroup(),
+        "camera-bound task inherited the selected folder/public preview instead of its camera-slot frame");
+
+    // A failed fresh-frame request between loop rounds must stop the loop. It
+    // must never reuse the selected public/folder image for a camera-bound task.
+    mixedUnboundCaptured = -1;
+    mixedBoundCaptured = -1;
+    mixedUnboundExecutions = 0;
+    mixedBoundExecutions = 0;
+    ToolController::RequestRunAll(true, true);
+    bool mixedLoopStarted = false;
+    for (int attempt = 0; attempt < 200; ++attempt)
+    {
+        HardwareRuntimeService::Tick();
+        if (ToolController::GetMode() == ToolController::Mode::Running)
+        {
+            mixedLoopStarted = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    Require(mixedLoopStarted,
+        "mixed camera loop did not start after its first fresh frame");
+    cameraView->failGrabsRemaining = 1;
+    for (int tick = 0;
+         tick < 10 && ToolController::GetMode() != ToolController::Mode::Idle;
+         ++tick)
+    {
+        ToolController::Tick();
+    }
+    Require(mixedUnboundExecutions == 1 && mixedBoundExecutions == 1 &&
+            mixedBoundCaptured == 17,
+        "mixed camera loop first round did not isolate its inputs");
+
+    bool failedLoopSettled = false;
+    for (int attempt = 0; attempt < 500; ++attempt)
+    {
+        HardwareRuntimeService::Tick();
+        ToolController::Tick();
+        if (ToolController::GetMode() == ToolController::Mode::Idle &&
+            !ToolController::IsLoopEnabled() &&
+            !HardwareRuntimeService::Snapshot().cameraToolRunPending)
+        {
+            failedLoopSettled = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    Require(failedLoopSettled && mixedUnboundExecutions == 1 &&
+            mixedBoundExecutions == 1 && mixedBoundCaptured == 17,
+        "failed loop camera refresh reused a stale/public image for the bound task");
+
+    HardwareRuntimeService::SetCameraPreviewEnabled(true);
+
+    ToolController::Reset();
+    ToolChainState::ClearTools();
+    ToolChainState::ReplaceTaskGroups({});
     ToolInstance cameraInputTool;
     cameraInputTool.type = 12;
     ToolChainState::AddTool(std::move(cameraInputTool));
-    const int firstFrameIndex = cameraSnapshot.cameraFrameIndex;
+    const int firstFrameIndex =
+        HardwareRuntimeService::Snapshot().cameraFrameIndex;
     ToolController::RequestRunAll(true);
     bool linkedRunStarted = false;
     for (int attempt = 0; attempt < 200; ++attempt)
@@ -3656,6 +3798,212 @@ void TestModbusHandshakeTriggersIndependentTaskCameraRun()
     fs::remove_all(folder, folderError);
 }
 
+void TestMultiCameraRunUsesFreshBoundFramesWithoutChangingPreviewSlot()
+{
+    HardwareRuntimeService::Shutdown();
+    ToolController::Reset();
+    ToolChainState::ClearTools();
+    ToolChainState::ReplaceTaskGroups({});
+    ImageState::Clear();
+    FrameSourceState::Clear();
+
+    std::array<TestCameraAdapter*, 3> cameraViews{};
+    for (int cameraIndex = 0; cameraIndex < 3; ++cameraIndex)
+    {
+        auto camera = std::make_unique<TestCameraAdapter>(
+            nullptr, 11 * (cameraIndex + 1));
+        cameraViews[static_cast<std::size_t>(cameraIndex)] = camera.get();
+        Require(camera->Connect({"camera-multi", 0, {}}).success,
+            "multi-camera adapter connect failed");
+        Require(HardwareAdapterService::RegisterCamera(
+                "camera-slot-" + std::to_string(cameraIndex), std::move(camera)),
+            "multi-camera adapter registration failed");
+
+        HardwareCameraConnectionConfig config;
+        config.slotIndex = cameraIndex;
+        config.sourceName = "camera-" + std::to_string(cameraIndex + 1);
+        config.autoCapture = false;
+        config.triggerOnInspection = true;
+        config.grabTimeoutMs = 100;
+        config.captureIntervalMs = 10;
+        config.bufferPolicy = CameraBufferPolicy::LatestFrame;
+        const DeviceOperationResult startResult =
+            HardwareRuntimeService::StartCameraCapture(config);
+        const std::string startError =
+            "multi-camera capture worker failed to start: " + startResult.message;
+        Require(startResult.success, startError.c_str());
+
+        const std::string groupName = "相机任务" + std::to_string(cameraIndex + 1);
+        const int groupIndex = ToolChainState::CreateTaskGroup(groupName);
+        Require(groupIndex >= 0 &&
+                ToolChainState::SetTaskGroupCameraIndex(groupIndex, cameraIndex),
+            "multi-camera task binding setup failed");
+    }
+
+    std::array<int, 3> capturedValues{-1, -1, -1};
+    for (int cameraIndex = 0; cameraIndex < 3; ++cameraIndex)
+    {
+        ToolInstance tool;
+        tool.type = 2;
+        tool.groupName = "相机任务" + std::to_string(cameraIndex + 1);
+        tool.toolImpl = std::make_unique<TestInputCaptureTool>(
+            &capturedValues[static_cast<std::size_t>(cameraIndex)]);
+        ToolChainState::Tools().push_back(std::move(tool));
+    }
+
+    Require(HardwareRuntimeService::ActivateCameraSlot(0).success,
+        "multi-camera preview slot selection failed");
+    ImageState::SetImage(cv::Mat(8, 8, CV_8UC1, cv::Scalar(77)));
+    const std::array<int, 3> grabsBefore{
+        cameraViews[0]->grabCount,
+        cameraViews[1]->grabCount,
+        cameraViews[2]->grabCount};
+    const std::uint64_t completedBefore =
+        ToolController::GetCompletedBatchSerial();
+
+    ToolController::RequestRunAll(false, true);
+    Require(ToolController::GetMode() == ToolController::Mode::Waiting,
+        "multi-camera run did not wait for all bound slots");
+    for (int attempt = 0; attempt < 2000 &&
+         ToolController::GetCompletedBatchSerial() == completedBefore; ++attempt)
+    {
+        HardwareRuntimeService::Tick();
+        ToolController::Tick();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    Require(ToolController::GetCompletedBatchSerial() == completedBefore + 1,
+        "multi-camera run did not complete after all fresh frames arrived");
+    Require(capturedValues == std::array<int, 3>{11, 22, 33},
+        "multi-camera run did not route each slot frame to its bound task");
+    Require(cameraViews[0]->grabCount > grabsBefore[0] &&
+            cameraViews[1]->grabCount > grabsBefore[1] &&
+            cameraViews[2]->grabCount > grabsBefore[2],
+        "multi-camera run reused a stale frame instead of grabbing every slot");
+    Require(HardwareRuntimeService::Snapshot().cameraSlotIndex == 0,
+        "automatic multi-camera execution changed the selected preview slot");
+
+    ToolController::Reset();
+    ToolChainState::ClearTools();
+    ToolChainState::ReplaceTaskGroups({});
+    HardwareRuntimeService::Shutdown();
+    FrameSourceState::Clear();
+    ImageState::Clear();
+}
+
+void TestSixteenCameraResourceScheduling()
+{
+    HardwareRuntimeService::Shutdown();
+    ImageState::Clear();
+    FrameSourceState::Clear();
+    HardwareRuntimeService::SetCameraPreviewEnabled(false);
+    HardwareRuntimeService::SetCameraMaxConcurrentGrabs(3);
+
+    CameraConcurrencyProbe probe;
+    probe.delayMs = 12;
+    for (int cameraIndex = 0;
+         cameraIndex < static_cast<int>(kHardwareCameraCount); ++cameraIndex)
+    {
+        auto camera = std::make_unique<TestCameraAdapter>(nullptr,
+            cameraIndex + 1, &probe);
+        Require(camera->Connect({"camera-16", 0, {}}).success,
+            "16-camera adapter connect failed");
+        Require(HardwareAdapterService::RegisterCamera(
+                "camera-slot-" + std::to_string(cameraIndex),
+                std::move(camera)),
+            "16-camera adapter registration failed");
+
+        HardwareCameraConnectionConfig config;
+        config.slotIndex = cameraIndex;
+        config.sourceName = "camera-" + std::to_string(cameraIndex + 1);
+        config.autoCapture = false;
+        config.autoReconnect = false;
+        config.grabTimeoutMs = 100;
+        config.captureIntervalMs = 10;
+        const DeviceOperationResult started =
+            HardwareRuntimeService::StartCameraCapture(config);
+        const std::string startError =
+            "16-camera worker failed to start: " + started.message;
+        Require(started.success, startError.c_str());
+    }
+
+    auto allSlotsAdvanced = [](const HardwareRuntimeSnapshot& snapshot,
+        const std::array<int, kHardwareCameraCount>& baseline)
+    {
+        if (snapshot.cameraSlots.size() < kHardwareCameraCount)
+            return false;
+        for (const HardwareCameraSlotSnapshot& slot : snapshot.cameraSlots)
+        {
+            if (slot.slotIndex < 0 ||
+                slot.slotIndex >= static_cast<int>(kHardwareCameraCount) ||
+                slot.frameIndex <= baseline[static_cast<std::size_t>(slot.slotIndex)])
+            {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    const std::array<int, kHardwareCameraCount> initialBaseline{};
+    bool initialRoundCompleted = false;
+    for (int attempt = 0; attempt < 3000; ++attempt)
+    {
+        HardwareRuntimeService::Tick();
+        if (allSlotsAdvanced(HardwareRuntimeService::Snapshot(),
+            initialBaseline))
+        {
+            initialRoundCompleted = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    Require(initialRoundCompleted,
+        "16-camera scheduler did not complete the initial frame round");
+
+    std::array<int, kHardwareCameraCount> baseline{};
+    const HardwareRuntimeSnapshot initialSnapshot =
+        HardwareRuntimeService::Snapshot();
+    for (const HardwareCameraSlotSnapshot& slot : initialSnapshot.cameraSlots)
+    {
+        baseline[static_cast<std::size_t>(slot.slotIndex)] = slot.frameIndex;
+    }
+    probe.maximum.store(0);
+    for (int cameraIndex = 0;
+         cameraIndex < static_cast<int>(kHardwareCameraCount); ++cameraIndex)
+    {
+        HardwareRuntimeService::RequestCameraFrameForSlot(cameraIndex);
+    }
+
+    bool requestedRoundCompleted = false;
+    HardwareRuntimeSnapshot completedSnapshot;
+    for (int attempt = 0; attempt < 3000; ++attempt)
+    {
+        HardwareRuntimeService::Tick();
+        completedSnapshot = HardwareRuntimeService::Snapshot();
+        if (allSlotsAdvanced(completedSnapshot, baseline))
+        {
+            requestedRoundCompleted = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    Require(requestedRoundCompleted,
+        "16-camera scheduler did not deliver one fresh frame per slot");
+    Require(probe.maximum.load() >= 2 && probe.maximum.load() <= 3 &&
+            completedSnapshot.cameraMaxConcurrentGrabs == 3,
+        "16-camera scheduler exceeded or failed to use the configured grab limit");
+    Require(completedSnapshot.cameraPendingFrameBytes == 0 &&
+            completedSnapshot.cameraRetainedFrameBytes ==
+                kHardwareCameraCount * 4u * 6u,
+        "16-camera slots retained duplicate pending full-resolution frames");
+
+    HardwareRuntimeService::Shutdown();
+    HardwareRuntimeService::SetCameraMaxConcurrentGrabs(4);
+    FrameSourceState::Clear();
+    ImageState::Clear();
+}
+
 void TestFrameArchiveService()
 {
     FrameArchiveService::Shutdown();
@@ -3787,6 +4135,7 @@ void TestHardwareSettingsPersistence()
     source.cameraAutoExposure = false;
     source.cameraExposure = 10000.0f;
     source.cameraGain = 12.5f;
+    source.cameraMaxConcurrentGrabs = 3;
     source.outputType = 3;
     source.outputKey = "quality-gate";
     source.outputAddress = "192.168.10.30";
@@ -3849,6 +4198,7 @@ void TestHardwareSettingsPersistence()
         loaded.cameraAutoExposure == source.cameraAutoExposure &&
         std::abs(loaded.cameraExposure - source.cameraExposure) < 0.001f &&
         std::abs(loaded.cameraGain - source.cameraGain) < 0.001f &&
+        loaded.cameraMaxConcurrentGrabs == source.cameraMaxConcurrentGrabs &&
         loaded.cameras.size() == kHardwareCameraCount &&
         loaded.cameras[0].address == source.cameraAddress &&
         loaded.cameras[0].sourceName == source.cameraSourceName &&
@@ -3900,13 +4250,16 @@ void TestHardwareSettingsPersistence()
 
     HardwarePanelSettings updated = loaded;
     updated.activeCameraIndex = 15;
+    updated.cameraMaxConcurrentGrabs = 12;
     updated.cameras[15].address = "rtsp://192.168.10.35/camera16";
     updated.cameras[15].sourceName = "line-a-camera-16";
     updated.cameras[15].backend = 3;
+    updated.cameras[15].connectOnStartup = true;
     updated.cameras[15].exposure = -3.5f;
     updated.cameras[14].address = "192.168.20.22";
     updated.cameras[14].sourceName = "hikrobot-gige";
     updated.cameras[14].backend = 5;
+    updated.cameras[14].connectOnStartup = true;
     updated.cameras[14].exposure = 12500.0f;
     updated.cameras[14].triggerMode = 2;
     updated.cameras[14].triggerDelayMicroseconds = 275.0f;
@@ -3920,14 +4273,17 @@ void TestHardwareSettingsPersistence()
     const HardwarePanelSettings multiCameraLoaded =
         HardwareSettingsService::Load(settingsPath.string());
     Require(multiCameraLoaded.activeCameraIndex == 15 &&
+        multiCameraLoaded.cameraMaxConcurrentGrabs == 12 &&
         multiCameraLoaded.cameras.size() == kHardwareCameraCount &&
         multiCameraLoaded.cameras[15].address == updated.cameras[15].address &&
         multiCameraLoaded.cameras[15].sourceName == updated.cameras[15].sourceName &&
         multiCameraLoaded.cameras[15].backend == updated.cameras[15].backend &&
+        multiCameraLoaded.cameras[15].connectOnStartup &&
         std::abs(multiCameraLoaded.cameras[15].exposure -
             updated.cameras[15].exposure) < 0.001f &&
         multiCameraLoaded.cameras[14].address == "192.168.20.22" &&
         multiCameraLoaded.cameras[14].backend == 5 &&
+        multiCameraLoaded.cameras[14].connectOnStartup &&
         std::abs(multiCameraLoaded.cameras[14].exposure - 12500.0f) < 0.001f &&
         multiCameraLoaded.cameras[14].triggerMode == 2 &&
         std::abs(multiCameraLoaded.cameras[14].triggerDelayMicroseconds -
@@ -5747,81 +6103,6 @@ void TestUnboundToolDoesNotInheritCanvasROI()
     ROIState::Clear();
 }
 
-void TestToolControllerRunsTaskGroupsInParallel()
-{
-    ToolController::Reset();
-    ToolController::SetTaskParallelEnabled(true);
-    ToolChainState::ClearTools();
-    ToolChainState::ReplaceTaskGroups({});
-    ImageState::SetImage(cv::Mat(32, 32, CV_8UC1, cv::Scalar(9)));
-
-    const fs::path suffix = std::to_string(
-        std::chrono::steady_clock::now().time_since_epoch().count());
-    const fs::path taskAPath = fs::temp_directory_path() /
-        ("imgui_opencv_parallel_a_" + suffix.string() + ".png");
-    const fs::path taskBPath = fs::temp_directory_path() /
-        ("imgui_opencv_parallel_b_" + suffix.string() + ".png");
-    Require(cv::imwrite(taskAPath.string(),
-            cv::Mat(32, 32, CV_8UC1, cv::Scalar(23))) &&
-        cv::imwrite(taskBPath.string(),
-            cv::Mat(32, 32, CV_8UC1, cv::Scalar(187))),
-        "task-parallel test could not create input images");
-    Require(ToolChainState::CreateTaskGroup("任务A") >= 0 &&
-        ToolChainState::CreateTaskGroup("任务B") >= 0 &&
-        ToolChainState::SetTaskGroupImagePath(0, taskAPath.string()) &&
-        ToolChainState::SetTaskGroupImagePath(1, taskBPath.string()),
-        "task-parallel group setup failed");
-
-    auto addThreshold = [](const char* groupName)
-    {
-        ToolInstance tool;
-        tool.type = 3;
-        tool.groupName = groupName;
-        tool.inputSourceMode = 0;
-        tool.threshold.useGray = true;
-        tool.threshold.enableThreshold = true;
-        tool.threshold.threshold = 100;
-        ToolChainState::AddTool(std::move(tool));
-    };
-    addThreshold("任务A");
-    addThreshold("任务B");
-    addThreshold("任务A");
-    addThreshold("任务B");
-
-    ToolController::RequestRunAll(false, false);
-    Require(ToolController::IsParallelExecutionActive(),
-        "run-all did not launch independent task groups in parallel");
-    for (int attempt = 0; attempt < 500 &&
-        ToolController::GetMode() != ToolController::Mode::Idle; ++attempt)
-    {
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        ToolController::Tick();
-    }
-
-    const cv::Mat taskAResult = ToolController::GetTaskResultImage("任务A");
-    const cv::Mat taskBResult = ToolController::GetTaskResultImage("任务B");
-    Require(ToolController::GetMode() == ToolController::Mode::Idle &&
-        ToolChainState::AtReadOnly(0)->hasLastResult &&
-        ToolChainState::AtReadOnly(1)->hasLastResult &&
-        ToolChainState::AtReadOnly(2)->hasLastResult &&
-        ToolChainState::AtReadOnly(3)->hasLastResult,
-        "task-parallel run did not publish every task result");
-    Require(!taskAResult.empty() && !taskBResult.empty() &&
-        cv::countNonZero(taskAResult.reshape(1)) == 0 &&
-        cv::countNonZero(taskBResult.reshape(1)) ==
-            static_cast<int>(taskBResult.total() * taskBResult.channels()),
-        "task-parallel result images were mixed between tasks");
-
-    std::error_code removeError;
-    fs::remove(taskAPath, removeError);
-    removeError.clear();
-    fs::remove(taskBPath, removeError);
-    ToolController::SetTaskParallelEnabled(false);
-    ToolController::Reset();
-    ToolChainState::ClearTools();
-    ToolChainState::ReplaceTaskGroups({});
-}
-
 void TestToolControllerPublishesHeavyToolAsync()
 {
     const std::vector<ROI> previousROIs = ROIState::ReadOnlyItems();
@@ -6432,6 +6713,7 @@ void TestToolExecutorResolvesMovedRuntimeRoi()
 
 void TestResultOverlayStatePolicy()
 {
+    ResultOverlayState::ClearTaskGroupFilter();
     auto& settings = ResultOverlayState::MutableSettings();
     const auto oldSettings = settings;
     auto& tools = ToolChainState::Tools();
@@ -6444,6 +6726,8 @@ void TestResultOverlayStatePolicy()
     tools.clear();
     ToolInstance tool;
     tool.type = 10;
+    tool.toolId = 201;
+    tool.groupName = "任务04";
     tool.showResultLabels = false;
     tools.push_back(tool);
 
@@ -6472,6 +6756,30 @@ void TestResultOverlayStatePolicy()
     Require(ResultOverlayState::Results().size() == 1 &&
         ResultOverlayState::Results().front().sourceToolId == tool.toolId,
         "result overlay state did not expose unified results");
+
+    ToolInstance cameraTool;
+    cameraTool.type = 4;
+    cameraTool.toolId = 202;
+    cameraTool.groupName = "任务05";
+    cameraTool.showResultLabels = true;
+    tools.push_back(cameraTool);
+    ToolResult cameraResult;
+    cameraResult.sourceToolIndex = 1;
+    cameraResult.sourceToolId = cameraTool.toolId;
+    gContext.unifiedResults.push_back(cameraResult);
+
+    ResultOverlayState::SetTaskGroupFilter("任务05");
+    Require(ResultOverlayState::HasTaskGroupFilter() &&
+        ResultOverlayState::Results().size() == 1 &&
+        ResultOverlayState::Results().front().sourceToolId == cameraTool.toolId,
+        "task-group overlay filter leaked a result from another task");
+    ResultOverlayState::SetTaskGroupFilter("任务04");
+    Require(ResultOverlayState::Results().size() == 1 &&
+        ResultOverlayState::Results().front().sourceToolId == tool.toolId,
+        "task-group overlay filter hid the selected task result");
+    ResultOverlayState::ClearTaskGroupFilter();
+    Require(ResultOverlayState::Results().size() == 2,
+        "clearing the task-group overlay filter did not restore all results");
 
     DetectedObject realtimeObject;
     realtimeObject.box = cv::Rect(1, 2, 3, 4);
@@ -6517,6 +6825,7 @@ void TestResultOverlayStatePolicy()
     settings = oldSettings;
     tools = oldTools;
     gContext.unifiedResults = oldResults;
+    ResultOverlayState::ClearTaskGroupFilter();
 }
 
 void TestShapeModelRotationSearch()
@@ -6552,93 +6861,6 @@ void TestShapeModelRotationSearch()
         "HALCON-style shape model rotation search regressed");
 }
 
-void TestRenderBackendSelectionPolicy()
-{
-    Require(SelectRenderBackend(true, true) == RenderBackendKind::DirectX12,
-        "renderer policy did not prefer DX12 when both backends are available");
-    Require(SelectRenderBackend(false, true) == RenderBackendKind::DirectX11,
-        "renderer policy did not fall back to DX11 after DX12 failure");
-    Require(SelectRenderBackend(false, false) == RenderBackendKind::None,
-        "renderer policy selected a backend when none were available");
-}
-
-void TestRunResultLayoutPolicy()
-{
-    namespace Layout = UI::RunResultLayout;
-
-    const Layout::Size fullHd =
-        Layout::CalculateDashboardWindowSize(1920.0f, 1080.0f);
-    Require(std::abs(fullHd.width - 1760.0f) < 0.01f &&
-        std::abs(fullHd.height - 993.6f) < 0.01f,
-        "run-result dashboard window sizing regressed");
-
-    const Layout::DashboardGrid threeCards =
-        Layout::CalculateDashboardGrid(3, 1200.0f, 700.0f, 8.0f);
-    Require(threeCards.columns == 3 && threeCards.rowCount == 1 &&
-        threeCards.visibleRowCount == 1 &&
-        std::abs(threeCards.cardHeight - 520.0f) < 0.01f,
-        "run-result single-row grid layout regressed");
-
-    const Layout::DashboardGrid wrappedCards =
-        Layout::CalculateDashboardGrid(8, 900.0f, 700.0f, 8.0f);
-    Require(wrappedCards.columns == 3 && wrappedCards.rowCount == 3 &&
-        wrappedCards.visibleRowCount == 2 &&
-        std::abs(wrappedCards.cardHeight - 342.0f) < 0.01f,
-        "run-result wrapped grid layout regressed");
-    Require(Layout::CalculateDashboardGrid(0, 900.0f, 700.0f, 8.0f).columns == 0,
-        "empty run-result grid should not create columns");
-    Require(Layout::FormatDuration(0.0f) == "<0.1 ms" &&
-        Layout::FormatDuration(11.66f) == "11.7 ms" &&
-        Layout::FormatDuration(1239.2f) == "1.239 s" &&
-        Layout::FormatDuration(-1.0f) == "--" &&
-        Layout::FormatDuration(0.0f, 2) == "<0.01 ms",
-        "run-result duration formatting regressed");
-
-    const Layout::Rect imageBounds{0.0f, 0.0f, 200.0f, 100.0f};
-    const Layout::LabelPlacement first = Layout::PlaceOverlayLabel(
-        {20.0f, 20.0f}, {50.0f, 10.0f}, imageBounds, {});
-    Require(first.placed && first.bounds.left >= imageBounds.left &&
-        first.bounds.top >= imageBounds.top &&
-        first.bounds.right <= imageBounds.right &&
-        first.bounds.bottom <= imageBounds.bottom,
-        "run-result overlay label was not clamped to the image");
-
-    const Layout::LabelPlacement second = Layout::PlaceOverlayLabel(
-        {20.0f, 20.0f}, {50.0f, 10.0f}, imageBounds, {first.bounds});
-    Require(second.placed && !Layout::RectsOverlap(first.bounds, second.bounds),
-        "run-result overlay labels were not separated");
-    Require(!Layout::RectsOverlap(
-        {0.0f, 0.0f, 10.0f, 10.0f}, {10.0f, 0.0f, 20.0f, 10.0f}),
-        "touching run-result label edges should not overlap");
-
-    const Layout::LabelPlacement saturated = Layout::PlaceOverlayLabel(
-        {20.0f, 20.0f}, {50.0f, 10.0f}, imageBounds, {imageBounds});
-    Require(!saturated.placed,
-        "run-result overlay label should be skipped when no slot is free");
-}
-
-void TestIndustrialCameraPixelFormatMatrix()
-{
-    const CameraPixelFormatDescription mono10 =
-        DescribeCameraPixelFormat(0x01100003U);
-    const CameraPixelFormatDescription mono12Packed =
-        DescribeCameraPixelFormat(0x010C0006U);
-    const CameraPixelFormatDescription mono16 =
-        DescribeCameraPixelFormat(0x01100007U);
-    const CameraPixelFormatDescription bayer12 =
-        DescribeCameraPixelFormat(0x01100011U);
-    Require(mono10.name == "Mono10" && mono10.bitDepth == 10 &&
-        mono10.storageBitsPerPixel == 16 && mono10.monochrome,
-        "Mono10 PFNC description regressed");
-    Require(mono12Packed.name == "Mono12Packed" && mono12Packed.bitDepth == 12 &&
-        mono12Packed.storageBitsPerPixel == 12,
-        "Mono12Packed PFNC description regressed");
-    Require(mono16.name == "Mono16" && mono16.bitDepth == 16,
-        "Mono16 PFNC description regressed");
-    Require(bayer12.name == "BayerRG12" && bayer12.bayer &&
-        bayer12.bitDepth == 12,
-        "Bayer12 PFNC description regressed");
-}
 
 int RunCameraDiscoveryDiagnostic(const std::string& backend)
 {
@@ -6752,6 +6974,15 @@ int RunCameraPixelFormatDiagnostic(const std::string& backend,
 
 int main(int argc, char** argv)
 {
+    struct RuntimeShutdownGuard
+    {
+        ~RuntimeShutdownGuard()
+        {
+            ToolController::Shutdown();
+            HardwareRuntimeService::Shutdown();
+        }
+    } runtimeShutdownGuard;
+
     try {
         const fs::path testSpcDatabase = fs::temp_directory_path() /
             ("imgui_opencv_spc_test_" + std::to_string(
@@ -6773,8 +7004,15 @@ int main(int argc, char** argv)
             std::cout << "regression_tests: QR checks passed\n";
             return 0;
         }
+        if (argc > 1 && std::string(argv[1]) == "--multicolor-only") {
+            TestMultiColorFinderNoPoints();
+            TestMultiColorFinderOptimizedPreprocessingPreservesInput();
+            std::cout << "regression_tests: multi-color checks passed\n";
+            return 0;
+        }
         if (argc > 1 && std::string(argv[1]) == "--policy-only") {
             TestRecursiveImageFolderScanSupportsCommonFormats();
+            TestImageImportServiceAndDecodeFailures();
             TestToolJudgementPolicy();
             TestIndustrialMeasurement();
             TestResultROIResolution();
@@ -6785,6 +7023,7 @@ int main(int argc, char** argv)
             TestTaskGroupManagement();
             TestToolInstanceOwnsRecipeSerialization();
             TestToolExecutorResolvesMovedRuntimeRoi();
+            TestResultOverlayStatePolicy();
             TestRenderBackendSelectionPolicy();
             TestRunResultLayoutPolicy();
             TestIndustrialCameraPixelFormatMatrix();
@@ -6808,6 +7047,7 @@ int main(int argc, char** argv)
             TestToolControllerUsesIndependentTaskImages();
             TestToolControllerAdvancesTaskFolderImages();
             TestToolControllerRunsTaskGroupsInParallel();
+            TestTaskParallelBoundsInputCopiesToActiveWorkers();
             std::cout << "regression_tests: independent task image checks passed\n";
             return 0;
         }
@@ -6825,6 +7065,8 @@ int main(int argc, char** argv)
         }
         if (argc > 1 && std::string(argv[1]) == "--hardware-camera-only") {
             TestHardwareRuntimeAutomation();
+            TestMultiCameraRunUsesFreshBoundFramesWithoutChangingPreviewSlot();
+            TestSixteenCameraResourceScheduling();
             std::cout << "regression_tests: hardware camera automation checks passed\n";
             return 0;
         }
@@ -6861,6 +7103,7 @@ int main(int argc, char** argv)
         TestContourDirectionAndSubpixelBoundary();
         TestLineToolSampleImage();
         TestMultiColorFinderNoPoints();
+        TestMultiColorFinderOptimizedPreprocessingPreservesInput();
         TestOCRToolMissingEngineFailsWithTextResultContract();
         TestWindowsPPOCREngineUnavailableContract();
         TestWindowsPPOCRRecognitionCropKeepsHorizontalAspect();
@@ -6883,6 +7126,9 @@ int main(int argc, char** argv)
         TestToolROIServiceOwnsBoundROIEditing();
         TestHardwareAdapterServiceLifecycle();
         TestHardwareRuntimeAutomation();
+        TestMultiCameraRunUsesFreshBoundFramesWithoutChangingPreviewSlot();
+        TestSixteenCameraResourceScheduling();
+        TestTaskParallelBoundsInputCopiesToActiveWorkers();
         TestModbusHandshakeTriggersIndependentTaskCameraRun();
         TestFrameArchiveService();
         TestRecipeAutosaveService();

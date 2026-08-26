@@ -1119,6 +1119,13 @@ bool ImGui::ScrollbarEx(const ImRect& bb_frame, ImGuiID id, ImGuiAxis axis, ImS6
         //    g.ScrollbarClickDeltaToGrabCenter = clicked_v_norm - grab_v_norm - grab_h_norm * 0.5f;
     }
 
+    // IDE-style auto-hide: keep the full hit area and scrolling behavior, but
+    // only reveal this window's scrollbar while the pointer is over the
+    // corresponding panel or the grab is actively being dragged.
+    const bool reveal_scrollbar = window->Rect().Contains(g.IO.MousePos) || held || g.ActiveId == id;
+    if (!reveal_scrollbar)
+        return held;
+
     // Render
     const ImU32 bg_col = GetColorU32(ImGuiCol_ScrollbarBg);
     const ImU32 grab_col = GetColorU32(held ? ImGuiCol_ScrollbarGrabActive : hovered ? ImGuiCol_ScrollbarGrabHovered : ImGuiCol_ScrollbarGrab, alpha);
@@ -1854,10 +1861,22 @@ bool ImGui::SplitterBehavior(const ImRect& bb, ImGuiID id, ImGuiAxis axis, float
     }
 
     // Render at new position
+    const bool highlight_visible = held || (hovered && g.HoveredIdTimer >= hover_visibility_delay);
+    ImRect highlight_rect = bb_render;
+    if (highlight_visible)
+    {
+        const float full_thickness = highlight_rect.GetSize()[axis];
+        const float visible_thickness = ImMin(3.0f, full_thickness);
+        const float inset = (full_thickness - visible_thickness) * 0.5f;
+        highlight_rect.Min[axis] += inset;
+        highlight_rect.Max[axis] -= inset;
+    }
+    const float splitter_rounding = ImMin(g.Style.FrameRounding,
+        ImMin(highlight_rect.GetWidth(), highlight_rect.GetHeight()) * 0.5f);
     if (bg_col & IM_COL32_A_MASK)
-        window->DrawList->AddRectFilled(bb_render.Min, bb_render.Max, bg_col, 0.0f);
-    const ImU32 col = GetColorU32(held ? ImGuiCol_SeparatorActive : (hovered && g.HoveredIdTimer >= hover_visibility_delay) ? ImGuiCol_SeparatorHovered : ImGuiCol_Separator);
-    window->DrawList->AddRectFilled(bb_render.Min, bb_render.Max, col, 0.0f);
+        window->DrawList->AddRectFilled(bb_render.Min, bb_render.Max, bg_col, splitter_rounding);
+    const ImU32 col = GetColorU32(held ? ImGuiCol_SeparatorActive : highlight_visible ? ImGuiCol_SeparatorHovered : ImGuiCol_Separator);
+    window->DrawList->AddRectFilled(highlight_rect.Min, highlight_rect.Max, col, splitter_rounding);
 
     return held;
 }

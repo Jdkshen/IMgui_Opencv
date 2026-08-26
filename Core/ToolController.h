@@ -19,7 +19,7 @@ namespace ToolController
     void RequestRunAll(bool loop = false, bool triggerCamera = true); // 全部执行
     void RequestRunTaskGroup(const std::string& groupName,
         bool loop = false, bool triggerCamera = true,
-        bool forceCameraCapture = false); // 仅执行指定任务；PLC 触发可强制先抓帧
+        bool forceCameraCapture = false); // 仅执行指定任务；PLC 可强制已绑定相机任务先抓帧
     void ResumeRunAfterCamera(bool loop = false,
         bool cameraFrameAvailable = true);          // 相机触发完成后保持原执行范围；失败时走任务回退输入
     void RequestRepeatLastRun(bool loop = false, bool triggerCamera = true);
@@ -60,6 +60,8 @@ namespace ToolController
     void SetTaskParallelEnabled(bool enabled);
     bool IsTaskParallelEnabled();
     int GetTaskParallelLimit();
+    std::uint64_t GetLastTaskParallelPeakInputBytes();
+    std::uint64_t GetLastTaskParallelEagerInputBytes();
 
     // 工具删除、移动或整条配方替换后调用，清除所有与工具索引相关的运行时缓存。
     void OnToolChainChanged();

@@ -115,7 +115,8 @@ const std::string& GetModelPath()
     return empty;
 }
 
-std::vector<DetectedObject> Detect(const cv::Mat&, float, float, cv::Rect)
+std::vector<DetectedObject> Detect(
+    const cv::Mat&, float, float, cv::Rect, std::uint64_t)
 {
     return {};
 }

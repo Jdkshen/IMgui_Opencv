@@ -1,6 +1,6 @@
 # 项目代码结构梳理
 
-> 文档同步日期：2026-08-16。本文已补充 DX12/DX11 双后端、任务分组、独立输入、独立流程图、统一结果、任务并行、16 槽多相机、视频 YOLO、Per-Monitor DPI 和 PLC 单槽握手的代码边界。
+> 文档同步日期：2026-08-25。应用入口已收口到 `App/`；本文同时覆盖 Bootstrap 启动诊断、DX12/DX11 双后端、任务分组、独立输入、独立流程图、统一结果、任务并行、16 槽多相机、视频 YOLO、Per-Monitor DPI 和 PLC 单槽握手的代码边界。
 
 ## 2026-08-02 图形后端代码边界
 
@@ -11,20 +11,23 @@
 | DX12 | `Core/DX12Backend.*`、`Core/DX12Context.*` | 适配并完整保留 DX12 设备、交换链、帧同步、描述符和上传实现 |
 | DX11 | `Core/DX11Context.*` | 独立实现 D3D11 设备、交换链、RenderTarget、ImGui 后端和纹理上传/释放 |
 | Renderer | `Renderer/PreviewTextureCache.*` | 只保存通用纹理句柄和 `ImTextureID`，不暴露 D3D11/D3D12 类型 |
-| UI | `Windows_imgui.cpp`、`UI/*` | 共用一套布局、字体、Docking、图片、Resize、多视口和最大化行为 |
+| App / UI | `App/Main.cpp`、`UI/*` | 共用一套布局、字体、Docking、图片、Resize、多视口和最大化行为 |
 
 ## 2026-07-27 任务与硬件执行代码边界
 
 | 层次 | 文件 | 职责 |
 | --- | --- | --- |
 | Core | `Core/ToolChainState.*` | 保存最多 16 个任务的顺序、启用状态、输入设置和工具归属 |
-| Core | `Core/ToolController.*` | 生成执行顺序、准备任务图片、推进文件夹、处理相机回退和任务并行 |
+| Core | `Core/ToolController.*` | 持有运行状态，处理相机回退、工具推进和任务并行 |
+| Core | `Core/ToolRunPolicy.*` | 生成执行顺序、异步工具分类、任务图片范围和跨任务依赖判断 |
+| Core | `Core/TaskImageProvider.*` | UTF-8 任务图片读取、目录扫描和文件夹游标推进 |
 | Core | `Core/HardwareRuntimeService.*` | 异步相机帧、PLC 轮询、单槽 Trigger/Busy/Done/ACK 握手、结果输出与重连 |
 | Core | `Core/HardwareSettingsService.*` | 硬件设置持久化、IO 映射校验、任务 Trigger 自动补齐与标准映射生成 |
 | Core | `Core/RecipeManager.*` | 保存和加载任务图片、文件夹进度及相机优先字段 |
-| UI | `UI/ToolsWindow.cpp` | 任务管理、输入配置、自适应多行流程图、执行全部/当前任务/单步/并行入口 |
+| UI | `UI/ToolsWindow.cpp` | 工具参数卡片、执行全部/当前任务/单步/并行入口 |
+| UI | `UI/TaskGroupWindow.cpp` | 任务列表、工具分配、独立输入绑定、筛选状态和任务预览切换 |
 | UI | `UI/RunResultWindow.cpp` | 任务结果总览、详情、结果图、缩放和本轮总耗时 |
-| Test | `Test/regression_tests.cpp` | 验证任务顺序、独立图片、文件夹、相机回退、并行、PLC 指定任务与连续触发丢弃 |
+| Test | `Test/regression_tests.cpp`、`Test/RegressionGeometryTests.*`、`Test/RegressionPolicyTests.*` | 主入口验证任务与硬件流程；独立套件验证几何标定、渲染布局和像素格式策略 |
 
 算法、设备、统计和渲染模块的其余边界见下文；任务的用户操作规则见 `docs/TASK_GROUPS.md`。
 本文档根据当前源码整理项目结构、模块职责、主流程和主要数据流，方便后续维护、重构和新增算法工具。
@@ -49,6 +52,7 @@
 
 ```text
 IMgui_Opencv/
+├── App/                    # Win32 应用入口、入口头聚合、平台头和资源
 ├── Algorithm/              # 视觉算法和 ITool 工具实现
 ├── Core/                   # 应用核心、上下文、调度、资源与配方
 ├── UI/                     # Dear ImGui 窗口、交互和 ROI 管理
@@ -61,9 +65,6 @@ IMgui_Opencv/
 ├── recipes/                # 配方文件及模板资源
 ├── Test/                   # C++ 回归测试工程
 ├── docs/                   # 项目文档
-├── Windows_imgui.cpp       # Win32 / GraphicsBackend / ImGui 程序入口和主循环
-├── Windows_imgui.h         # 公共头文件汇总和通用转换函数
-├── framework.h             # Windows 基础头文件
 └── Windows_imgui.vcxproj   # Visual Studio C++ 工程文件
 ```
 
@@ -73,7 +74,7 @@ IMgui_Opencv/
 
 ```mermaid
 flowchart TD
-    A["Windows_imgui.cpp<br/>入口 / 主循环"] --> B["UI 层<br/>窗口、面板、ROI、用户交互"]
+    A["App/Main.cpp<br/>入口 / 主循环"] --> B["UI 层<br/>窗口、面板、ROI、用户交互"]
     B --> C["Core 层<br/>上下文、调度、资源、配方"]
     C --> D["Algorithm 层<br/>OpenCV / YOLO / ITool"]
     C --> E["Renderer / Log<br/>字体、预览纹理缓存、日志"]
@@ -90,7 +91,7 @@ flowchart TD
 
 ## 程序入口和主循环
 
-入口文件是 `Windows_imgui.cpp`，入口函数是 `wWinMain()`。
+入口文件是 `App/Main.cpp`，入口函数是 `wWinMain()`。
 
 主流程：
 
@@ -136,11 +137,18 @@ GraphicsBackend::RenderAndPresent()
 | `DockSpaceHost.*` | 主 DockSpace、菜单栏和全局窗口显示开关；通过 `Core/ROI.h` 使用 ROI 类型 |
 | `ImageViewer.*` | 图片窗口、缩放平移、文件夹图片列表、上一张/下一张、图片清理 |
 | `ROIManager.*` | ROI 创建、选择、拖动、缩放、绘制、坐标转换 |
-| `ToolsWindow.*` | 工具实例、任务管理、任务输入、独立“工具流程图”窗口，以及全部/当前任务/单步/循环/任务并行入口；公共表单行负责参数对齐 |
+| `ToolsWindow.*` | 工具实例参数，以及全部/当前任务/单步/循环/任务并行入口；公共表单行负责参数对齐 |
+| `TaskGroupWindow.*` | 任务列表、工具分配、任务单图/文件夹/相机输入、筛选状态和任务结果预览同步 |
+| `WorkflowWindow.*` | 独立工具流程图窗口、自动换行节点、顺序线和 Fixture/Result ROI 依赖线 |
+| `Tools/BasicToolPanels.*` / `Tools/DetectionToolPanels.*` / `Tools/AdvancedDetectionToolPanels.*` / `Tools/MeasurementToolPanel.*` | 按工具族注册全部参数面板；高级模块持有模板、YOLO、形状和多点找色 UI，测量模块独立持有 ROI 绘制状态和标定 UI |
 | `RunResultWindow.*` | 任务结果总览、任务详情、结果图和本轮总耗时 |
+| `RunResultPresentation.*` | 结果状态文案/颜色、摘要与详细内容格式化，不持有窗口状态 |
+| `RunResultSnapshot.*` | 从工具链与控制器构建批次/任务结果快照并聚合状态 |
+| `RunResultOverlayRenderer.*` | 结果图上的检测框、区域、文本、直线与标签避让绘制 |
 | `RunResultLayout.*` | 结果窗口尺寸、任务卡片网格和覆盖标签避让等无渲染布局策略 |
 | `Sidebar.*` | ROI 控制面板；启动时默认隐藏，通过“查看 → 侧边栏控制”手动打开 |
-| `HardwareWindow.*` | 与控制面板位于同一左侧停靠区的设备连接页签 |
+| `HardwareWindow.*` | 硬件全屏窗口壳、页面导航和面板分派 |
+| `HardwarePanel.cpp` | 工业相机、实时保存、主/辅助输出及 PLC 握手配置面板 |
 | `LogWindow.*` | 日志窗口显示 |
 | `StatsWindow.*` | 性能统计窗口 |
 
@@ -199,6 +207,9 @@ ROI 相关职责分为三层：
 | `ImageImportService.*` | 单图/递归文件夹导入、导航与输入切换状态清理 |
 | `HardwareAdapters.*` | 工业相机、PLC、Modbus TCP、OPC UA 适配器接口与注册 |
 | `HardwareRuntimeService.*` | 设备连接、异步相机抓帧、PLC 输入轮询、单槽握手、结果聚合及 OK/NG/Error 输出协调 |
+| `HardwareRuntimePolicy.*` | 无线程状态的握手配置校验、二维码载荷构建和结果状态聚合 |
+| `HardwareHandshakePlan.*` | 无线程状态的 PLC 输出映射筛选、Start/Complete/Reset 写入计划和 ACK 输入判断 |
+| `HardwareCameraPolicy.*` | 无线程状态的相机帧方向变换，以及触发、PTP、缓存策略能力校验 |
 | `HardwareSettingsService.*` | 硬件 JSON 设置、IO 表校验、旧配置兼容和任务 Trigger 地址同步 |
 | `OpenCvCameraAdapter.*` | UVC、摄像头索引和 OpenCV 视频流 URL 的通用相机实现 |
 | `ModbusTcpAdapter.*` | Winsock Modbus TCP 01/03/05/06 客户端与协议校验 |
@@ -215,6 +226,8 @@ ROI 相关职责分为三层：
 | `ResultOverlayState.*` | 统一结果、实时检测和 Fixture 叠加层查询与显示策略 |
 | `ToolExecutor.*` | 统一工具执行入口，按工具类型分发 |
 | `ToolController.*` | 工具执行调度器，支持单个、全部、当前任务、任务单步、循环和任务并行 |
+| `ToolRunPolicy.*` | 无运行线程状态的执行顺序、异步类型和跨任务依赖策略 |
+| `TaskImageProvider.*` | 任务单图读取与文件夹轮换，统一处理 UTF-8 Windows 路径 |
 | `ResultPublisher.h` | 结果发布相关声明 |
 | `ResultExporter.*` | JSON 结果、PNG 结果截图和 Markdown 运行报告导出 |
 | `ImageUtils.h` | 图像格式转换和安全上传辅助 |

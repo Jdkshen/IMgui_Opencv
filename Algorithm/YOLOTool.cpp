@@ -52,7 +52,10 @@ ToolResult YOLOTool::Execute(VisionContext& ctx)
         detectorImage = ctx.image.clone();
         ToolImageUtils::ApplyDomainMask(detectorImage, domainMask);
     }
-    auto objs = YOLODetector::Detect(detectorImage, confThreshold, nmsThreshold, roi);
+    const std::uint64_t frameToken = domainMask.empty()
+        ? ctx.imageCacheToken : 0;
+    auto objs = YOLODetector::Detect(
+        detectorImage, confThreshold, nmsThreshold, roi, frameToken);
     if (ctx.IsCancellationRequested()) {
         result.success = false;
         result.message = "执行已取消";

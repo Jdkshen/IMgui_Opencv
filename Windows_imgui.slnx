@@ -1,8 +1,8 @@
 <Solution>
   <Configurations>
     <Platform Name="x64" />
-    <Platform Name="x86" />
   </Configurations>
+  <Project Path="Bootstrap\Bootstrap.vcxproj" Id="c0f58bd8-f76d-47c5-a345-5e49c82c89de" />
   <Project Path="Windows_imgui.vcxproj" Id="dd3f0b96-f621-407c-821f-3e50c89808ef" />
   <Project Path="Test\RegressionTests.vcxproj" Id="55a6c99f-82f8-4ff7-88f2-0f1303f6d70e" />
 </Solution>

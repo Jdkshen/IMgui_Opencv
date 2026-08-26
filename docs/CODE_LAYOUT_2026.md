@@ -1,6 +1,6 @@
 # 代码目录与存储规则
 
-> 文档同步日期：2026-08-16。当前边界已包含任务分组、独立输入、并行执行、16 槽相机运行时、视频检测、DPI 适配、PLC IO 映射、工具 UI 资源和握手回归。
+> 文档同步日期：2026-08-25。应用入口已收口到 `App/`；其余边界包含任务分组、独立输入、并行执行、16 槽相机运行时、视频检测、Bootstrap 启动诊断、DPI 适配、PLC IO 映射、工具 UI 资源和握手回归。
 
 
 仓库按职责归属组织。生产代码应放入现有模块目录，不要把新的业务源码堆到项目根目录。
@@ -9,9 +9,11 @@
 
 | 目录 | 职责 | 典型内容 |
 | --- | --- | --- |
+| `App/` | Win32 应用壳、入口、平台头和资源 | `Main.cpp`、`AppIncludes.h`、`Platform.h` |
 | `Core/` | 运行状态、图像/ROI、任务调度、配方、结果发布、标定和 Fixture | `VisionContext`、`ImageState`、`ToolController`、`RecipeManager` |
 | `Algorithm/` | 无 UI 的图像处理与检测算子，通过 `ITool` 接收 `VisionContext` 并返回 `ToolResult` | 边缘、阈值、Blob、模板、YOLO、OCR、条码、卡尺等 |
-| `UI/` | Dear ImGui 窗口、参数收集、ROI 编辑和结果展示 | `ToolsWindow`、`ImageViewer`、`ROIManager`、`RunResultWindow` |
+| `UI/` | Dear ImGui 窗口、参数收集、ROI 编辑和结果展示 | `ToolsWindow`、`TaskGroupWindow`、`WorkflowWindow`、`ImageViewer`、`ROIManager`、`RunResultWindow` |
+| `UI/Tools/` | 按工具族拆分的参数面板注册模块 | `BasicToolPanels`、`DetectionToolPanels`、`AdvancedDetectionToolPanels`、`MeasurementToolPanel` |
 | `Renderer/` | 仅渲染相关的辅助 | 字体、图标和 `PreviewTextureCache` |
 | `Log/` | 线程安全日志实现 | 日志存储、格式化和日志窗口 |
 | `Test/` | C++ 回归工程和测试夹具 | 配方往返、判定、ROI、卡尺、任务输入、硬件回退与 PLC 握手 |

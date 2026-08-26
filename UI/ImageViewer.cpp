@@ -1,4 +1,4 @@
-#include "../framework.h"
+#include <opencv2/core.hpp>
 #include "../imgui/imgui.h"
 #include "ImageViewer.h"
 #include "ToolsWindow.h"
@@ -349,10 +349,10 @@ namespace UI
 			float buttonWidth = 100.0f;
 
 			const ImVec4 toolbarBg = isDark
-				? ImVec4(0.090f, 0.108f, 0.125f, 1.0f)
+				? ImVec4(0.118f, 0.118f, 0.118f, 1.0f)
 				: ImVec4(0.955f, 0.970f, 0.978f, 1.0f);
 			const ImVec4 toolbarBorder = isDark
-				? ImVec4(0.16f, 0.22f, 0.25f, 1.0f)
+				? ImVec4(0.169f, 0.169f, 0.169f, 1.0f)
 				: ImVec4(0.70f, 0.77f, 0.80f, 1.0f);
 			const ImVec4 toolbarLabelColor = isDark
 				? ImVec4(0.42f, 0.78f, 0.84f, 1.0f)
@@ -435,11 +435,19 @@ namespace UI
 			{
 				std::string path = OpenVideoDialog();
 				if (!path.empty())
+				{
+					ImageLoadController::CancelPending();
+					HardwareRuntimeService::SetCameraPreviewEnabled(false);
 					FrameNavigation::OpenVideoSource(path);
+				}
 			}
 			ImGui::SameLine();
 			if (ImGui::Button("打开摄像头"))
+			{
+				ImageLoadController::CancelPending();
+				HardwareRuntimeService::SetCameraPreviewEnabled(false);
 				FrameNavigation::OpenCameraSource(0);
+			}
 			ImGui::SameLine();
 			if (ImGui::Button("选择图片"))
 				OpenSingleImage();
@@ -731,9 +739,9 @@ namespace UI
 			ImDrawList* drawList = ImGui::GetWindowDrawList();
 			const bool isDark = g_CurrentTheme == 0;
 			drawList->AddRectFilled(cardPos, ImVec2(cardPos.x + cardW, cardPos.y + cardH),
-				ImGui::ColorConvertFloat4ToU32(isDark ? ImVec4(0.10f, 0.13f, 0.15f, 1.0f) : ImVec4(0.86f, 0.90f, 0.93f, 1.0f)), 10.0f);
+				ImGui::ColorConvertFloat4ToU32(isDark ? ImVec4(0.145f, 0.145f, 0.149f, 1.0f) : ImVec4(0.86f, 0.90f, 0.93f, 1.0f)), 10.0f);
 			drawList->AddRect(cardPos, ImVec2(cardPos.x + cardW, cardPos.y + cardH),
-				ImGui::ColorConvertFloat4ToU32(isDark ? ImVec4(0.20f, 0.42f, 0.46f, 1.0f) : ImVec4(0.43f, 0.68f, 0.72f, 1.0f)), 10.0f, 0, 1.5f);
+				ImGui::ColorConvertFloat4ToU32(isDark ? ImVec4(0.235f, 0.376f, 0.400f, 1.0f) : ImVec4(0.43f, 0.68f, 0.72f, 1.0f)), 10.0f, 0, 1.5f);
 			ImGui::SetCursorScreenPos(ImVec2(cardPos.x, cardPos.y + 24.0f));
 			const char* title = "请加载图片或连接相机";
 			ImGui::SetCursorPosX(cardPos.x - ImGui::GetWindowPos().x + (cardW - ImGui::CalcTextSize(title).x) * 0.5f);
@@ -745,11 +753,20 @@ namespace UI
 			if (ImGui::Button("打开视频", ImVec2(92.0f, 0.0f)))
 			{
 				std::string path = OpenVideoDialog();
-				if (!path.empty()) FrameNavigation::OpenVideoSource(path);
+				if (!path.empty())
+				{
+					ImageLoadController::CancelPending();
+					HardwareRuntimeService::SetCameraPreviewEnabled(false);
+					FrameNavigation::OpenVideoSource(path);
+				}
 			}
 			ImGui::SameLine();
 			if (ImGui::Button("打开摄像头", ImVec2(92.0f, 0.0f)))
+			{
+				ImageLoadController::CancelPending();
+				HardwareRuntimeService::SetCameraPreviewEnabled(false);
 				FrameNavigation::OpenCameraSource(0);
+			}
 			ImGui::SameLine();
 			if (ImGui::Button("选择图片", ImVec2(92.0f, 0.0f)))
 				OpenSingleImage();

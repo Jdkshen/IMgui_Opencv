@@ -7485,7 +7485,11 @@ void ImGui::RenderWindowDecorations(ImGuiWindow* window, const ImRect& title_bar
 
     // Draw window + handle manual resize
     // As we highlight the title bar when want_focus is set, multiple reappearing windows will have their title bar highlighted on their reappearing frame.
-    const float window_rounding = window->WindowRounding;
+    // Docked panels use the host rounding so every leaf node can render as an
+    // independent card while undocked windows retain their normal style.
+    const float window_rounding = (window->DockIsActive && window->DockNode->HostWindow)
+        ? window->DockNode->HostWindow->WindowRounding
+        : window->WindowRounding;
     const float window_border_size = window->WindowBorderSize;
     if (window->Collapsed)
     {
@@ -7544,7 +7548,7 @@ void ImGui::RenderWindowDecorations(ImGuiWindow* window, const ImRect& title_bar
                 ImRect bg_rect(window->Pos + ImVec2(0, window->TitleBarHeight), window->Pos + window->Size);
                 ImDrawFlags bg_rounding_flags;
                 if (window->DockIsActive)
-                    bg_rounding_flags = CalcRoundingFlagsForRectInRect(bg_rect, window->DockNode->HostWindow->Rect(), 0.0f);
+                    bg_rounding_flags = ImDrawFlags_RoundCornersBottom;
                 else
                     bg_rounding_flags = (flags & ImGuiWindowFlags_NoTitleBar) ? ImDrawFlags_RoundCornersAll : ImDrawFlags_RoundCornersBottom;
                 ImDrawList* bg_draw_list = window->DockIsActive ? window->DockNode->HostWindow->DrawList : window->DrawList;
@@ -8792,6 +8796,53 @@ void ImGui::End()
         EndColumns();
     if (!(window->Flags & ImGuiWindowFlags_DockNodeHost) && !window->SkipRefresh)   // Pop inner window clip rectangle
         PopClipRect();
+
+    // Finish visible docked panels as complete cards. The docking host is
+    // rendered before panel contents, so full-width children can otherwise
+    // overwrite the rounded corners and leave square seams. Mask and refill
+    // every corner here, then draw the final outline above the panel contents.
+    if (window->DockIsActive && window->DockTabIsVisible && window->DockNode &&
+        window->DockNode->HostWindow && !window->SkipRefresh)
+    {
+        const ImVec2 card_min = window->DockNode->Pos;
+        const ImVec2 card_max = window->DockNode->Pos + window->DockNode->Size;
+        const ImVec2 card_size = card_max - card_min;
+        const float rounding = ImMin(window->DockNode->HostWindow->WindowRounding,
+            ImMin(card_size.x, card_size.y) * 0.5f);
+        const ImU32 outside_col = GetColorU32(ImGuiCol_DockingEmptyBg);
+        const ImU32 title_col = GetColorU32(ImGuiCol_TitleBg);
+        const ImU32 body_col = GetColorU32(GetWindowBgColorIdx(window));
+        const ImVec2 outline_min = card_min + ImVec2(0.5f, 0.5f);
+        const ImVec2 outline_max = card_max - ImVec2(0.5f, 0.5f);
+        window->DrawList->PushClipRectFullScreen();
+
+        if (rounding > 1.0f)
+        {
+            const auto draw_card_corner = [window, outside_col, rounding](const ImVec2& corner_min,
+                const ImVec2& corner_max, const ImVec2& circle_center, ImU32 fill_col)
+            {
+                window->DrawList->AddRectFilled(corner_min, corner_max, outside_col);
+                window->DrawList->PushClipRect(corner_min, corner_max, true);
+                window->DrawList->AddCircleFilled(circle_center, rounding, fill_col, 12);
+                window->DrawList->PopClipRect();
+            };
+
+            draw_card_corner(card_min, card_min + ImVec2(rounding, rounding),
+                card_min + ImVec2(rounding, rounding), title_col);
+            draw_card_corner(ImVec2(card_max.x - rounding, card_min.y),
+                ImVec2(card_max.x, card_min.y + rounding),
+                ImVec2(card_max.x - rounding, card_min.y + rounding), title_col);
+            draw_card_corner(ImVec2(card_min.x, card_max.y - rounding),
+                ImVec2(card_min.x + rounding, card_max.y),
+                ImVec2(card_min.x + rounding, card_max.y - rounding), body_col);
+            draw_card_corner(card_max - ImVec2(rounding, rounding), card_max,
+                card_max - ImVec2(rounding, rounding), body_col);
+        }
+
+        window->DrawList->AddRect(outline_min, outline_max, GetColorU32(ImGuiCol_Border),
+            rounding, ImDrawFlags_RoundCornersAll, 1.0f);
+        window->DrawList->PopClipRect();
+    }
     PopFocusScope();
     if (window_stack_data.DisabledOverrideReenable && window->RootWindow == window)
         EndDisabledOverrideReenable();
@@ -18000,7 +18051,7 @@ void ImGui::DockContextEndFrame(ImGuiContext* ctx)
             if (node->LastFrameActive == g.FrameCount && node->IsVisible && node->HostWindow && node->IsLeafNode() && !node->IsBgDrawnThisFrame)
             {
                 ImRect bg_rect(node->Pos + ImVec2(0.0f, GetFrameHeight()), node->Pos + node->Size);
-                ImDrawFlags bg_rounding_flags = CalcRoundingFlagsForRectInRect(bg_rect, node->HostWindow->Rect(), g.Style.DockingSeparatorSize);
+                ImDrawFlags bg_rounding_flags = ImDrawFlags_RoundCornersBottom;
                 node->HostWindow->DrawList->ChannelsSetCurrent(DOCKING_HOST_DRAW_CHANNEL_BG);
                 node->HostWindow->DrawList->AddRectFilled(bg_rect.Min, bg_rect.Max, node->LastBgColor, node->HostWindow->WindowRounding, bg_rounding_flags);
             }
@@ -19237,9 +19288,11 @@ static void ImGui::DockNodeUpdate(ImGuiDockNode* node)
     if (node->IsRootNode() && host_window)
     {
         DockNodeTreeUpdatePosSize(node, host_window->Pos, host_window->Size);
-        PushStyleColor(ImGuiCol_Separator, g.Style.Colors[ImGuiCol_Border]);
-        PushStyleColor(ImGuiCol_SeparatorActive, g.Style.Colors[ImGuiCol_ResizeGripActive]);
-        PushStyleColor(ImGuiCol_SeparatorHovered, g.Style.Colors[ImGuiCol_ResizeGripHovered]);
+        // Keep the resize hit area available but hide the sash at rest. It is
+        // revealed only while hovered/dragged, matching IDE-style split panes.
+        PushStyleColor(ImGuiCol_Separator, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+        PushStyleColor(ImGuiCol_SeparatorActive, g.Style.Colors[ImGuiCol_SeparatorActive]);
+        PushStyleColor(ImGuiCol_SeparatorHovered, g.Style.Colors[ImGuiCol_SeparatorHovered]);
         DockNodeTreeUpdateSplitter(node);
         PopStyleColor(3);
     }
@@ -19504,7 +19557,7 @@ static void ImGui::DockNodeUpdateTabBar(ImGuiDockNode* node, ImGuiWindow* host_w
     if (is_focused)
         node->LastFrameFocused = g.FrameCount;
     ImU32 title_bar_col = GetColorU32(host_window->Collapsed ? ImGuiCol_TitleBgCollapsed : is_focused ? ImGuiCol_TitleBgActive : ImGuiCol_TitleBg);
-    ImDrawFlags rounding_flags = CalcRoundingFlagsForRectInRect(title_bar_rect, host_window->Rect(), g.Style.DockingSeparatorSize);
+    ImDrawFlags rounding_flags = ImDrawFlags_RoundCornersTop;
     host_window->DrawList->AddRectFilled(title_bar_rect.Min, title_bar_rect.Max, title_bar_col, host_window->WindowRounding, rounding_flags);
 
     // Docking/Collapse button
@@ -20370,8 +20423,8 @@ void ImGui::DockNodeTreeUpdateSplitter(ImGuiDockNode* node)
             float cur_size_1 = child_1->Size[axis];
             float min_size_0 = resize_limits[0] - child_0->Pos[axis];
             float min_size_1 = child_1->Pos[axis] + child_1->Size[axis] - resize_limits[1];
-            ImU32 bg_col = GetColorU32(ImGuiCol_WindowBg);
-            if (SplitterBehavior(bb, GetID("##Splitter"), axis, &cur_size_0, &cur_size_1, min_size_0, min_size_1, g.WindowsBorderHoverPadding, WINDOWS_RESIZE_FROM_EDGES_FEEDBACK_TIMER, bg_col))
+            ImU32 bg_col = 0;
+            if (SplitterBehavior(bb, GetID("##Splitter"), axis, &cur_size_0, &cur_size_1, min_size_0, min_size_1, g.WindowsBorderHoverPadding, 0.0f, bg_col))
             {
                 if (touching_nodes[0].Size > 0 && touching_nodes[1].Size > 0)
                 {

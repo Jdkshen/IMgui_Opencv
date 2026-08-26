@@ -30,6 +30,9 @@ namespace ResultOverlayState
     const Settings& ReadOnlySettings();
 
     const std::vector<ToolResult>& Results();
+    void SetTaskGroupFilter(const std::string& groupName);
+    void ClearTaskGroupFilter();
+    bool HasTaskGroupFilter();
     const std::vector<DetectedObject>& RealtimeObjects();
     bool IsRealtimeOverlayVisible();
     float RealtimeOverlayOffsetX();

@@ -185,6 +185,11 @@ struct HardwareRuntimeSnapshot
     std::uint64_t outputFailedCount = 0;
     std::uint64_t outputDroppedCount = 0;
     std::uint64_t handshakeIgnoredTriggerCount = 0;
+    int cameraMaxConcurrentGrabs = 4;
+    int cameraActiveGrabs = 0;
+    int cameraWaitingGrabs = 0;
+    std::size_t cameraRetainedFrameBytes = 0;
+    std::size_t cameraPendingFrameBytes = 0;
     double outputLastCommunicationTimestampMs = 0.0;
     std::string handshakeTaskGroupName;
     std::string handshakeAlarmMessage;
@@ -200,7 +205,9 @@ struct HardwareRuntimeSnapshot
 namespace HardwareRuntimeService
 {
     DeviceOperationResult ConnectCamera(const HardwareCameraConnectionConfig& config);
-    DeviceOperationResult ActivateCameraSlot(int cameraIndex);
+    DeviceOperationResult ActivateCameraSlot(int cameraIndex,
+        bool selectForPreview = true);
+    std::vector<DeviceOperationResult> RestoreConfiguredCameraSlots();
     DeviceOperationResult StartCameraCapture(const HardwareCameraConnectionConfig& config);
     void DisconnectCamera();
     void DisconnectCameraSlot(int cameraIndex);
@@ -228,6 +235,14 @@ namespace HardwareRuntimeService
     // safely used as a task input while the camera keeps streaming.
     bool AcquireLatestCameraFrame(int cameraIndex, cv::Mat& frame,
         CameraFrameMetadata* metadata = nullptr);
+    // Select a slot as the visible source, publish its cached frame immediately
+    // when available, and request a fresh frame without affecting other slots.
+    DeviceOperationResult SelectCameraSlotForPreview(int cameraIndex);
+    void SetCameraPreviewEnabled(bool enabled);
+    bool CameraPreviewEnabled();
+    // Runtime-wide resource scheduler for multi-camera SDK operations.
+    void SetCameraMaxConcurrentGrabs(int maximum);
+    int CameraMaxConcurrentGrabs();
 
     DeviceOperationResult ConnectOutput(const HardwareOutputConnectionConfig& config);
     void DisconnectOutput();

@@ -120,8 +120,8 @@ bool ToolCanUseSharedInput(const ToolInstance& it)
     case 16: // Difference
     case 17: // Geometry drawing
         return true;
-    case 10: // Multi-color finder preprocesses in-place only when gray/binary is enabled.
-        return !it.mcfImgGray && !it.mcfImgBinary;
+    case 10: // Multi-color finder uses local preprocessing buffers when needed.
+        return true;
     default:
         return false;
     }
@@ -1025,7 +1025,11 @@ bool ExecuteDetached(ToolInstance& it, VisionContext& ctx, int sourceToolIndex,
     const bool hasSingleAreaROI = ctx.rois.size() == 1 &&
         (ctx.rois[0].type == ROI_TYPE_RECT || ctx.rois[0].type == ROI_TYPE_CIRCLE ||
          ctx.rois[0].type == ROI_TYPE_POLYGON);
-    if (it.type != 17 && !contourTemplateMode && hasSingleAreaROI)
+    const bool directMultiColorRect = it.type == 10 && hasSingleAreaROI &&
+        ctx.rois[0].type == ROI_TYPE_RECT &&
+        std::abs(ctx.rois[0].angle) < 0.0001f;
+    if (it.type != 17 && !contourTemplateMode && hasSingleAreaROI &&
+        !directMultiColorRect)
     {
         cv::Mat rotatedImage;
         if (RotatedROI::Extract(ctx.image, ctx.rois[0], rotatedImage, rotatedTransform))

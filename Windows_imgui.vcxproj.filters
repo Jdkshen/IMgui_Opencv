@@ -34,16 +34,22 @@
     <Filter Include="Log">
       <UniqueIdentifier>{fcca3ca8-daa8-4eba-ac7c-6bf7943151a9}</UniqueIdentifier>
     </Filter>
+    <Filter Include="App">
+      <UniqueIdentifier>{0e5eb872-0867-4eb5-9f6f-9a5c556ae997}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="UI\Tools">
+      <UniqueIdentifier>{4ca184bc-8cbc-4e25-a31f-ef97c3ff6cdf}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="framework.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="App\Platform.h">
+      <Filter>App</Filter>
     </ClInclude>
-    <ClInclude Include="resource.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="App\Resource.h">
+      <Filter>App</Filter>
     </ClInclude>
-    <ClInclude Include="Windows_imgui.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="App\AppIncludes.h">
+      <Filter>App</Filter>
     </ClInclude>
     <ClInclude Include="include\imgui\imconfig.h">
       <Filter>include\imgui</Filter>
@@ -95,6 +101,9 @@
     <ClInclude Include="Core\HuarayImvCameraAdapter.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\Open62541OpcUaAdapter.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\HardwareRuntimeService.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\HardwareRuntimePolicy.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\HardwareHandshakePlan.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\HardwareCameraPolicy.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\HardwareSettingsService.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\FrameArchiveService.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ImageLoadController.h"><Filter>Core</Filter></ClInclude>
@@ -120,6 +129,8 @@
     <ClInclude Include="Core\VisionContext.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ToolExecutor.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ToolController.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\ToolRunPolicy.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Core\TaskImageProvider.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ToolChainState.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ToolChainValidator.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Core\ToolChainPreflight.h"><Filter>Core</Filter></ClInclude>
@@ -141,7 +152,12 @@
     <ClInclude Include="UI\StatsWindow.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="UI\RunResultLayout.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="UI\RunResultWindow.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="UI\RunResultPresentation.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="UI\RunResultOverlayRenderer.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="UI\RunResultSnapshot.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="UI\ToolsWindow.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="UI\WorkflowWindow.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="UI\TaskGroupWindow.h"><Filter>UI</Filter></ClInclude>
     <ClInclude Include="Algorithm\OpenCVYoloDetector.h"><Filter>Algorithm</Filter></ClInclude>
     <ClInclude Include="Algorithm\YOLODetector.h"><Filter>Algorithm</Filter></ClInclude>
     <ClInclude Include="Algorithm\YOLOTool.h"><Filter>Algorithm</Filter></ClInclude>
@@ -178,11 +194,14 @@
     <ClInclude Include="Algorithm\QRCodeTool.h"><Filter>Algorithm</Filter></ClInclude>
     <ClInclude Include="Renderer\FontManager.h"><Filter>Renderer</Filter></ClInclude>
     <ClInclude Include="Renderer\PreviewTextureCache.h"><Filter>Renderer</Filter></ClInclude>
-    <ClInclude Include="UI\Tools\BasicToolPanels.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="UI\Tools\BasicToolPanels.h"><Filter>UI\Tools</Filter></ClInclude>
+    <ClInclude Include="UI\Tools\DetectionToolPanels.h"><Filter>UI\Tools</Filter></ClInclude>
+    <ClInclude Include="UI\Tools\AdvancedDetectionToolPanels.h"><Filter>UI\Tools</Filter></ClInclude>
+    <ClInclude Include="UI\Tools\MeasurementToolPanel.h"><Filter>UI\Tools</Filter></ClInclude>
     <ClInclude Include="Log\LogSystem.h"><Filter>Log</Filter></ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="Windows_imgui.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="App\Main.cpp"><Filter>App</Filter></ClCompile>
     <ClCompile Include="include\imgui\imgui.cpp"><Filter>include\imgui</Filter></ClCompile>
     <ClCompile Include="include\imgui\imgui_demo.cpp"><Filter>include\imgui</Filter></ClCompile>
     <ClCompile Include="include\imgui\imgui_draw.cpp"><Filter>include\imgui</Filter></ClCompile>
@@ -215,6 +234,9 @@
     <ClCompile Include="Core\HuarayImvCameraAdapter.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\Open62541OpcUaAdapter.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\HardwareRuntimeService.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\HardwareRuntimePolicy.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\HardwareHandshakePlan.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\HardwareCameraPolicy.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\HardwareSettingsService.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\FrameArchiveService.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ImageLoadController.cpp"><Filter>Core</Filter></ClCompile>
@@ -230,6 +252,8 @@
     <ClCompile Include="Core\ToolAssetService.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ToolROIService.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ToolController.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\ToolRunPolicy.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Core\TaskImageProvider.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ToolExecutionGraph.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\ToolJudgement.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Core\UiPreferencesService.cpp"><Filter>Core</Filter></ClCompile>
@@ -247,14 +271,23 @@
     <ClCompile Include="UI\ImageViewer.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="UI\GeometryDrawEditor.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="UI\HardwareWindow.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="UI\HardwarePanel.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="UI\LogWindow.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="UI\ROIManager.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="UI\Sidebar.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="UI\StatsWindow.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="UI\RunResultLayout.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="UI\RunResultWindow.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="UI\RunResultPresentation.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="UI\RunResultOverlayRenderer.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="UI\RunResultSnapshot.cpp"><Filter>UI</Filter></ClCompile>
     <ClCompile Include="UI\ToolsWindow.cpp"><Filter>UI</Filter></ClCompile>
-    <ClCompile Include="UI\Tools\BasicToolPanels.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="UI\WorkflowWindow.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="UI\TaskGroupWindow.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="UI\Tools\BasicToolPanels.cpp"><Filter>UI\Tools</Filter></ClCompile>
+    <ClCompile Include="UI\Tools\DetectionToolPanels.cpp"><Filter>UI\Tools</Filter></ClCompile>
+    <ClCompile Include="UI\Tools\AdvancedDetectionToolPanels.cpp"><Filter>UI\Tools</Filter></ClCompile>
+    <ClCompile Include="UI\Tools\MeasurementToolPanel.cpp"><Filter>UI\Tools</Filter></ClCompile>
     <ClCompile Include="Algorithm\OpenCVYoloDetector.cpp"><Filter>Algorithm</Filter></ClCompile>
     <ClCompile Include="Algorithm\YOLODetector.cpp"><Filter>Algorithm</Filter></ClCompile>
     <ClCompile Include="Algorithm\YOLOTool.cpp"><Filter>Algorithm</Filter></ClCompile>
@@ -299,8 +332,8 @@
     <ClCompile Include="Log\LogSystem.cpp"><Filter>Log</Filter></ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="Windows_imgui.rc">
-      <Filter>Resource Files</Filter>
+    <ResourceCompile Include="App\Windows_imgui.rc">
+      <Filter>App</Filter>
     </ResourceCompile>
   </ItemGroup>
   <ItemGroup>

@@ -1,6 +1,7 @@
 # Build outputs
 dist/
 build/
+/build_verify/
 x64/
 Windows_imgui/
 Test/RegressionTests/
@@ -45,6 +46,7 @@ recipes/
 !.claude/README.md
 .codex/
 tmp/
+artifacts/
 
 # Large local assets: keep these in Git LFS or fetch them with scripts.
 *.pt

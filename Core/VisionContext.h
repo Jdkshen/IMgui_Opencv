@@ -4,6 +4,7 @@
 #endif
 #include <vector>
 #include <algorithm>
+#include <cstdint>
 #include <memory>
 #include <stop_token>
 #include <opencv2/core/mat.hpp>
@@ -28,6 +29,7 @@ struct VisionContext
 
     // ---- 图像元数据 ----
     int imageVersion = 0;       // 图像版本号（曾为 g_ImageVersion）
+    std::uint64_t imageCacheToken = 0; // 同一不可变输入帧在本轮内共享的缓存标识
     int width = 0, height = 0;  // 图像尺寸
     std::stop_token stopToken;  // 后台执行取消令牌
 
@@ -113,6 +115,7 @@ struct VisionContext
         ClearUnifiedResults();
         frame.clear();
         imageVersion = 0;
+        imageCacheToken = 0;
         width = height = 0;
         stopToken = {};
     }

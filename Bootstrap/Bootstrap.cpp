@@ -26,6 +26,54 @@ bool Exists(const std::wstring& path)
         (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
 }
 
+std::wstring ParentDirectory(const std::wstring& path)
+{
+    const std::wstring::size_type slash = path.find_last_of(L"\\/");
+    return slash == std::wstring::npos ? std::wstring{} : path.substr(0, slash);
+}
+
+std::wstring LeafName(const std::wstring& path)
+{
+    const std::wstring::size_type slash = path.find_last_of(L"\\/");
+    return slash == std::wstring::npos ? path : path.substr(slash + 1);
+}
+
+struct RuntimeLayout
+{
+    std::wstring directory;
+    std::wstring corePath;
+    std::wstring coreFileName;
+    bool development = false;
+};
+
+RuntimeLayout ResolveRuntimeLayout(const std::wstring& launcherDirectory)
+{
+    RuntimeLayout layout;
+    layout.directory = launcherDirectory;
+    layout.coreFileName = L"Windows_imgui_core.exe";
+    layout.corePath = launcherDirectory + L"\\" + layout.coreFileName;
+    if (Exists(layout.corePath))
+        return layout;
+
+    // Bootstrap.vcxproj intentionally writes into x64/<Config>/bootstrap while
+    // the main project and its project DLLs live one directory above.  Support
+    // running the bootstrap project directly from Visual Studio without
+    // weakening the adjacent-file checks used by the packaged launcher.
+    if (_wcsicmp(LeafName(launcherDirectory).c_str(), L"bootstrap") == 0)
+    {
+        const std::wstring parent = ParentDirectory(launcherDirectory);
+        const std::wstring developmentCore = parent + L"\\Windows_imgui.exe";
+        if (!parent.empty() && Exists(developmentCore))
+        {
+            layout.directory = parent;
+            layout.corePath = developmentCore;
+            layout.coreFileName = L"Windows_imgui.exe";
+            layout.development = true;
+        }
+    }
+    return layout;
+}
+
 std::wstring QuoteArgument(const std::wstring& value)
 {
     std::wstring quoted = L"\"";
@@ -93,30 +141,46 @@ int Fail(const std::wstring& directory, const std::wstring& detail)
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 {
-    const std::wstring directory = ModuleDirectory();
-    const std::wstring corePath = directory + L"\\Windows_imgui_core.exe";
-    const wchar_t* requiredFiles[] = {
-        L"Windows_imgui_core.exe", L"opencv_world500.dll", L"ncnn.dll",
+    const std::wstring launcherDirectory = ModuleDirectory();
+    const RuntimeLayout layout = ResolveRuntimeLayout(launcherDirectory);
+    const wchar_t* projectRuntimeFiles[] = {
+        L"opencv_world500.dll", L"ncnn.dll",
         L"DirectML.dll", L"onnxruntime.dll", L"onnxruntime_providers_shared.dll",
+    };
+    const wchar_t* packagedRuntimeFiles[] = {
         L"msvcp140.dll", L"msvcp140_1.dll", L"msvcp140_atomic_wait.dll",
         L"vcruntime140.dll", L"vcruntime140_1.dll", L"concrt140.dll"
     };
     std::wstring missing;
-    for (const wchar_t* file : requiredFiles)
+    if (!Exists(layout.corePath))
+        missing += L"  - " + layout.coreFileName + L"\r\n";
+    for (const wchar_t* file : projectRuntimeFiles)
     {
-        if (!Exists(directory + L"\\" + file))
+        if (!Exists(layout.directory + L"\\" + file))
             missing += L"  - " + std::wstring(file) + L"\r\n";
     }
+    if (!layout.development)
+    {
+        for (const wchar_t* file : packagedRuntimeFiles)
+        {
+            if (!Exists(layout.directory + L"\\" + file))
+                missing += L"  - " + std::wstring(file) + L"\r\n";
+        }
+    }
     if (!missing.empty())
-        return Fail(directory, L"缺少以下必需文件：\r\n" + missing);
+    {
+        return Fail(launcherDirectory,
+            L"缺少以下必需文件：\r\n" + missing +
+            L"检查目录：" + layout.directory);
+    }
 
     DWORD binaryType = 0;
-    if (!GetBinaryTypeW(corePath.c_str(), &binaryType) || binaryType != SCS_64BIT_BINARY)
-        return Fail(directory, L"主程序不是有效的 x64 Windows 可执行文件。");
+    if (!GetBinaryTypeW(layout.corePath.c_str(), &binaryType) || binaryType != SCS_64BIT_BINARY)
+        return Fail(launcherDirectory, L"主程序不是有效的 x64 Windows 可执行文件。");
 
     int argumentCount = 0;
     wchar_t** arguments = CommandLineToArgvW(GetCommandLineW(), &argumentCount);
-    std::wstring commandLine = QuoteArgument(corePath);
+    std::wstring commandLine = QuoteArgument(layout.corePath);
     bool diagnosticsOnly = false;
     for (int index = 1; arguments && index < argumentCount; ++index)
     {
@@ -132,30 +196,34 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 
     if (diagnosticsOnly)
     {
-        WriteDiagnosticLog(directory,
-            L"启动前检查通过（diagnostic-only）。");
+        WriteDiagnosticLog(launcherDirectory,
+            layout.development
+                ? L"启动前检查通过（Visual Studio 开发布局，diagnostic-only）。"
+                : L"启动前检查通过（发布包布局，diagnostic-only）。");
         return 0;
     }
 
     SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS |
         LOAD_LIBRARY_SEARCH_USER_DIRS);
-    AddDllDirectory(directory.c_str());
+    AddDllDirectory(layout.directory.c_str());
 
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     PROCESS_INFORMATION process{};
     std::vector<wchar_t> writable(commandLine.begin(), commandLine.end());
     writable.push_back(L'\0');
-    if (!CreateProcessW(corePath.c_str(), writable.data(), nullptr, nullptr, FALSE,
-        0, nullptr, directory.c_str(), &startup, &process))
+    if (!CreateProcessW(layout.corePath.c_str(), writable.data(), nullptr, nullptr, FALSE,
+        0, nullptr, layout.directory.c_str(), &startup, &process))
     {
         const DWORD error = GetLastError();
-        return Fail(directory, L"主程序无法启动，Windows 错误码：" +
+        return Fail(launcherDirectory, L"主程序无法启动，Windows 错误码：" +
             std::to_wstring(error) +
             L"\r\n常见原因：DLL 版本/位数不匹配、权限或杀毒软件拦截。");
     }
     CloseHandle(process.hThread);
     CloseHandle(process.hProcess);
-    WriteDiagnosticLog(directory, L"启动前检查通过，已启动 Windows_imgui_core.exe。");
+    WriteDiagnosticLog(launcherDirectory,
+        L"启动前检查通过，已启动 " + layout.coreFileName +
+        (layout.development ? L"（Visual Studio 开发布局）。" : L"。"));
     return 0;
 }

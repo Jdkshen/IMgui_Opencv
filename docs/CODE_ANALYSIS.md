@@ -1,6 +1,6 @@
 # Windows_imgui 代码解析
 
-> 文档同步日期：2026-08-16。入口、DX12/DX11 双后端、Per-Monitor DPI、任务管理、16 槽相机、视频 YOLO、独立流程图、图像/ROI 状态、PLC 调度、结果发布和 type 0-17 已与当前实现同步。
+> 文档同步日期：2026-08-25。`App/Main.cpp` 入口、Bootstrap 双布局、DX12/DX11 双后端、Per-Monitor DPI、任务管理、16 槽相机、视频 YOLO、独立流程图、图像/ROI 状态、PLC 调度、结果发布和 type 0-17 已与当前实现同步。
 
 
 ## 📖 项目概述
@@ -10,7 +10,7 @@
 ### 2026-08-02 当前图形架构
 
 ```text
-Windows_imgui.cpp / UI / 业务
+App/Main.cpp / UI / 业务
               ↓（只使用公共 API 与 ImTextureID）
        GraphicsBackend 门面
               ↓
@@ -37,7 +37,7 @@ Windows_imgui.cpp / UI / 业务
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                      wWinMain (程序入口)                              │
-│  Windows_imgui.cpp                                                   │
+│  App/Main.cpp                                                        │
 └──────────────────────────┬──────────────────────────────────────────┘
                            │
            ┌───────────────┴───────────────┐
@@ -96,9 +96,9 @@ Windows_imgui.cpp / UI / 业务
 
 | 文件 | 用途 | 核心内容 |
 |------|------|----------|
-| `Windows_imgui.cpp` | **程序入口 + 统一后端主循环** | `wWinMain()`, `GraphicsBackend`, `WndProc()` |
-| `Windows_imgui.h` | **公共头文件** | 包含所有模块的头文件 |
-| `framework.h` | **系统包含文件** | Win32 / DirectX / OpenCV 基础库引用 |
+| `App/Main.cpp` | **程序入口 + 统一后端主循环** | `wWinMain()`, `GraphicsBackend`, `WndProc()` |
+| `App/AppIncludes.h` | **入口头文件聚合** | 仅汇总应用入口直接使用的模块头文件 |
+| `App/Platform.h` | **平台包含文件** | Win32 / DirectX / OpenCV 基础库引用 |
 | `Core/RenderBackend.h` | **公共渲染契约** | 后端种类、选择策略、通用纹理句柄与 `IRenderBackend` |
 | `Core/GraphicsBackend.h/cpp` | **图形后端门面** | DX12 优先、DX11 回退、统一渲染/Resize/纹理 API 与诊断日志 |
 | `Core/DX12Backend.h/cpp` | **DX12 适配器** | 复用保留的 `DX12Context` 并实现公共契约 |
@@ -108,7 +108,7 @@ Windows_imgui.cpp / UI / 业务
 | `Core/VideoCapture.h/cpp` | **视频/摄像头播放** | OpenCV cv::VideoCapture，播放/暂停/跳帧/FPS |
 | `Core/AudioPlayer.h/cpp` | **音频播放** | XAudio2 + Media Foundation，与视频同步 |
 | `Core/OpenFileDialog.h/cpp` | **文件选择对话框** | `OpenFileDialog()` `OpenFolderDialog()` `ScanImageFiles()` |
-| `Core/ThemeManager.h/cpp` | **主题管理** | 夜间/白天切换, theme.cfg 持久化 |
+| `Core/ThemeManager.h/cpp` | **主题管理** | 现代深色/明亮主题切换、统一控件层级与 theme.cfg 持久化 |
 | `Core/RecipeManager.h/cpp` | **配方系统** | version 5 JSON 保存/加载任务、工具参数、ROI 和资产，兼容旧版本 |
 | `Core/ImageState.h/cpp` | **图像状态** | 当前图、原图和图像版本状态收口 |
 | `Core/ROI.h` / `Core/ROIState.h/cpp` | **ROI 状态** | ROI 数据结构和当前选区状态 |
@@ -151,7 +151,7 @@ Windows_imgui.cpp / UI / 业务
 
 ## 三、核心模块详解
 
-### 3.1 程序入口 — `Windows_imgui.cpp`
+### 3.1 程序入口 — `App/Main.cpp`
 
 #### 3.1.1 `wWinMain()` 执行顺序
 

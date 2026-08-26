@@ -1,7 +1,5 @@
 #pragma once
 
-#include <vector>
-
 // =====================================================
 // 工具分类 + 注册表元数据
 // =====================================================
@@ -15,5 +13,3 @@ struct ToolMeta
     const char* icon;
     const char* description;
 };
-
-extern const std::vector<ToolMeta> g_ToolRegistry;

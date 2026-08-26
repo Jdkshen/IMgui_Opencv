@@ -19,6 +19,7 @@ inline constexpr std::size_t kHardwareAuxiliaryOutputCount = 3;
 
 struct HardwareCameraSettings
 {
+    bool connectOnStartup = false;
     std::string address = "0";
     std::string sourceName = "camera-01";
     int backend = 0;
@@ -62,6 +63,10 @@ struct HardwarePanelSettings
     int cameraReconnectMaxDelayMs = 5000;
     std::vector<HardwareCameraSettings> cameras;
     int activeCameraIndex = 0;
+    // Caps simultaneous SDK trigger/grab operations across all 16 slots.
+    // Keeping this explicit avoids multiplying full-resolution conversion
+    // buffers when several cameras deliver a frame at the same time.
+    int cameraMaxConcurrentGrabs = 4;
 
     int outputType = 0;
     std::string outputKey = "output-main";

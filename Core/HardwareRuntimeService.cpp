@@ -1,4 +1,7 @@
 #include "HardwareRuntimeService.h"
+#include "HardwareRuntimePolicy.h"
+#include "HardwareHandshakePlan.h"
+#include "HardwareCameraPolicy.h"
 #include "HardwareSettingsService.h"
 
 #include "FrameSourceState.h"
@@ -16,8 +19,6 @@
 #include "ToolChainState.h"
 #include "VideoCapture.h"
 #include "../Log/LogSystem.h"
-#include <nlohmann/json.hpp>
-
 #include <opencv2/core/mat.hpp>
 #include <opencv2/imgproc.hpp>
 
@@ -27,10 +28,11 @@
 #include <chrono>
 #include <condition_variable>
 #include <deque>
+#include <exception>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <optional>
-#include <set>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -41,10 +43,104 @@ struct PendingCameraFrame
 {
     DeviceOperationResult operation;
     cv::Mat frame;
+    bool frameAvailable = false;
     std::string sourceName;
     int frameIndex = -1;
     double timestampMs = 0.0;
     CameraFrameMetadata metadata;
+};
+
+class CameraResourceScheduler
+{
+public:
+    struct Snapshot
+    {
+        int maximum = 4;
+        int active = 0;
+        int waiting = 0;
+    };
+
+    void SetMaximum(int maximum)
+    {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            maximum_ = std::clamp(maximum, 1,
+                static_cast<int>(kHardwareCameraCount));
+        }
+        condition_.notify_all();
+    }
+
+    bool Acquire(const std::atomic<bool>& stop, bool priority)
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        int& waitingClass = priority ? waitingPriority_ : waitingBackground_;
+        ++waitingClass;
+        condition_.wait(lock, [this, &stop, priority]
+        {
+            if (stop.load())
+                return true;
+            if (active_ >= maximum_)
+                return false;
+            return priority || waitingPriority_ == 0;
+        });
+        --waitingClass;
+        if (stop.load())
+        {
+            condition_.notify_all();
+            return false;
+        }
+        ++active_;
+        return true;
+    }
+
+    void Release()
+    {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (active_ > 0)
+                --active_;
+        }
+        condition_.notify_all();
+    }
+
+    void WakeAll()
+    {
+        condition_.notify_all();
+    }
+
+    Snapshot GetSnapshot() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return {maximum_, active_, waitingPriority_ + waitingBackground_};
+    }
+
+private:
+    mutable std::mutex mutex_;
+    std::condition_variable condition_;
+    int maximum_ = 4;
+    int active_ = 0;
+    int waitingPriority_ = 0;
+    int waitingBackground_ = 0;
+};
+
+class CameraResourcePermit
+{
+public:
+    CameraResourcePermit(CameraResourceScheduler& scheduler,
+        const std::atomic<bool>& stop, bool priority)
+        : scheduler_(&scheduler), acquired_(scheduler.Acquire(stop, priority)) {}
+
+    ~CameraResourcePermit()
+    {
+        if (acquired_)
+            scheduler_->Release();
+    }
+
+    explicit operator bool() const { return acquired_; }
+
+private:
+    CameraResourceScheduler* scheduler_ = nullptr;
+    bool acquired_ = false;
 };
 
 // Each configured camera owns its adapter, worker, reconnect state and latest
@@ -65,7 +161,7 @@ struct CameraSlotRuntime
     std::condition_variable condition;
     PendingCameraFrame pending;
     bool hasPending = false;
-    bool stop = false;
+    std::atomic<bool> stop{false};
     bool busy = false;
     bool frameRequested = false;
     bool autoCapture = false;
@@ -83,7 +179,9 @@ struct CameraSlotRuntime
 std::array<std::unique_ptr<CameraSlotRuntime>, kHardwareCameraCount>
     s_cameraSlotRuntimes;
 std::mutex s_cameraSlotsMutex;
+CameraResourceScheduler s_cameraResourceScheduler;
 std::atomic<int> s_selectedCameraSlot{-1};
+std::atomic<bool> s_cameraPreviewEnabled{false};
 int s_cameraToolRunSlot = -1;
 
 HardwareCameraConnectionConfig s_cameraConfig;
@@ -127,34 +225,6 @@ struct PendingOutput
     bool reconnectBeforeRetry = true;
     std::uint64_t sequence = 0;
 };
-
-std::vector<std::string> ExtractQrSerials(const std::vector<ToolResult>& results)
-{
-    std::vector<std::string> serials;
-    for (const ToolResult& result : results)
-    {
-        if (result.toolName.find("二维码") == std::string::npos &&
-            result.toolName.find("条码") == std::string::npos)
-            continue;
-        for (const ToolResult::TextItem& text : result.texts)
-        {
-            if (!text.text.empty())
-                serials.push_back(text.text);
-        }
-    }
-    return serials;
-}
-
-std::string BuildQrJsonPayload(ToolResultStatus status,
-    const std::vector<std::string>& serials)
-{
-    nlohmann::json payload;
-    payload["result"] = status == ToolResultStatus::Pass ? "OK" :
-        status == ToolResultStatus::Fail ? "NG" : "ERROR";
-    payload["serial"] = serials.empty() ? "" : serials.front();
-    payload["serials"] = serials;
-    return payload.dump();
-}
 
 std::thread s_outputWorker;
 std::mutex s_outputWorkerMutex;
@@ -263,28 +333,8 @@ CameraSlotRuntime* FindCameraSlot(int cameraIndex)
 void PublishFrame(const cv::Mat& frame, const std::string& sourceName,
     int frameIndex, double timestampMs)
 {
-    cv::Mat orientedFrame;
-    switch (s_cameraOrientation.load())
-    {
-    case 1:
-        cv::rotate(frame, orientedFrame, cv::ROTATE_90_CLOCKWISE);
-        break;
-    case 2:
-        cv::rotate(frame, orientedFrame, cv::ROTATE_180);
-        break;
-    case 3:
-        cv::rotate(frame, orientedFrame, cv::ROTATE_90_COUNTERCLOCKWISE);
-        break;
-    case 4:
-        cv::flip(frame, orientedFrame, 1);
-        break;
-    case 5:
-        cv::flip(frame, orientedFrame, 0);
-        break;
-    default:
-        break;
-    }
-    const cv::Mat& outputFrame = orientedFrame.empty() ? frame : orientedFrame;
+    const cv::Mat outputFrame = HardwareCameraPolicy::OrientFrame(
+        frame, s_cameraOrientation.load());
 
     FrameArchiveService::Enqueue(outputFrame, sourceName, frameIndex, timestampMs);
     FrameSourceState::SetCurrentFrame(outputFrame, FrameSourceType::Camera,
@@ -325,53 +375,32 @@ DeviceOperationResult ApplyCameraControls(
 DeviceOperationResult ApplyCameraTrigger(
     ICameraAdapter* camera, const HardwareCameraConnectionConfig& config)
 {
-    const CameraCapabilities capabilities = camera->Capabilities();
-    if (config.trigger.mode == CameraTriggerMode::Continuous &&
-        !capabilities.softwareTrigger && !capabilities.hardwareTrigger)
-        return {true, "continuous acquisition"};
-    if (config.trigger.mode == CameraTriggerMode::Software &&
-        !capabilities.softwareTrigger)
-        return {false, "selected camera does not support software trigger"};
-    if ((config.trigger.mode == CameraTriggerMode::HardwareLine1 ||
-         config.trigger.mode == CameraTriggerMode::HardwareLine2) &&
-        !capabilities.hardwareTrigger)
-        return {false, "selected camera does not support hardware line trigger"};
+    const DeviceOperationResult validation = HardwareCameraPolicy::ValidateTrigger(
+        camera->Capabilities(), config.trigger);
+    if (!validation.success || !validation.message.empty())
+        return validation;
     return camera->ConfigureTrigger(config.trigger);
 }
 
 DeviceOperationResult ApplyCameraPtp(
     ICameraAdapter* camera, const HardwareCameraConnectionConfig& config)
 {
-    if (!config.ptpEnabled)
-        return {true, "PTP disabled"};
-    if (!camera->Capabilities().ptp)
-        return {false, "selected camera does not support PTP"};
+    const DeviceOperationResult validation = HardwareCameraPolicy::ValidatePtp(
+        camera->Capabilities(), config.ptpEnabled);
+    if (!validation.success || !validation.message.empty())
+        return validation;
     return camera->ConfigurePtp(true);
 }
 
 DeviceOperationResult ApplyCameraBufferPolicy(
     ICameraAdapter* camera, const HardwareCameraConnectionConfig& config)
 {
-    if (config.bufferPolicy == CameraBufferPolicy::Sequential)
-        return {true, "sequential frame buffer"};
-    if (!camera->Capabilities().queueControl)
-        return {false, "selected camera does not support frame buffer control"};
+    const DeviceOperationResult validation =
+        HardwareCameraPolicy::ValidateBufferPolicy(
+            camera->Capabilities(), config.bufferPolicy);
+    if (!validation.success || !validation.message.empty())
+        return validation;
     return camera->ConfigureBufferPolicy(config.bufferPolicy);
-}
-
-cv::Mat OrientCameraFrame(const cv::Mat& frame, int orientation)
-{
-    cv::Mat orientedFrame;
-    switch (orientation)
-    {
-    case 1: cv::rotate(frame, orientedFrame, cv::ROTATE_90_CLOCKWISE); break;
-    case 2: cv::rotate(frame, orientedFrame, cv::ROTATE_180); break;
-    case 3: cv::rotate(frame, orientedFrame, cv::ROTATE_90_COUNTERCLOCKWISE); break;
-    case 4: cv::flip(frame, orientedFrame, 1); break;
-    case 5: cv::flip(frame, orientedFrame, 0); break;
-    default: break;
-    }
-    return orientedFrame.empty() ? frame : orientedFrame;
 }
 
 void MultiCameraWorkerLoop(CameraSlotRuntime* slot, ICameraAdapter* camera)
@@ -406,6 +435,7 @@ void MultiCameraWorkerLoop(CameraSlotRuntime* slot, ICameraAdapter* camera)
         if (!slot->frameRequested && !slot->autoCapture)
             continue;
 
+        const bool priorityRequest = slot->frameRequested;
         slot->frameRequested = false;
         slot->busy = true;
         const int timeoutMs = (std::max)(1, slot->config.grabTimeoutMs);
@@ -420,15 +450,40 @@ void MultiCameraWorkerLoop(CameraSlotRuntime* slot, ICameraAdapter* camera)
         pending.frameIndex = frameIndex;
         pending.timestampMs = CurrentTimestampMs();
         {
-            std::lock_guard<std::mutex> adapterLock(slot->adapterMutex);
-            if (triggerConfig.mode == CameraTriggerMode::Software)
-                pending.operation = camera->ExecuteSoftwareTrigger();
-            else
-                pending.operation = {true, {}};
-            if (pending.operation.success)
+            CameraResourcePermit permit(s_cameraResourceScheduler,
+                slot->stop, priorityRequest);
+            if (!permit)
             {
-                pending.operation = camera->GrabFrame(
-                    pending.frame, pending.metadata, timeoutMs);
+                lock.lock();
+                slot->busy = false;
+                break;
+            }
+            try
+            {
+                std::lock_guard<std::mutex> adapterLock(slot->adapterMutex);
+                if (triggerConfig.mode == CameraTriggerMode::Software)
+                    pending.operation = camera->ExecuteSoftwareTrigger();
+                else
+                    pending.operation = {true, {}};
+                if (pending.operation.success)
+                {
+                    pending.operation = camera->GrabFrame(
+                        pending.frame, pending.metadata, timeoutMs);
+                }
+            }
+            catch (const std::bad_alloc&)
+            {
+                pending.operation = {false,
+                    "相机取帧内存分配失败；请检查分辨率、像素格式和可用内存"};
+            }
+            catch (const std::exception& exception)
+            {
+                pending.operation = {false,
+                    std::string("相机取帧异常: ") + exception.what()};
+            }
+            catch (...)
+            {
+                pending.operation = {false, "相机取帧发生未知异常"};
             }
         }
         if (pending.metadata.frameNumber > 0)
@@ -440,15 +495,42 @@ void MultiCameraWorkerLoop(CameraSlotRuntime* slot, ICameraAdapter* camera)
         if (timestampNs > 0)
             pending.timestampMs = static_cast<double>(timestampNs) / 1000000.0;
 
+        cv::Mat retainedFrame;
+        if (pending.operation.success && !pending.frame.empty())
+        {
+            try
+            {
+                retainedFrame = HardwareCameraPolicy::OrientFrame(
+                    pending.frame, slot->config.orientation);
+            }
+            catch (const std::bad_alloc&)
+            {
+                pending.operation = {false, "相机帧方向转换内存分配失败"};
+            }
+            catch (const cv::Exception& exception)
+            {
+                pending.operation = {false,
+                    std::string("相机帧方向转换失败: ") + exception.what()};
+            }
+            catch (const std::exception& exception)
+            {
+                pending.operation = {false,
+                    std::string("相机帧处理异常: ") + exception.what()};
+            }
+        }
+        pending.frame.release();
+        pending.frameAvailable = pending.operation.success && !retainedFrame.empty();
+
         lock.lock();
-        const bool frameOk = pending.operation.success && !pending.frame.empty();
+        const bool frameOk = pending.frameAvailable;
         if (frameOk)
         {
             slot->consecutiveFailures = 0;
             slot->reconnectDelayMs = 0;
             slot->reconnecting = false;
-            slot->latestFrame = OrientCameraFrame(
-                pending.frame, slot->config.orientation).clone();
+            // Retain exactly one full image per slot. The completion record
+            // below carries metadata only, avoiding a second 16-slot frame set.
+            slot->latestFrame = std::move(retainedFrame);
             slot->latestMetadata = pending.metadata;
             slot->frameIndex = pending.frameIndex;
         }
@@ -482,27 +564,51 @@ void MultiCameraWorkerLoop(CameraSlotRuntime* slot, ICameraAdapter* camera)
                 const bool stopped = slot->condition.wait_for(lock,
                     std::chrono::milliseconds(reconnectDelay), [slot]
                     {
-                        return slot->stop;
+                        return slot->stop.load();
                     });
                 if (stopped)
                     break;
                 lock.unlock();
                 DeviceOperationResult reconnect;
                 {
-                    std::lock_guard<std::mutex> adapterLock(slot->adapterMutex);
-                    camera->StopStream();
-                    camera->Disconnect();
-                    reconnect = camera->Connect(reconnectConfig.endpoint);
-                    if (reconnect.success)
-                        reconnect = ApplyCameraPtp(camera, reconnectConfig);
-                    if (reconnect.success)
-                        reconnect = ApplyCameraTrigger(camera, reconnectConfig);
-                    if (reconnect.success)
-                        reconnect = ApplyCameraBufferPolicy(camera, reconnectConfig);
-                    if (reconnect.success)
-                        reconnect = camera->StartStream();
-                    if (reconnect.success)
-                        ApplyCameraControls(camera, reconnectConfig);
+                    CameraResourcePermit permit(s_cameraResourceScheduler,
+                        slot->stop, true);
+                    if (!permit)
+                    {
+                        lock.lock();
+                        slot->busy = false;
+                        break;
+                    }
+                    try
+                    {
+                        std::lock_guard<std::mutex> adapterLock(slot->adapterMutex);
+                        camera->StopStream();
+                        camera->Disconnect();
+                        reconnect = camera->Connect(reconnectConfig.endpoint);
+                        if (reconnect.success)
+                            reconnect = ApplyCameraPtp(camera, reconnectConfig);
+                        if (reconnect.success)
+                            reconnect = ApplyCameraTrigger(camera, reconnectConfig);
+                        if (reconnect.success)
+                            reconnect = ApplyCameraBufferPolicy(camera, reconnectConfig);
+                        if (reconnect.success)
+                            reconnect = camera->StartStream();
+                        if (reconnect.success)
+                            ApplyCameraControls(camera, reconnectConfig);
+                    }
+                    catch (const std::bad_alloc&)
+                    {
+                        reconnect = {false, "相机重连时内存分配失败"};
+                    }
+                    catch (const std::exception& exception)
+                    {
+                        reconnect = {false,
+                            std::string("相机重连异常: ") + exception.what()};
+                    }
+                    catch (...)
+                    {
+                        reconnect = {false, "相机重连发生未知异常"};
+                    }
                 }
                 lock.lock();
                 slot->reconnecting = false;
@@ -538,6 +644,7 @@ void StopMultiCameraSlot(int cameraIndex)
         slot->frameRequested = false;
     }
     slot->condition.notify_all();
+    s_cameraResourceScheduler.WakeAll();
     if (slot->worker.joinable())
         slot->worker.join();
     {
@@ -547,6 +654,8 @@ void StopMultiCameraSlot(int cameraIndex)
         slot->hasPending = false;
         slot->pending = {};
         slot->reconnecting = false;
+        slot->latestFrame.release();
+        slot->latestMetadata = {};
     }
 }
 
@@ -793,49 +902,6 @@ DeviceOperationResult InvalidConfiguration(std::string message)
     return {false, std::move(message)};
 }
 
-DeviceOperationResult ValidateHandshakeConfig(const HardwareHandshakeConfig& config)
-{
-    if (!config.enabled)
-        return {true, {}};
-    bool hasTrigger = false;
-    bool hasBusy = false;
-    bool hasDone = false;
-    bool hasResult = false;
-    std::set<std::uint16_t> addresses;
-    for (const HardwareIoMapping& mapping : config.mappings)
-    {
-        if (!mapping.enabled)
-            continue;
-        if (!addresses.insert(mapping.address).second)
-            return InvalidConfiguration("PLC IO 地址重复: " +
-                std::to_string(mapping.address));
-        const bool inputSignal = mapping.signal == HardwareIoSignal::Trigger ||
-            mapping.signal == HardwareIoSignal::Acknowledge;
-        const HardwareIoDirection expectedDirection = inputSignal
-            ? HardwareIoDirection::Input : HardwareIoDirection::Output;
-        if (mapping.direction != expectedDirection)
-            return InvalidConfiguration("PLC IO 信号方向不正确，地址: " +
-                std::to_string(mapping.address));
-        if (mapping.signal == HardwareIoSignal::Trigger)
-        {
-            if (mapping.taskGroupName.empty())
-                return InvalidConfiguration("Trigger 必须绑定任务");
-            hasTrigger = true;
-        }
-        hasBusy |= mapping.signal == HardwareIoSignal::Busy;
-        hasDone |= mapping.signal == HardwareIoSignal::Done;
-        hasResult |= mapping.signal == HardwareIoSignal::Ok ||
-            mapping.signal == HardwareIoSignal::Ng ||
-            mapping.signal == HardwareIoSignal::Error;
-    }
-    if (!hasTrigger || !hasBusy || !hasDone || !hasResult)
-    {
-        return InvalidConfiguration(
-            "PLC 握手至少需要 Trigger、Busy、Done 和一个结果输出");
-    }
-    return {true, {}};
-}
-
 DeviceOperationResult ReconnectOutputAdapter(const std::string& adapterKey,
     const DeviceEndpoint& endpoint)
 {
@@ -850,59 +916,46 @@ DeviceOperationResult ReconnectOutputAdapter(const std::string& adapterKey,
 void QueueSignalLocked(HardwareIoSignal signal, bool active, bool usePulse = true,
     const std::string& taskGroupName = {})
 {
-    for (const HardwareIoMapping& mapping : s_outputConfig.handshake.mappings)
+    const std::vector<HardwareHandshakePlan::IoWrite> writes =
+        HardwareHandshakePlan::BuildSignal(s_outputConfig.handshake,
+            signal, active, usePulse, taskGroupName);
+    for (const HardwareHandshakePlan::IoWrite& write : writes)
     {
-        if (!mapping.enabled || mapping.direction != HardwareIoDirection::Output ||
-            mapping.signal != signal)
-        {
-            continue;
-        }
-        if (!taskGroupName.empty() && !mapping.taskGroupName.empty() &&
-            mapping.taskGroupName != taskGroupName)
-        {
-            continue;
-        }
-        s_ioWriteQueue.push_back({mapping, active, usePulse});
+        s_ioWriteQueue.push_back({write.mapping, write.active, write.usePulse});
     }
     s_outputWorkerCondition.notify_one();
+}
+
+void QueueHandshakeWritesLocked(
+    const std::vector<HardwareHandshakePlan::IoWrite>& writes)
+{
+    for (const HardwareHandshakePlan::IoWrite& write : writes)
+        s_ioWriteQueue.push_back({write.mapping, write.active, write.usePulse});
+    if (!writes.empty())
+        s_outputWorkerCondition.notify_one();
 }
 
 void QueueHandshakeStartLocked()
 {
     s_handshakeAlarm = false;
     s_handshakeAlarmMessage.clear();
-    const std::string resultTask = s_handshakeTestActive
-        ? std::string() : s_handshakeTaskGroupName;
-    QueueSignalLocked(HardwareIoSignal::Done, false, false);
-    QueueSignalLocked(HardwareIoSignal::Ok, false, false, resultTask);
-    QueueSignalLocked(HardwareIoSignal::Ng, false, false, resultTask);
-    QueueSignalLocked(HardwareIoSignal::Error, false, false);
-    QueueSignalLocked(HardwareIoSignal::Busy, true, false);
+    QueueHandshakeWritesLocked(HardwareHandshakePlan::BuildStart(
+        s_outputConfig.handshake, s_handshakeTaskGroupName,
+        s_handshakeTestActive));
 }
 
 void QueueHandshakeCompleteLocked(ToolResultStatus status)
 {
-    const std::string resultTask = s_handshakeTestActive
-        ? std::string() : s_handshakeTaskGroupName;
-    QueueSignalLocked(HardwareIoSignal::Busy, false, false);
-    QueueSignalLocked(HardwareIoSignal::Ok,
-        status == ToolResultStatus::Pass, false, resultTask);
-    QueueSignalLocked(HardwareIoSignal::Ng,
-        status == ToolResultStatus::Fail, false, resultTask);
-    QueueSignalLocked(HardwareIoSignal::Error,
-        status == ToolResultStatus::Error, false);
-    QueueSignalLocked(HardwareIoSignal::Done, true, true);
+    QueueHandshakeWritesLocked(HardwareHandshakePlan::BuildComplete(
+        s_outputConfig.handshake, status, s_handshakeTaskGroupName,
+        s_handshakeTestActive));
 }
 
 void QueueHandshakeResetLocked()
 {
-    const std::string resultTask = s_handshakeTestActive
-        ? std::string() : s_handshakeTaskGroupName;
-    QueueSignalLocked(HardwareIoSignal::Busy, false, false);
-    QueueSignalLocked(HardwareIoSignal::Done, false, false);
-    QueueSignalLocked(HardwareIoSignal::Ok, false, false, resultTask);
-    QueueSignalLocked(HardwareIoSignal::Ng, false, false, resultTask);
-    QueueSignalLocked(HardwareIoSignal::Error, false, false);
+    QueueHandshakeWritesLocked(HardwareHandshakePlan::BuildReset(
+        s_outputConfig.handshake, s_handshakeTaskGroupName,
+        s_handshakeTestActive));
 }
 
 DeviceOperationResult WriteIoMapping(const HardwareIoMapping& mapping, bool active)
@@ -1017,14 +1070,8 @@ DeviceOperationResult PollHandshakeInputs(
 
 bool HasAcknowledgeInputLocked()
 {
-    return std::any_of(s_outputConfig.handshake.mappings.begin(),
-        s_outputConfig.handshake.mappings.end(),
-        [](const HardwareIoMapping& mapping)
-        {
-            return mapping.enabled &&
-                mapping.direction == HardwareIoDirection::Input &&
-                mapping.signal == HardwareIoSignal::Acknowledge;
-        });
+    return HardwareHandshakePlan::HasAcknowledgeInput(
+        s_outputConfig.handshake);
 }
 
 void CompleteHandshakeLocked(ToolResultStatus status)
@@ -1361,12 +1408,13 @@ DeviceOperationResult ConnectCamera(const HardwareCameraConnectionConfig& rawCon
         return s_lastCameraOperation = std::move(result);
     }
     s_selectedCameraSlot.store(config.slotIndex);
+    s_cameraPreviewEnabled.store(true);
     s_cameraConfig = config;
     s_lastCameraOperation = result;
     return result;
 }
 
-DeviceOperationResult ActivateCameraSlot(int cameraIndex)
+DeviceOperationResult ActivateCameraSlot(int cameraIndex, bool selectForPreview)
 {
     if (cameraIndex < 0 || cameraIndex >= static_cast<int>(kHardwareCameraCount))
         return InvalidConfiguration("相机绑定编号无效");
@@ -1378,12 +1426,17 @@ DeviceOperationResult ActivateCameraSlot(int cameraIndex)
     {
         if (camera->ConnectionState() == DeviceConnectionState::Connected)
         {
-            s_selectedCameraSlot.store(cameraIndex);
+            if (selectForPreview)
+            {
+                s_selectedCameraSlot.store(cameraIndex);
+                s_cameraPreviewEnabled.store(true);
+            }
             return {true, "绑定相机已连接"};
         }
     }
 
     const HardwarePanelSettings settings = HardwareSettingsService::Load();
+    SetCameraMaxConcurrentGrabs(settings.cameraMaxConcurrentGrabs);
     const HardwareCameraSettings& camera =
         settings.cameras[static_cast<std::size_t>(cameraIndex)];
     static const char* backendValues[] = {
@@ -1412,13 +1465,53 @@ DeviceOperationResult ActivateCameraSlot(int cameraIndex)
     config.reconnectFailureThreshold = camera.reconnectFailureThreshold;
     config.reconnectInitialDelayMs = camera.reconnectInitialDelayMs;
     config.reconnectMaxDelayMs = camera.reconnectMaxDelayMs;
+    const int previouslySelectedSlot = s_selectedCameraSlot.load();
+    const bool previewWasEnabled = s_cameraPreviewEnabled.load();
     DeviceOperationResult result = ConnectCamera(config);
+    if (result.success && !selectForPreview)
+    {
+        s_selectedCameraSlot.store(previouslySelectedSlot);
+        s_cameraPreviewEnabled.store(previewWasEnabled);
+    }
     if (!result.success)
     {
         result.message = "相机 " + std::to_string(cameraIndex + 1) +
             " 自动连接失败: " + result.message;
     }
     return result;
+}
+
+std::vector<DeviceOperationResult> RestoreConfiguredCameraSlots()
+{
+    const HardwarePanelSettings settings = HardwareSettingsService::Load();
+    SetCameraMaxConcurrentGrabs(settings.cameraMaxConcurrentGrabs);
+    std::vector<DeviceOperationResult> results;
+    results.reserve(settings.cameras.size());
+    int firstConnectedIndex = -1;
+    for (int cameraIndex = 0;
+         cameraIndex < static_cast<int>(settings.cameras.size()); ++cameraIndex)
+    {
+        if (!settings.cameras[static_cast<std::size_t>(cameraIndex)].connectOnStartup)
+            continue;
+        DeviceOperationResult result = ActivateCameraSlot(cameraIndex, false);
+        LogSystem::Add(result.success ? LOG_INFO : LOG_ERROR,
+            "event=camera_startup_restore slot=%d success=%d message=%s",
+            cameraIndex + 1, result.success ? 1 : 0, result.message.c_str());
+        if (result.success && firstConnectedIndex < 0)
+            firstConnectedIndex = cameraIndex;
+        results.push_back(std::move(result));
+    }
+
+    const int previewIndex = std::clamp(settings.activeCameraIndex, 0,
+        static_cast<int>(kHardwareCameraCount) - 1);
+    if (firstConnectedIndex >= 0)
+    {
+        const int selectedIndex =
+            settings.cameras[static_cast<std::size_t>(previewIndex)].connectOnStartup
+                ? previewIndex : firstConnectedIndex;
+        ActivateCameraSlot(selectedIndex, true);
+    }
+    return results;
 }
 
 DeviceOperationResult StartCameraCapture(const HardwareCameraConnectionConfig& rawConfig)
@@ -1443,6 +1536,7 @@ DeviceOperationResult StartCameraCapture(const HardwareCameraConnectionConfig& r
     if (result.success)
     {
         s_selectedCameraSlot.store(cameraIndex);
+        s_cameraPreviewEnabled.store(true);
         s_cameraConfig = rawConfig;
     }
     s_lastCameraOperation = result;
@@ -1647,6 +1741,77 @@ bool AcquireLatestCameraFrame(int cameraIndex, cv::Mat& frame,
     return true;
 }
 
+DeviceOperationResult SelectCameraSlotForPreview(int cameraIndex)
+{
+    VideoCapture::Close();
+    DeviceOperationResult activation = ActivateCameraSlot(cameraIndex, true);
+    if (!activation.success)
+        return activation;
+    s_cameraPreviewEnabled.store(true);
+
+    CameraSlotRuntime* slot = FindCameraSlot(cameraIndex);
+    if (!slot)
+        return InvalidConfiguration("相机绑定编号无效");
+
+    cv::Mat cachedFrame;
+    CameraFrameMetadata metadata;
+    std::string sourceName;
+    int frameIndex = -1;
+    {
+        std::lock_guard<std::mutex> lock(slot->mutex);
+        cachedFrame = slot->latestFrame.clone();
+        metadata = slot->latestMetadata;
+        sourceName = slot->config.sourceName.empty()
+            ? "industrial-camera" : slot->config.sourceName;
+        frameIndex = slot->frameIndex;
+    }
+
+    if (!cachedFrame.empty() &&
+        ToolController::GetMode() == ToolController::Mode::Idle)
+    {
+        const double timestampMs = metadata.receivedTimestampNanoseconds > 0
+            ? static_cast<double>(metadata.receivedTimestampNanoseconds) / 1000000.0
+            : CurrentTimestampMs();
+        FrameSourceState::SetCurrentFrame(cachedFrame, FrameSourceType::Camera,
+            sourceName, frameIndex, timestampMs);
+
+        cv::Mat rgba;
+        SafeConvertToRGBA(cachedFrame, rgba);
+        if (!rgba.empty())
+        {
+            ImageState::PendingUploadRef() = std::move(rgba);
+            ImageState::NeedUploadRef() = true;
+        }
+    }
+
+    // A cached frame makes the source switch immediate; the explicit request
+    // then replaces it with a current frame even when continuous capture is off.
+    RequestCameraFrameForSlot(cameraIndex, false, false);
+    return {true, cachedFrame.empty()
+        ? "已切换相机，正在等待首帧"
+        : "已切换并显示相机最新帧"};
+}
+
+void SetCameraPreviewEnabled(bool enabled)
+{
+    s_cameraPreviewEnabled.store(enabled);
+}
+
+bool CameraPreviewEnabled()
+{
+    return s_cameraPreviewEnabled.load();
+}
+
+void SetCameraMaxConcurrentGrabs(int maximum)
+{
+    s_cameraResourceScheduler.SetMaximum(maximum);
+}
+
+int CameraMaxConcurrentGrabs()
+{
+    return s_cameraResourceScheduler.GetSnapshot().maximum;
+}
+
 void CancelPendingCameraToolRun()
 {
     {
@@ -1698,7 +1863,7 @@ DeviceOperationResult ConnectOutput(const HardwareOutputConnectionConfig& rawCon
             "PLC IO 握手仅支持 Modbus TCP 输出类型");
     }
     const DeviceOperationResult handshakeValidation =
-        ValidateHandshakeConfig(config.handshake);
+        HardwareRuntimePolicy::ValidateHandshakeConfig(config.handshake);
     if (!handshakeValidation.success)
         return s_lastOutputOperation = handshakeValidation;
 
@@ -2106,7 +2271,7 @@ DeviceOperationResult PublishInspectionStatus(ToolResultStatus status,
         if (!tcpText)
             return {false, "设备适配器不支持 TCP 文本发送"};
         std::string payload = binding.sendQrJson
-            ? BuildQrJsonPayload(status, qrSerials)
+            ? HardwareRuntimePolicy::BuildQrJsonPayload(status, qrSerials)
             : (pass ? binding.passText : binding.failText);
         if (binding.appendCrLf)
             payload += "\r\n";
@@ -2206,23 +2371,6 @@ DeviceOperationResult RequestTaskInspection(const std::string& taskGroupName,
     return {true, "任务触发已接收: " + taskGroupName};
 }
 
-ToolResultStatus AggregateInspectionStatus(const std::vector<ToolResult>& results)
-{
-    bool hasResult = false;
-    ToolResultStatus aggregate = ToolResultStatus::Pass;
-    for (const ToolResult& result : results)
-    {
-        if (result.skipped)
-            continue;
-        hasResult = true;
-        if (result.status == ToolResultStatus::Error)
-            return ToolResultStatus::Error;
-        if (result.status == ToolResultStatus::Fail)
-            aggregate = ToolResultStatus::Fail;
-    }
-    return hasResult ? aggregate : ToolResultStatus::Error;
-}
-
 DeviceOperationResult EnqueueConfiguredStatus(ToolResultStatus status)
 {
     return EnqueueConfiguredResults({ToolResult{.status = status}});
@@ -2231,7 +2379,8 @@ DeviceOperationResult EnqueueConfiguredStatus(ToolResultStatus status)
 DeviceOperationResult EnqueueConfiguredResults(const std::vector<ToolResult>& results)
 {
     const ToolResultStatus status = AggregateInspectionStatus(results);
-    const std::vector<std::string> qrSerials = ExtractQrSerials(results);
+    const std::vector<std::string> qrSerials =
+        HardwareRuntimePolicy::ExtractQrSerials(results);
     StartOutputWorker();
     std::lock_guard<std::mutex> lock(s_outputWorkerMutex);
     const std::size_t maximumQueue = static_cast<std::size_t>((std::max)(1,
@@ -2310,7 +2459,8 @@ DeviceOperationResult PublishConfiguredStatus(ToolResultStatus status)
 DeviceOperationResult PublishInspectionResults(const std::vector<ToolResult>& results)
 {
     const ToolResultStatus status = AggregateInspectionStatus(results);
-    const std::vector<std::string> qrSerials = ExtractQrSerials(results);
+    const std::vector<std::string> qrSerials =
+        HardwareRuntimePolicy::ExtractQrSerials(results);
     std::vector<HardwareOutputBinding> bindings;
     {
         std::lock_guard<std::mutex> lock(s_outputWorkerMutex);
@@ -2352,11 +2502,9 @@ bool WaitForOutputIdle(int timeoutMs)
         });
 }
 
-void PublishFrameForSlot(const CameraSlotRuntime& slot,
+void PublishFrameForSlot(const cv::Mat& outputFrame,
     const PendingCameraFrame& pending)
 {
-    const cv::Mat outputFrame = OrientCameraFrame(
-        pending.frame, slot.config.orientation);
     FrameArchiveService::Enqueue(outputFrame,
         pending.sourceName.empty() ? "industrial-camera" : pending.sourceName,
         pending.frameIndex, pending.timestampMs);
@@ -2380,7 +2528,12 @@ void TickMultiCameraSlots()
         if (!slot)
             continue;
         PendingCameraFrame pending;
+        cv::Mat previewFrame;
         bool hasPending = false;
+        const bool publishPreview =
+            ToolController::GetMode() == ToolController::Mode::Idle &&
+            s_cameraPreviewEnabled.load() &&
+            s_selectedCameraSlot.load() == cameraIndex;
         {
             std::lock_guard<std::mutex> lock(slot->mutex);
             if (slot->hasPending)
@@ -2389,16 +2542,24 @@ void TickMultiCameraSlots()
                 slot->pending = {};
                 slot->hasPending = false;
                 hasPending = true;
+                if (pending.frameAvailable && publishPreview &&
+                    !slot->latestFrame.empty())
+                {
+                    previewFrame = slot->latestFrame.clone();
+                }
             }
         }
         if (!hasPending)
             continue;
 
-        const bool frameAvailable = pending.operation.success &&
-            !pending.frame.empty();
-        if (frameAvailable && s_selectedCameraSlot.load() == cameraIndex)
+        const bool frameAvailable = pending.frameAvailable;
+        // Keep per-slot caches moving, but do not overwrite ImageState while a
+        // task batch is executing or waiting for a synchronized multi-camera
+        // round. Changing the public image version mid-inference makes valid
+        // asynchronous results look stale and causes visible frame/result loss.
+        if (frameAvailable && publishPreview && !previewFrame.empty())
         {
-            PublishFrameForSlot(*slot, pending);
+            PublishFrameForSlot(previewFrame, pending);
             s_cameraFrameIndex = pending.frameIndex;
             s_lastCameraFrameMetadata = pending.metadata;
             s_lastCameraOperation = {true, "工业相机帧已发布"};
@@ -2494,7 +2655,7 @@ void Tick()
         ToolController::ResumeRunAfterCamera(loop, frameAvailable);
         s_lastCameraOperation.message = frameAvailable
             ? "工业相机帧已发布，工具链已开始执行"
-            : "工业相机抓帧失败，工具链使用任务备用图片继续执行";
+            : "工业相机抓帧失败，工具链已按任务输入策略处理";
     }
 
     PendingTaskInspection inspectionRequest;
@@ -2635,7 +2796,7 @@ void Tick()
             if (inspectionRequest.preferCamera && boundCameraIndex >= 0)
             {
                 const DeviceOperationResult activation =
-                    ActivateCameraSlot(boundCameraIndex);
+                    ActivateCameraSlot(boundCameraIndex, false);
                 if (!activation.success)
                 {
                     LogSystem::Add(LOG_WARN,
@@ -2659,6 +2820,11 @@ void Tick()
 HardwareRuntimeSnapshot Snapshot()
 {
     HardwareRuntimeSnapshot snapshot;
+    const CameraResourceScheduler::Snapshot resourceSnapshot =
+        s_cameraResourceScheduler.GetSnapshot();
+    snapshot.cameraMaxConcurrentGrabs = resourceSnapshot.maximum;
+    snapshot.cameraActiveGrabs = resourceSnapshot.active;
+    snapshot.cameraWaitingGrabs = resourceSnapshot.waiting;
     // Runtime status is slot-scoped.  A camera adapter installed only for a
     // one-shot/manual GrabCameraFrame call must not become the active
     // inspection camera or make unrelated task runs wait for a frame.
@@ -2741,6 +2907,10 @@ HardwareRuntimeSnapshot Snapshot()
         slotSnapshot.slotIndex = cameraIndex;
         {
             std::lock_guard<std::mutex> lock(slot->mutex);
+            snapshot.cameraRetainedFrameBytes +=
+                slot->latestFrame.total() * slot->latestFrame.elemSize();
+            snapshot.cameraPendingFrameBytes +=
+                slot->pending.frame.total() * slot->pending.frame.elemSize();
             slotSnapshot.autoCapture = slot->autoCapture;
             slotSnapshot.capturePending = slot->busy || slot->hasPending;
             slotSnapshot.reconnecting = slot->reconnecting;
@@ -2814,9 +2984,15 @@ void Shutdown()
     StopOutputWorker(true);
     FrameArchiveService::Shutdown();
     HardwareAdapterService::Clear();
+    {
+        std::lock_guard<std::mutex> lock(s_cameraSlotsMutex);
+        for (auto& slot : s_cameraSlotRuntimes)
+            slot.reset();
+    }
     // Shutdown is a full runtime reset.  Do not let the next image-only run
     // inherit the previously selected slot or its trigger policy.
     s_selectedCameraSlot.store(-1);
+    s_cameraPreviewEnabled.store(false);
     s_cameraToolRunSlot = -1;
     s_cameraAutoCapture = false;
     s_cameraTriggerOnInspection = false;

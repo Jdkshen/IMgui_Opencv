@@ -51,6 +51,11 @@ void RequestImagePath(std::string path)
     s_PendingImagePath = std::move(path);
 }
 
+void CancelPendingImagePath()
+{
+    s_PendingImagePath.clear();
+}
+
 void NavigateNextImage()
 {
     if (HasNextImage())

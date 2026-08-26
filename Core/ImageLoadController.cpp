@@ -5,6 +5,7 @@
 #include "FrameSourceState.h"
 #include "ImageUtils.h"
 #include "ImageState.h"
+#include "HardwareRuntimeService.h"
 #include "ROIState.h"
 #include "TemplateState.h"
 #include "VideoCapture.h"
@@ -36,9 +37,19 @@ void RequestLoad(std::string path)
 {
     if (path.empty())
         return;
+    HardwareRuntimeService::SetCameraPreviewEnabled(false);
     VideoCapture::Close();
     s_UploadRequest = std::move(path);
     s_RequestLoadImage = true;
+}
+
+void CancelPending()
+{
+    s_RequestLoadImage = false;
+    s_UploadRequest.clear();
+    FrameNavigation::CancelPendingImagePath();
+    AsyncImageLoader::Cancel();
+    ROIState::CancelQueuedRestore();
 }
 
 void Update()

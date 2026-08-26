@@ -1,6 +1,6 @@
 # Dear ImGui C++ API 完整参考手册
 
-> 文档同步日期：2026-08-16。API 参考版本仍为项目内 Dear ImGui 1.92.8 WIP；当前界面使用表格对齐、独立流程图窗口，并启用 Per-Monitor V2 字体与布局缩放，API 版本未变。
+> 文档同步日期：2026-08-25。API 参考版本仍为项目内 Dear ImGui 1.92.8 WIP；当前界面使用表格对齐、独立流程图窗口，并启用 Per-Monitor V2 字体与布局缩放，API 版本未变。
 
 
 > Dear ImGui v1.92.8 WIP | 基于项目 `include/imgui/imgui.h` 整理

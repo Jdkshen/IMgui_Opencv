@@ -15,8 +15,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <iomanip>
+#include <limits>
+#include <new>
 #include <sstream>
 #include <utility>
 #include <vector>
@@ -493,6 +496,36 @@ std::uint64_t ReceivedTimestampNanoseconds()
     return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count());
 }
+
+bool CheckedFrameLayout(unsigned int width, unsigned int height,
+    unsigned int channels, unsigned int paddingX,
+    std::size_t& stride, std::size_t& requiredBytes)
+{
+    stride = 0;
+    requiredBytes = 0;
+    if (width == 0 || height == 0 || channels == 0 ||
+        width > static_cast<unsigned int>((std::numeric_limits<int>::max)()) ||
+        height > static_cast<unsigned int>((std::numeric_limits<int>::max)()))
+    {
+        return false;
+    }
+
+    const std::size_t widthValue = width;
+    const std::size_t channelsValue = channels;
+    if (widthValue > ((std::numeric_limits<std::size_t>::max)() - paddingX) /
+            channelsValue)
+    {
+        return false;
+    }
+    stride = widthValue * channelsValue + paddingX;
+    if (stride == 0 || static_cast<std::size_t>(height) >
+        (std::numeric_limits<std::size_t>::max)() / stride)
+    {
+        return false;
+    }
+    requiredBytes = stride * static_cast<std::size_t>(height);
+    return requiredBytes <= (std::numeric_limits<unsigned int>::max)();
+}
 }
 
 struct HuarayImvCameraAdapter::Impl
@@ -653,61 +686,116 @@ DeviceOperationResult HuarayImvCameraAdapter::GrabFrame(cv::Mat& frame,
     }
     else
     {
-        const int width = static_cast<int>(vendorFrame.frameInfo.width);
-        const int height = static_cast<int>(vendorFrame.frameInfo.height);
-        const std::size_t sourceStride = static_cast<std::size_t>(
-            vendorFrame.frameInfo.width + vendorFrame.frameInfo.paddingX);
+        try
+        {
+            const int width = static_cast<int>(vendorFrame.frameInfo.width);
+            const int height = static_cast<int>(vendorFrame.frameInfo.height);
+            std::size_t stride = 0;
+            std::size_t requiredBytes = 0;
 
-        if (vendorFrame.frameInfo.pixelFormat == kPixelMono8)
-        {
-            frame = cv::Mat(height, width, CV_8UC1, vendorFrame.data, sourceStride).clone();
-            metadata.conversionPath = "native Mono8";
-        }
-        else if (vendorFrame.frameInfo.pixelFormat == kPixelBgr8)
-        {
-            const std::size_t stride = static_cast<std::size_t>(width) * 3U +
-                vendorFrame.frameInfo.paddingX;
-            frame = cv::Mat(height, width, CV_8UC3, vendorFrame.data, stride).clone();
-            metadata.conversionPath = "native BGR8";
-        }
-        else if (vendorFrame.frameInfo.pixelFormat == kPixelRgb8)
-        {
-            const std::size_t stride = static_cast<std::size_t>(width) * 3U +
-                vendorFrame.frameInfo.paddingX;
-            cv::Mat rgb(height, width, CV_8UC3, vendorFrame.data, stride);
-            cv::cvtColor(rgb, frame, cv::COLOR_RGB2BGR);
-            metadata.convertedToDisplay = true;
-            metadata.conversionPath = "OpenCV RGB8 -> BGR8";
-        }
-        else
-        {
-            const std::size_t destinationSize = static_cast<std::size_t>(width) *
-                static_cast<std::size_t>(height) * 3U;
-            impl_->convertedFrame.resize(destinationSize);
-            ImvPixelConvertParam conversion{};
-            conversion.width = vendorFrame.frameInfo.width;
-            conversion.height = vendorFrame.frameInfo.height;
-            conversion.pixelFormat = vendorFrame.frameInfo.pixelFormat;
-            conversion.sourceData = vendorFrame.data;
-            conversion.sourceDataLength = vendorFrame.frameInfo.size;
-            conversion.paddingX = vendorFrame.frameInfo.paddingX;
-            conversion.paddingY = vendorFrame.frameInfo.paddingY;
-            conversion.bayerDemosaic = kDemosaicNearestNeighbor;
-            conversion.destinationPixelFormat = kPixelBgr8;
-            conversion.destinationBuffer = impl_->convertedFrame.data();
-            conversion.destinationBufferSize = static_cast<unsigned int>(destinationSize);
-            const int convertCode = impl_->api.pixelConvert(impl_->handle, &conversion);
-            if (convertCode != kImvOk)
+            if (vendorFrame.frameInfo.pixelFormat == kPixelMono8)
             {
-                result = {false, "华睿相机像素格式转换失败: " + ImvError(convertCode)};
+                if (!CheckedFrameLayout(vendorFrame.frameInfo.width,
+                        vendorFrame.frameInfo.height, 1,
+                        vendorFrame.frameInfo.paddingX, stride, requiredBytes) ||
+                    requiredBytes > vendorFrame.frameInfo.size)
+                {
+                    result = {false, "华睿 Mono8 帧尺寸或缓存长度无效"};
+                }
+                else
+                {
+                    frame = cv::Mat(height, width, CV_8UC1,
+                        vendorFrame.data, stride).clone();
+                    metadata.conversionPath = "native Mono8";
+                }
+            }
+            else if (vendorFrame.frameInfo.pixelFormat == kPixelBgr8 ||
+                vendorFrame.frameInfo.pixelFormat == kPixelRgb8)
+            {
+                if (!CheckedFrameLayout(vendorFrame.frameInfo.width,
+                        vendorFrame.frameInfo.height, 3,
+                        vendorFrame.frameInfo.paddingX, stride, requiredBytes) ||
+                    requiredBytes > vendorFrame.frameInfo.size)
+                {
+                    result = {false, "华睿 RGB/BGR 帧尺寸或缓存长度无效"};
+                }
+                else if (vendorFrame.frameInfo.pixelFormat == kPixelBgr8)
+                {
+                    frame = cv::Mat(height, width, CV_8UC3,
+                        vendorFrame.data, stride).clone();
+                    metadata.conversionPath = "native BGR8";
+                }
+                else
+                {
+                    cv::Mat rgb(height, width, CV_8UC3,
+                        vendorFrame.data, stride);
+                    cv::cvtColor(rgb, frame, cv::COLOR_RGB2BGR);
+                    metadata.convertedToDisplay = true;
+                    metadata.conversionPath = "OpenCV RGB8 -> BGR8";
+                }
             }
             else
             {
-                frame = cv::Mat(height, width, CV_8UC3,
-                    impl_->convertedFrame.data()).clone();
-                metadata.convertedToDisplay = true;
-                metadata.conversionPath = "IMV_PixelConvert -> BGR8";
+                std::size_t destinationStride = 0;
+                std::size_t destinationSize = 0;
+                if (vendorFrame.frameInfo.size == 0 ||
+                    !CheckedFrameLayout(vendorFrame.frameInfo.width,
+                        vendorFrame.frameInfo.height, 3, 0,
+                        destinationStride, destinationSize))
+                {
+                    result = {false, "华睿像素转换目标尺寸无效"};
+                }
+                else
+                {
+                    impl_->convertedFrame.resize(destinationSize);
+                    ImvPixelConvertParam conversion{};
+                    conversion.width = vendorFrame.frameInfo.width;
+                    conversion.height = vendorFrame.frameInfo.height;
+                    conversion.pixelFormat = vendorFrame.frameInfo.pixelFormat;
+                    conversion.sourceData = vendorFrame.data;
+                    conversion.sourceDataLength = vendorFrame.frameInfo.size;
+                    conversion.paddingX = vendorFrame.frameInfo.paddingX;
+                    conversion.paddingY = vendorFrame.frameInfo.paddingY;
+                    conversion.bayerDemosaic = kDemosaicNearestNeighbor;
+                    conversion.destinationPixelFormat = kPixelBgr8;
+                    conversion.destinationBuffer = impl_->convertedFrame.data();
+                    conversion.destinationBufferSize =
+                        static_cast<unsigned int>(destinationSize);
+                    const int convertCode = impl_->api.pixelConvert(
+                        impl_->handle, &conversion);
+                    if (convertCode != kImvOk ||
+                        conversion.destinationDataLength > destinationSize)
+                    {
+                        result = {false,
+                            "华睿相机像素格式转换失败: " + ImvError(convertCode)};
+                    }
+                    else
+                    {
+                        frame = cv::Mat(height, width, CV_8UC3,
+                            impl_->convertedFrame.data(), destinationStride).clone();
+                        metadata.convertedToDisplay = true;
+                        metadata.conversionPath = "IMV_PixelConvert -> BGR8";
+                    }
+                }
             }
+        }
+        catch (const std::bad_alloc&)
+        {
+            result = {false, "华睿相机帧内存分配失败"};
+        }
+        catch (const cv::Exception& exception)
+        {
+            result = {false,
+                std::string("华睿相机图像转换异常: ") + exception.what()};
+        }
+        catch (const std::exception& exception)
+        {
+            result = {false,
+                std::string("华睿相机帧处理异常: ") + exception.what()};
+        }
+        catch (...)
+        {
+            result = {false, "华睿相机帧处理发生未知异常"};
         }
     }
 

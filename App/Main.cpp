@@ -1,12 +1,12 @@
 ﻿// ============================================================================
-// Windows_imgui.cpp : 应用程序入口点
+// Main.cpp : 应用程序入口点
 // 技术栈：DirectX12（优先）+ DirectX11（回退） + Dear ImGui + OpenCV 5.0
 // 功能：桌面机器视觉工具 — 支持工业相机、YOLO检测、模板匹配、OCR等
 // 渲染管线：ImGui 绘制 UI → GPU 上传纹理 → DX12/DX11 交换链呈现
 // ============================================================================
-#include "framework.h"      // Windows 基础头文件（Win32 API、COM 等）
-#include "Windows_imgui.h"   // 项目主头文件：全局变量声明、ImGui/OpenCV 头文件聚合
-#include "resource.h"        // VS 资源文件：图标 ID、版本信息等
+#include "Platform.h"      // Windows 基础头文件（Win32 API、COM 等）
+#include "AppIncludes.h"   // 应用入口使用的 ImGui/Core/UI 头文件聚合
+#include "Resource.h"      // VS 资源文件：图标 ID、版本信息等
 #include "Core/ImageLoadController.h"   // 异步图片加载调度器：请求加载 → 后台解码 → 回调通知
 #include "Core/ImageState.h"            // 当前图像的全局状态：原始图、处理结果、脏标记
 #include "Core/AppRuntimeState.h"       // 应用运行时状态：窗口句柄、DPI缩放、全局配置
@@ -15,6 +15,7 @@
 #include "Core/VisionContext.h"         // 视觉处理上下文：携带当前图像、ROI、标定参数给所有算法工具
 #include "Core/RecipeAutosaveService.h" // 配方自动保存服务：定时备份当前工具链配置到磁盘
 #include "Core/ToolController.h"        // 工具控制器：管理算法工具链的生命周期（创建/执行/销毁）
+#include "Core/HardwareRuntimeService.h" // 恢复需在启动时同时在线的相机槽
 #include "Renderer/PreviewTextureCache.h" // 预览纹理缓存：小图预览结果缓存为GPU纹理，避免重复上传
 #include "UI/HardwareWindow.h"          // 硬件连接窗口：设备发现、连接管理、PLC通信状态
 #include "UI/DockSpaceHost.h"           // 主停靠空间宿主：菜单栏 + 中央DockSpace容器
@@ -44,13 +45,9 @@
 // 全局变量定义（只能在此 .cpp 中定义一次，.h 中用 extern 声明）
 // =========================
 
-// 渲染背景色：ImGui 窗口之外的清屏颜色（灰蓝色调，RGB 0.45/0.55/0.60）
-// 在主循环每帧渲染前用于 ClearRenderTarget
-static ImVec4 clear_color = ImVec4(
-	0.45f,  // R：红色分量
-	0.55f,  // G：绿色分量
-	0.60f,  // B：蓝色分量
-	1.00f); // A：完全不透明
+// ImGui 窗口之外的清屏颜色。每帧会跟随当前主题的停靠背景色，
+// 让卡片圆角与可拖动间隙呈现中性底槽，而不是露出固定灰蓝色。
+static ImVec4 clear_color = ImVec4(0.094f, 0.094f, 0.094f, 1.00f);
 
 // 前向声明：窗口消息处理函数（定义在本文件末尾）
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -274,6 +271,16 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	strcat_s(s_LogPath, "imgui_log.txt");                // 拼接日志文件名
 	io.LogFilename = s_LogPath;                          // 设置 ImGui 日志输出文件
 
+	// 停靠布局也固定保存到 EXE 目录，避免从 VS、资源管理器或其他
+	// 启动器运行时因工作目录不同而丢失卡片的拖动位置。
+	static char s_IniPath[MAX_PATH];
+	GetModuleFileNameA(nullptr, s_IniPath, MAX_PATH);
+	char *iniLastSlash = strrchr(s_IniPath, '\\');
+	if (iniLastSlash)
+		*(iniLastSlash + 1) = '\0';
+	strcat_s(s_IniPath, "imgui.ini");
+	io.IniFilename = s_IniPath;
+
 	// ---- 4.3 加载 UI 主题和 DPI 适配 ----
 	LoadTheme();  // 从 theme.cfg 文件读取上次保存的颜色/样式配置
 
@@ -324,6 +331,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	LogSystem::Add(LOG_INFO, "DPI 适配: %.0f%% | 初始窗口 %dx%d",
 		main_scale * 100.0f, winW, winH);
 	LogSystem::Add(LOG_INFO, "应用启动完成");  // 应用启动完成标记
+	HardwareRuntimeService::RestoreConfiguredCameraSlots();
 	AppendStartupLog(std::string("startup completed; renderer=") +
 		GraphicsBackend::Name());
 
@@ -388,7 +396,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		}
 		LiveYoloRunner::Update();
 		ImageLoadController::Update();
-		if (ImageState::NeedUploadRef())
+		// 整批工具运行时，ImageState 会在不同任务输入和中间结果之间切换。
+		// 这些图只供算法使用，不应上传到中央预览，否则会短暂闪出任务01。
+		// 批次完成后 ToolsWindow 会在同一帧把当前选中任务结果设为待上传图。
+		if (ImageState::NeedUploadRef() &&
+			ToolController::GetMode() != ToolController::Mode::Running)
 		{
 			if (GraphicsBackend::UploadMainTexture(ImageState::PendingUploadRef()))
 				ImageState::NeedUploadRef() = false;
@@ -438,6 +450,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		//   1. 执行 GPU 命令列表（绘制 ImGui 三角形 + 图像纹理）
 		//   2. Present() 将后台缓冲区翻转到前台（V-Sync 或 tearing）
 		//   3. 返回 false 表示设备丢失（如显卡驱动崩溃），触发退出
+		clear_color = ImGui::GetStyleColorVec4(ImGuiCol_DockingEmptyBg);
 		if (!GraphicsBackend::RenderAndPresent(clear_color, io))
 			done = true;
 	}

@@ -5,6 +5,7 @@
 #include "../Core/DetectionTypes.h"
 
 #include <string>
+#include <cstdint>
 #include <vector>
 
 namespace YOLODetector
@@ -16,7 +17,8 @@ namespace YOLODetector
     std::vector<DetectedObject> Detect(const cv::Mat& image,
                                        float confThreshold = 0.5f,
                                        float nmsThreshold = 0.4f,
-                                       cv::Rect roi = cv::Rect());
+                                       cv::Rect roi = cv::Rect(),
+                                       std::uint64_t frameToken = 0);
     void DrawDetections(cv::Mat& image,
                         const std::vector<DetectedObject>& objects,
                         bool drawLabel = true);

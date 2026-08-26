@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <deque>
 #include <mutex>
 #include <unordered_map>
 #include <windows.h>
@@ -85,6 +86,7 @@ namespace YOLODetector
     {
         bool valid = false;
         std::string modelKey;
+        std::uint64_t frameToken = 0;
         std::uint64_t imageHash = 0;
         int imageWidth = 0;
         int imageHeight = 0;
@@ -95,7 +97,8 @@ namespace YOLODetector
         std::vector<DetectedObject> detections;
     };
 
-    static DetectCacheEntry s_DetectCache;
+    static constexpr std::size_t kDetectCacheCapacity = 8;
+    static std::deque<DetectCacheEntry> s_DetectCache;
     static std::mutex s_DetectCacheMutex;
 
     static std::uint64_t HashImage(const cv::Mat& image)
@@ -349,7 +352,7 @@ namespace YOLODetector
             s_Active = &iter->second;
             {
                 std::lock_guard<std::mutex> cacheLock(s_DetectCacheMutex);
-                s_DetectCache.valid = false;
+                s_DetectCache.clear();
             }
         }
         catch (const Ort::Exception &e)
@@ -620,7 +623,8 @@ namespace YOLODetector
     // 执行检测
     // =====================================================
     std::vector<DetectedObject> Detect(const cv::Mat &image,
-                                       float confThreshold, float nmsThreshold, cv::Rect roi)
+                                       float confThreshold, float nmsThreshold,
+                                       cv::Rect roi, std::uint64_t frameToken)
     {
         if (!s_Active || !s_Active->session || image.empty())
             return {};
@@ -633,19 +637,37 @@ namespace YOLODetector
                 roi &= cv::Rect(0, 0, image.cols, image.rows);
 
             const std::string modelKey = GetModelPath();
-            const std::uint64_t imageHash = HashImage(image);
+            // A controller-provided token identifies an immutable frame for one
+            // execution round. Legacy/live callers pass zero and retain the
+            // byte-for-byte hash fallback for correctness.
+            const std::uint64_t imageHash = frameToken == 0
+                ? HashImage(image) : 0;
             {
                 std::lock_guard<std::mutex> cacheLock(s_DetectCacheMutex);
-                const DetectCacheEntry& cache = s_DetectCache;
-                if (cache.valid && cache.modelKey == modelKey &&
-                    cache.imageHash == imageHash &&
-                    cache.imageWidth == image.cols &&
-                    cache.imageHeight == image.rows &&
-                    cache.imageType == image.type() &&
-                    cache.confidence == confThreshold &&
-                    cache.nms == nmsThreshold && cache.roi == roi)
+                const auto cached = std::find_if(s_DetectCache.begin(),
+                    s_DetectCache.end(), [&](const DetectCacheEntry& cache)
+                    {
+                        const bool sameFrame = frameToken != 0
+                            ? cache.frameToken == frameToken
+                            : cache.frameToken == 0 && cache.imageHash == imageHash;
+                        return cache.valid && sameFrame &&
+                            cache.modelKey == modelKey &&
+                            cache.imageWidth == image.cols &&
+                            cache.imageHeight == image.rows &&
+                            cache.imageType == image.type() &&
+                            cache.confidence == confThreshold &&
+                            cache.nms == nmsThreshold && cache.roi == roi;
+                    });
+                if (cached != s_DetectCache.end())
                 {
-                    return cache.detections;
+                    std::vector<DetectedObject> detections = cached->detections;
+                    if (cached != s_DetectCache.begin())
+                    {
+                        DetectCacheEntry entry = std::move(*cached);
+                        s_DetectCache.erase(cached);
+                        s_DetectCache.push_front(std::move(entry));
+                    }
+                    return detections;
                 }
             }
 
@@ -695,16 +717,21 @@ namespace YOLODetector
 
             {
                 std::lock_guard<std::mutex> cacheLock(s_DetectCacheMutex);
-                s_DetectCache.valid = true;
-                s_DetectCache.modelKey = modelKey;
-                s_DetectCache.imageHash = imageHash;
-                s_DetectCache.imageWidth = image.cols;
-                s_DetectCache.imageHeight = image.rows;
-                s_DetectCache.imageType = image.type();
-                s_DetectCache.confidence = confThreshold;
-                s_DetectCache.nms = nmsThreshold;
-                s_DetectCache.roi = roi;
-                s_DetectCache.detections = result;
+                DetectCacheEntry entry;
+                entry.valid = true;
+                entry.modelKey = modelKey;
+                entry.frameToken = frameToken;
+                entry.imageHash = imageHash;
+                entry.imageWidth = image.cols;
+                entry.imageHeight = image.rows;
+                entry.imageType = image.type();
+                entry.confidence = confThreshold;
+                entry.nms = nmsThreshold;
+                entry.roi = roi;
+                entry.detections = result;
+                s_DetectCache.push_front(std::move(entry));
+                while (s_DetectCache.size() > kDetectCacheCapacity)
+                    s_DetectCache.pop_back();
             }
 
             // 输出分步耗时供外部读取
@@ -907,7 +934,7 @@ namespace YOLODetector
         s_Active = nullptr;
         {
             std::lock_guard<std::mutex> cacheLock(s_DetectCacheMutex);
-            s_DetectCache.valid = false;
+            s_DetectCache.clear();
         }
         delete s_MemInfo;
         s_MemInfo = nullptr;

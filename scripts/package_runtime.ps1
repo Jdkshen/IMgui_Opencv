@@ -347,6 +347,11 @@ finally {
     $archive.Dispose()
 }
 
+$zipHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
+$checksumPath = "$zip.sha256"
+Set-Content -LiteralPath $checksumPath -Encoding ascii -Value `
+    ("{0} *{1}" -f $zipHash, [System.IO.Path]::GetFileName($zip))
+
 # The default release path is canonical. Remove old date/suffix variants only
 # after the new archive has passed verification, so dist never accumulates
 # several similarly named releases again.
@@ -367,4 +372,6 @@ if ([System.IO.Path]::GetFullPath($Output).TrimEnd('\') -eq
 }
 
 Write-Host "Runtime package: $zip"
+Write-Host "Runtime package SHA256: $zipHash"
+Write-Host "Checksum file: $checksumPath"
 Write-Host "Runtime package verification: passed"
